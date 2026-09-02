@@ -1,19 +1,26 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from "react";
 import {
   collection,
   doc,
   setDoc,
   getDocs,
   serverTimestamp,
-  Timestamp
-} from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { useAuth } from '../context/AuthContext';
-import Layout from '../components/Layout';
+  Timestamp,
+} from "firebase/firestore";
+import { db } from "../lib/firebase";
+import { useAuth } from "../context/AuthContext";
+import Layout from "../components/Layout";
 import {
-  FaSave, FaBuilding, FaUserTie, FaCheck, FaTimes, FaExclamationTriangle,
-  FaCheckCircle, FaTimesCircle, FaInfoCircle
-} from 'react-icons/fa';
+  FaSave,
+  FaBuilding,
+  FaUserTie,
+  FaCheck,
+  FaTimes,
+  FaExclamationTriangle,
+  FaCheckCircle,
+  FaTimesCircle,
+  FaInfoCircle,
+} from "react-icons/fa";
 
 interface ConfiguracionInstitucional {
   id?: string;
@@ -28,7 +35,7 @@ interface ConfiguracionInstitucional {
 
 interface Toast {
   id: string;
-  type: 'success' | 'error' | 'warning' | 'info';
+  type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
@@ -42,24 +49,22 @@ export default function InstitutionSettings() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const [formData, setFormData] = useState<ConfiguracionInstitucional>({
-    nombreInstitucion: '',
-    codigoAmie: '',
-    nombreRector: '',
+    nombreInstitucion: "",
+    codigoAmie: "",
+    nombreRector: "",
   });
 
-  const mostrarToast = useCallback((
-    type: Toast['type'],
-    title: string,
-    message?: string,
-    duration = 4000
-  ) => {
-    const id = `toast-${Date.now()}-${Math.random()}`;
-    const toast: Toast = { id, type, title, message };
-    setToasts((prev) => [...prev, toast]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, duration);
-  }, []);
+  const mostrarToast = useCallback(
+    (type: Toast["type"], title: string, message?: string, duration = 4000) => {
+      const id = `toast-${Date.now()}-${Math.random()}`;
+      const toast: Toast = { id, type, title, message };
+      setToasts((prev) => [...prev, toast]);
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, duration);
+    },
+    [],
+  );
 
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -68,61 +73,83 @@ export default function InstitutionSettings() {
   const cargarConfiguracion = useCallback(async () => {
     try {
       setLoading(true);
-      const configSnap = await getDocs(collection(db, 'configuracionInstitucional'));
+      const configSnap = await getDocs(
+        collection(db, "configuracionInstitucional"),
+      );
 
       if (!configSnap.empty) {
         const docData = configSnap.docs[0].data() as ConfiguracionInstitucional;
         setFormData({
-          nombreInstitucion: docData.nombreInstitucion || '',
-          codigoAmie: docData.codigoAmie || '',
-          nombreRector: docData.nombreRector || '',
+          nombreInstitucion: docData.nombreInstitucion || "",
+          codigoAmie: docData.codigoAmie || "",
+          nombreRector: docData.nombreRector || "",
         });
         setHasData(true);
       } else {
         setHasData(false);
       }
     } catch (error) {
-      console.error('Error cargando configuración:', error);
-      mostrarToast('error', 'Error al cargar', 'No se pudo cargar la configuración institucional.');
+      console.error("Error cargando configuración:", error);
+      mostrarToast(
+        "error",
+        "Error al cargar",
+        "No se pudo cargar la configuración institucional.",
+      );
     } finally {
       setLoading(false);
     }
   }, [mostrarToast]);
 
   const guardarConfiguracion = useCallback(async () => {
-    if (!formData.nombreInstitucion || !formData.codigoAmie || !formData.nombreRector) {
-      mostrarToast('warning', 'Campos incompletos', 'Todos los campos marcados con * son obligatorios.');
+    if (
+      !formData.nombreInstitucion ||
+      !formData.codigoAmie ||
+      !formData.nombreRector
+    ) {
+      mostrarToast(
+        "warning",
+        "Campos incompletos",
+        "Todos los campos marcados con * son obligatorios.",
+      );
       return;
     }
 
     try {
       setSaving(true);
 
-      const configRef = doc(db, 'configuracionInstitucional', 'principal');
+      const configRef = doc(db, "configuracionInstitucional", "principal");
 
       const dataToSave = {
         nombreInstitucion: formData.nombreInstitucion.trim(),
         codigoAmie: formData.codigoAmie.trim(),
         nombreRector: formData.nombreRector.trim(),
         updatedAt: serverTimestamp(),
-        updatedBy: user?.uid || ''
+        updatedBy: user?.uid || "",
       };
 
       if (!hasData) {
         await setDoc(configRef, {
           ...dataToSave,
           createdAt: serverTimestamp(),
-          createdBy: user?.uid || ''
+          createdBy: user?.uid || "",
         });
       } else {
         await setDoc(configRef, dataToSave);
       }
 
       setHasData(true);
-      mostrarToast('success', 'Configuración guardada', 'Los datos de la institución se actualizaron correctamente.');
+      mostrarToast(
+        "success",
+        "Configuración guardada",
+        "Los datos de la institución se actualizaron correctamente.",
+      );
     } catch (error) {
-      console.error('Error guardando configuración:', error);
-      mostrarToast('error', 'Error al guardar', 'No se pudo guardar la configuración. Intenta nuevamente.');
+      console.error("Error guardando configuración:", error);
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo guardar la configuración. Intenta nuevamente.",
+      );
     } finally {
       setSaving(false);
     }
@@ -142,42 +169,48 @@ export default function InstitutionSettings() {
 
   const toastConfig = {
     success: {
-      bg: 'bg-green-50 border-green-400',
-      iconBg: 'bg-green-500',
-      titleColor: 'text-green-900',
-      msgColor: 'text-green-700',
+      bg: "bg-green-50 border-green-400",
+      iconBg: "bg-green-500",
+      titleColor: "text-green-900",
+      msgColor: "text-green-700",
       icon: FaCheckCircle,
     },
     error: {
-      bg: 'bg-red-50 border-red-400',
-      iconBg: 'bg-red-500',
-      titleColor: 'text-red-900',
-      msgColor: 'text-red-700',
+      bg: "bg-red-50 border-red-400",
+      iconBg: "bg-red-500",
+      titleColor: "text-red-900",
+      msgColor: "text-red-700",
       icon: FaTimesCircle,
     },
     warning: {
-      bg: 'bg-yellow-50 border-yellow-400',
-      iconBg: 'bg-yellow-500',
-      titleColor: 'text-yellow-900',
-      msgColor: 'text-yellow-700',
+      bg: "bg-yellow-50 border-yellow-400",
+      iconBg: "bg-yellow-500",
+      titleColor: "text-yellow-900",
+      msgColor: "text-yellow-700",
       icon: FaExclamationTriangle,
     },
     info: {
-      bg: 'bg-blue-50 border-blue-400',
-      iconBg: 'bg-blue-500',
-      titleColor: 'text-blue-900',
-      msgColor: 'text-blue-700',
+      bg: "bg-blue-50 border-blue-400",
+      iconBg: "bg-blue-500",
+      titleColor: "text-blue-900",
+      msgColor: "text-blue-700",
       icon: FaInfoCircle,
     },
   };
 
   if (loading) {
     return (
-      <Layout title="Configuración Institucional" subtitle="Datos de la institución" showBack>
+      <Layout
+        title="Configuración Institucional"
+        subtitle="Datos de la institución"
+        showBack
+      >
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
-            <p className="text-slate-600 text-sm font-medium">Cargando configuración...</p>
+            <p className="text-slate-600 text-sm font-medium">
+              Cargando configuración...
+            </p>
           </div>
         </div>
       </Layout>
@@ -201,14 +234,19 @@ export default function InstitutionSettings() {
                 Configuración pendiente
               </h3>
               <p className="text-amber-700 text-sm">
-                Esta es la primera vez que configuras la institución. Completa los datos a continuación para que aparezcan en todos los reportes del sistema.
+                Esta es la primera vez que configuras la institución. Completa
+                los datos a continuación para que aparezcan en todos los
+                reportes del sistema.
               </p>
             </div>
           </div>
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden"
+      >
         <div className="bg-linear-to-r from-blue-600 to-blue-700 px-5 py-3">
           <h3 className="text-white font-semibold text-base flex items-center gap-2">
             <FaBuilding className="text-sm" />
@@ -225,7 +263,12 @@ export default function InstitutionSettings() {
               <input
                 type="text"
                 value={formData.nombreInstitucion}
-                onChange={(e) => setFormData({...formData, nombreInstitucion: e.target.value})}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    nombreInstitucion: e.target.value,
+                  })
+                }
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 placeholder='Ej: CECIBEB "Leonardo Pérez Muñoz"'
                 required
@@ -239,7 +282,9 @@ export default function InstitutionSettings() {
               <input
                 type="text"
                 value={formData.codigoAmie}
-                onChange={(e) => setFormData({...formData, codigoAmie: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, codigoAmie: e.target.value })
+                }
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 placeholder="Ej: 10B00020"
                 required
@@ -260,32 +305,45 @@ export default function InstitutionSettings() {
               <input
                 type="text"
                 value={formData.nombreRector}
-                onChange={(e) => setFormData({...formData, nombreRector: e.target.value})}
+                onChange={(e) =>
+                  setFormData({ ...formData, nombreRector: e.target.value })
+                }
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 placeholder="Ej: Mgs. Juan Pérez o Lic. María González"
                 required
               />
               <p className="text-xs text-slate-500 mt-1">
-                Incluye el título profesional al inicio (Lic., Ing., Dr., Mgs., etc.)
+                Incluye el título profesional al inicio (Lic., Ing., Dr., Mgs.,
+                etc.)
               </p>
             </div>
           </div>
 
-          {(formData.nombreInstitucion || formData.codigoAmie || formData.nombreRector) && (
+          {(formData.nombreInstitucion ||
+            formData.codigoAmie ||
+            formData.nombreRector) && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
               <div className="flex items-center gap-2 text-blue-800 mb-2">
                 <FaCheck className="text-sm" />
-                <span className="text-sm font-semibold">Vista previa en reportes:</span>
+                <span className="text-sm font-semibold">
+                  Vista previa en reportes:
+                </span>
               </div>
               <div className="text-sm text-blue-900 space-y-1">
                 {formData.nombreInstitucion && (
-                  <p><strong>Institución:</strong> {formData.nombreInstitucion}</p>
+                  <p>
+                    <strong>Institución:</strong> {formData.nombreInstitucion}
+                  </p>
                 )}
                 {formData.codigoAmie && (
-                  <p><strong>Código AMIE:</strong> {formData.codigoAmie}</p>
+                  <p>
+                    <strong>Código AMIE:</strong> {formData.codigoAmie}
+                  </p>
                 )}
                 {formData.nombreRector && (
-                  <p><strong>Rector/a:</strong> {formData.nombreRector}</p>
+                  <p>
+                    <strong>Rector/a:</strong> {formData.nombreRector}
+                  </p>
                 )}
               </div>
             </div>
@@ -298,7 +356,11 @@ export default function InstitutionSettings() {
               className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <FaSave className="text-xs" />
-              {saving ? 'Guardando...' : (hasData ? 'Actualizar configuración' : 'Guardar configuración')}
+              {saving
+                ? "Guardando..."
+                : hasData
+                  ? "Actualizar configuración"
+                  : "Guardar configuración"}
             </button>
             <button
               type="button"
@@ -321,13 +383,19 @@ export default function InstitutionSettings() {
               key={toast.id}
               className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
             >
-              <div className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}>
+              <div
+                className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
+              >
                 <Icon className="text-white text-sm" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>{toast.title}</p>
+                <p className={`font-semibold text-sm ${config.titleColor}`}>
+                  {toast.title}
+                </p>
                 {toast.message && (
-                  <p className={`text-xs ${config.msgColor} mt-0.5`}>{toast.message}</p>
+                  <p className={`text-xs ${config.msgColor} mt-0.5`}>
+                    {toast.message}
+                  </p>
                 )}
               </div>
               <button
