@@ -323,7 +323,7 @@ export default function Grados() {
   // ✅ Loading global: espera a que el Context cargue los datos maestros
   if (!ready) {
     return (
-      <Layout>
+      <Layout title="Grados" subtitle="Gestiona los niveles educativos y paralelos" showBack>
         <div className="flex items-center justify-center py-20">
           <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
           <p className="text-slate-600 text-sm font-medium">Cargando grados...</p>
@@ -333,7 +333,21 @@ export default function Grados() {
   }
 
   return (
-    <Layout>
+    <Layout
+      title="Grados"
+      subtitle="Gestiona los niveles educativos y paralelos"
+      showBack
+      action={puedeGestionar ? (
+        <button
+          onClick={() => setShowForm(!showForm)}
+          disabled={!anioActivo}
+          className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm hover:shadow-md disabled:opacity-70 disabled:cursor-not-allowed"
+        >
+          <FaPlus className="text-sm" />
+          {showForm ? 'Cancelar' : 'Crear Grados'}
+        </button>
+      ) : null}
+    >
       {anioActivo && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6">
           <div className="flex items-center gap-2 text-blue-800">
@@ -501,20 +515,11 @@ export default function Grados() {
       {/* Tabla de Grados */}
       {!docenteSinGrados && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <div className="flex items-center justify-between p-4 border-b border-slate-200">
+          <div className="flex items-center p-4 border-b border-slate-200">
             <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
               <FaGraduationCap className="text-blue-600" />
               Grados del Año Lectivo
             </h3>
-            {puedeGestionar && !showForm && (
-              <button
-                onClick={() => setShowForm(true)}
-                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm hover:shadow-md"
-              >
-                <FaPlus className="text-sm" />
-                Crear Grados
-              </button>
-            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">

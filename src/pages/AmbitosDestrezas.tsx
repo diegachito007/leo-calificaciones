@@ -106,7 +106,6 @@ export default function AmbitosDestrezas() {
 
   // ==================== VALORES DERIVADOS (sin estado, sin lecturas) ====================
 
-  // Grados del año activo (filtrados localmente)
   const grados = (() => {
     if (!anioActivo) return [];
     return todosLosGrados
@@ -114,10 +113,8 @@ export default function AmbitosDestrezas() {
       .sort((a, b) => (a.orden || 0) - (b.orden || 0));
   })();
 
-  // Grado efectivo: seleccionado o primer grado (sin useEffect+setState)
   const gradoEfectivoId = selectedGradoId || (grados.length > 0 ? grados[0].id : "");
 
-  // Ámbitos del grado seleccionado (derivados del Context)
   const ambitos = (() => {
     if (!gradoEfectivoId) return [];
     return todosLosAmbitosContext
@@ -125,7 +122,6 @@ export default function AmbitosDestrezas() {
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
   })();
 
-  // Destrezas del grado seleccionado (derivadas del Context)
   const destrezas = (() => {
     if (!gradoEfectivoId) return [];
     return todasLasDestrezasContext
@@ -133,7 +129,6 @@ export default function AmbitosDestrezas() {
       .sort((a, b) => (a.orden || 0) - (b.orden || 0));
   })();
 
-  // Todos los ámbitos ordenados por nombre (para modal de copiar)
   const todosLosAmbitos = (() => {
     return [...todosLosAmbitosContext].sort((a, b) => a.nombre.localeCompare(b.nombre));
   })();
@@ -231,7 +226,6 @@ export default function AmbitosDestrezas() {
     return { ambitos: ambitosList, parseErrors };
   };
 
-  // ✅ Función normal (depende de `ambitos` derivado, no puede ser useCallback)
   const validarAmbitosMasivos = (ambitosList: string[]): string[] => {
     const allErrors: string[] = [];
     const nombresVistos = new Set<string>();
@@ -316,7 +310,6 @@ export default function AmbitosDestrezas() {
       });
 
       await Promise.all(batch);
-      // ✅ NO se llama a cargarAmbitos/cargarTodosLosAmbitos: el Context se actualiza solo
       resetAmbitoForm();
       mostrarToast(
         "success",
@@ -377,7 +370,6 @@ export default function AmbitosDestrezas() {
         `"${ambitoFormData.nombre}" se guardó correctamente.`,
       );
       resetAmbitoForm();
-      // ✅ El Context detecta el cambio automáticamente
     } catch (error) {
       console.error("Error guardando ámbito:", error);
       mostrarToast("error", "Error al guardar", "No se pudo guardar el ámbito.");
@@ -388,7 +380,6 @@ export default function AmbitosDestrezas() {
 
   // ==================== COPIAR A OTROS GRADOS ====================
 
-  // ✅ Optimizado: usa datos del Context para verificar duplicados localmente (sin lecturas)
   async function copiarAGrados() {
     if (selectedDestGrados.length === 0) {
       mostrarToast("warning", "Selecciona grados de destino", "Debes seleccionar al menos un grado para copiar.");
@@ -405,13 +396,10 @@ export default function AmbitosDestrezas() {
       let destrezasCreadas = 0;
 
       for (const destGradoId of selectedDestGrados) {
-        // ✅ Ámbitos del grado destino desde el Context (sin lectura a Firestore)
         const ambitosDestContext = todosLosAmbitosContext.filter(a => a.gradoId === destGradoId);
-        // Mapa de IDs que se van creando durante la copia (para destrezas del mismo loop)
         const ambitosCreadosMap: Record<string, string> = {};
 
         for (const ambitoOrigen of ambitos) {
-          // Buscar si el ámbito ya existe en destino (del Context) o en los creados en este loop
           let ambitoDestId = ambitosCreadosMap[ambitoOrigen.nombre.toLowerCase()];
           
           if (!ambitoDestId) {
@@ -436,15 +424,11 @@ export default function AmbitosDestrezas() {
             }
           }
 
-          // ✅ Destrezas del ámbito origen desde el Context (sin lectura)
           const destrezasOrigen = todasLasDestrezasContext
             .filter((d) => d.ambitoId === ambitoOrigen.id)
             .sort((a, b) => (a.orden || 0) - (b.orden || 0));
 
-          // ✅ Destrezas del ámbito destino desde el Context
           const destrezasDestContext = todasLasDestrezasContext.filter(d => d.ambitoId === ambitoDestId);
-          
-          // Destrezas ya creadas en este loop para el mismo ámbito destino
           const destrezasCreadasEnLoop = new Set<string>();
 
           let ordenMax = destrezasDestContext.length > 0
@@ -454,7 +438,6 @@ export default function AmbitosDestrezas() {
           for (const destrezaOrigen of destrezasOrigen) {
             const lowerDesc = destrezaOrigen.descripcion.toLowerCase();
             
-            // Verificar duplicado en contexto + en lo que llevamos creando
             const existeEnContexto = destrezasDestContext.some(
               (d) => d.descripcion.toLowerCase() === lowerDesc,
             );
@@ -487,7 +470,6 @@ export default function AmbitosDestrezas() {
       );
       setShowCopyModal(false);
       setSelectedDestGrados([]);
-      // ✅ El Context se actualiza automáticamente
     } catch (error) {
       console.error("Error copiando ámbitos y destrezas:", error);
       mostrarToast("error", "Error al copiar", "No se pudieron copiar ámbitos y destrezas.");
@@ -652,7 +634,6 @@ export default function AmbitosDestrezas() {
         "Ámbito eliminado",
         `"${ambito?.nombre}" y sus destrezas fueron eliminados.`,
       );
-      // ✅ El Context detecta los cambios automáticamente
     } catch (error) {
       console.error("Error eliminando:", error);
       mostrarToast("error", "Error al eliminar", "No se pudo eliminar el ámbito.");
@@ -676,7 +657,6 @@ export default function AmbitosDestrezas() {
     try {
       await deleteDoc(doc(db, "destrezas", id));
       mostrarToast("success", "Destreza eliminada", "La destreza fue eliminada correctamente.");
-      // ✅ El Context detecta el cambio automáticamente
     } catch (error) {
       console.error("Error eliminando:", error);
       mostrarToast("error", "Error al eliminar", "No se pudo eliminar la destreza.");
@@ -862,7 +842,7 @@ export default function AmbitosDestrezas() {
   // ✅ Loading: espera a que el Context cargue los datos maestros
   if (!ready) {
     return (
-      <Layout>
+      <Layout title="Ámbitos y Destrezas" subtitle="Configura competencias y destrezas" showBack>
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
@@ -879,7 +859,11 @@ export default function AmbitosDestrezas() {
   const gradosDestino = grados.filter((g) => g.id !== gradoEfectivoId);
 
   return (
-    <Layout>
+    <Layout
+      title="Ámbitos y Destrezas"
+      subtitle="Configura competencias y destrezas por grado"
+      showBack
+    >
       {anioActivo && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6">
           <div className="flex items-center gap-2 text-blue-800">
