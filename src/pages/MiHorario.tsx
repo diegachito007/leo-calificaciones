@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { 
   collection, 
   query, 
@@ -7,16 +7,14 @@ import {
   addDoc, 
   deleteDoc, 
   doc, 
-  Timestamp,
   onSnapshot,
-  orderBy
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
-import type { Grado, Destreza, AnioLectivo, Ambito } from '../types';
+import { useData } from '../context/DataContext';
+import type { Destreza, Ambito } from '../types';
 import Layout from '../components/Layout';
 import { 
-  FaChalkboardTeacher, 
   FaGraduationCap, 
   FaCheck, 
   FaSpinner, 
@@ -38,10 +36,7 @@ interface AsignaturaDocente {
   destrezaId: string;
   anioLectivoId: string;
   activo: boolean;
-  createdAt?: Timestamp | Date;
 }
-
-// ==================== TIPOS PARA MODALES ====================
 
 interface Toast {
   id: string;
@@ -64,19 +59,16 @@ interface ConfirmModalState {
 
 export default function MiHorario() {
   const { user, userData } = useAuth();
-  const [grados, setGrados] = useState<Grado[]>([]);
-  const [destrezas, setDestrezas] = useState<Destreza[]>([]);
-  const [ambitos, setAmbitos] = useState<Ambito[]>([]);
+  
+  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
+  const { grados, destrezas, ambitos, anioActivo, ready } = useData();
+  
   const [asignaturas, setAsignaturas] = useState<AsignaturaDocente[]>([]);
-  const [anioActivo, setAnioActivo] = useState<AnioLectivo | null>(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedGradoId, setSelectedGradoId] = useState<string>('');
 
-  // ✅ NUEVO: Sistema de toasts (reemplaza alert)
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // ✅ NUEVO: Modal de confirmación personalizado (reemplaza confirm)
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
     title: "",
@@ -84,6 +76,23 @@ export default function MiHorario() {
     onConfirm: () => {},
     onCancel: () => {},
   });
+
+  // ✅ Grados filtrados localmente (sin lectura a Firestore)
+  const gradosFiltrados = (() => {
+    if (
+      userData?.role === 'docente' &&
+      userData?.gradosAsignados &&
+      userData.gradosAsignados.length > 0
+    ) {
+      const asignados = new Set(userData.gradosAsignados);
+      return grados.filter((g) => asignados.has(g.id));
+    }
+    return grados;
+  })();
+
+  // ✅ Grado efectivo: el seleccionado por el usuario, o el primero como default
+  // (sin useEffect que haga setState síncrono - evita renders en cascada)
+  const gradoEfectivoId = selectedGradoId || (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : '');
 
   // ==================== HELPERS DE NOTIFICACIÓN ====================
 
@@ -136,91 +145,8 @@ export default function MiHorario() {
     });
   }, []);
 
-  // ==================== CARGA DE DATOS ====================
+  // ==================== CARGA DE ASIGNATURAS (único listener necesario) ====================
 
-  // ✅ Cargar datos iniciales (año lectivo y grados) - solo una vez
-  useEffect(() => {
-    let isMounted = true;
-
-    const cargarDatosIniciales = async () => {
-      try {
-        // 1. Año lectivo activo
-        const qAnios = query(collection(db, 'aniosLectivos'), where('activo', '==', true));
-        const snapAnios = await getDocs(qAnios);
-        if (snapAnios.empty) {
-          if (isMounted) setLoading(false);
-          return;
-        }
-        const anioData = { id: snapAnios.docs[0].id, ...snapAnios.docs[0].data() } as AnioLectivo;
-        if (isMounted) setAnioActivo(anioData);
-
-        // 2. Grados asignados al usuario
-        let qGrados;
-        if (userData?.role === 'docente' && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
-          qGrados = query(
-            collection(db, 'grados'),
-            where('anioLectivoId', '==', anioData.id),
-            where('__name__', 'in', userData.gradosAsignados),
-            where('activo', '==', true)
-          );
-        } else {
-          qGrados = query(
-            collection(db, 'grados'),
-            where('anioLectivoId', '==', anioData.id),
-            where('activo', '==', true)
-          );
-        }
-        const snapGrados = await getDocs(qGrados);
-        const gradosData = snapGrados.docs.map(d => ({ id: d.id, ...d.data() } as Grado));
-        if (isMounted) {
-          setGrados(gradosData);
-          if (gradosData.length > 0) {
-            setSelectedGradoId(gradosData[0].id);
-          }
-        }
-      } catch (error) {
-        console.error('Error cargando datos iniciales:', error);
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    };
-
-    cargarDatosIniciales();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [userData]);
-
-  // ✅ LISTENER EN TIEMPO REAL: Destrezas (se actualizan automáticamente)
-  useEffect(() => {
-    const q = query(collection(db, 'destrezas'), where('activo', '==', true), orderBy('orden', 'asc'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const destrezasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Destreza));
-      setDestrezas(destrezasData);
-    }, (error) => {
-      console.error('Error escuchando destrezas:', error);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  // ✅ LISTENER EN TIEMPO REAL: Ámbitos (se actualizan automáticamente)
-  useEffect(() => {
-    const q = query(collection(db, 'ambitos'), where('activo', '==', true), orderBy('orden', 'asc'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const ambitosData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Ambito));
-      setAmbitos(ambitosData);
-    }, (error) => {
-      console.error('Error escuchando ámbitos:', error);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  // ✅ LISTENER EN TIEMPO REAL: Asignaturas del docente actual
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
 
@@ -249,33 +175,25 @@ export default function MiHorario() {
   };
 
   const esGradoInicial = (gradoNombre: string): boolean => {
-    return (
-      gradoNombre.toLowerCase().includes('inicial 1') ||
-      gradoNombre.toLowerCase().includes('inicial 2') ||
-      gradoNombre.toLowerCase().includes('preparatoria')
-    );
+    const n = gradoNombre.toLowerCase();
+    return n.includes('inicial 1') || n.includes('inicial 2') || n.includes('preparatoria');
   };
 
-  // Materias del grado seleccionado
-  const destrezasDelGrado = useMemo(() => {
-    if (!selectedGradoId) return [];
-    const ambitosDelGrado = ambitos.filter(a => a.gradoId === selectedGradoId).map(a => a.id);
-    return destrezas.filter(d => ambitosDelGrado.includes(d.ambitoId));
-  }, [selectedGradoId, destrezas, ambitos]);
+  // ✅ Usando gradoEfectivoId (valor derivado, no estado)
+  const destrezasDelGrado = (() => {
+    if (!gradoEfectivoId) return [];
+    const ambitosDelGrado = new Set(ambitos.filter(a => a.gradoId === gradoEfectivoId).map(a => a.id));
+    return destrezas.filter(d => ambitosDelGrado.has(d.ambitoId));
+  })();
 
-  // Asignaturas del grado seleccionado
-  const asignaturasDelGrado = useMemo(() => {
-    return asignaturas.filter(a => a.gradoId === selectedGradoId);
-  }, [asignaturas, selectedGradoId]);
+  const asignaturasDelGrado = asignaturas.filter(a => a.gradoId === gradoEfectivoId);
 
-  // Materias disponibles
-  const destrezasDisponibles = useMemo(() => {
-    const asignadasIds = asignaturasDelGrado.map(a => a.destrezaId);
-    return destrezasDelGrado.filter(d => !asignadasIds.includes(d.id));
-  }, [destrezasDelGrado, asignaturasDelGrado]);
+  const destrezasDisponibles = (() => {
+    const asignadasIds = new Set(asignaturasDelGrado.map(a => a.destrezaId));
+    return destrezasDelGrado.filter(d => !asignadasIds.has(d.id));
+  })();
 
-  // Agrupar destrezas disponibles por ámbito
-  const destrezasPorAmbito = useMemo(() => {
+  const destrezasPorAmbito = (() => {
     const grupos: Record<string, { ambito: Ambito; destrezas: Destreza[] }> = {};
     
     destrezasDisponibles.forEach(destreza => {
@@ -289,25 +207,29 @@ export default function MiHorario() {
     });
 
     return Object.values(grupos);
-  }, [destrezasDisponibles, ambitos]);
+  })();
 
   // ==================== ACCIONES ====================
 
+  // ✅ Optimizado: usa datos locales + consulta solo si es necesario
   const verificarDisponibilidad = async (destrezaId: string): Promise<boolean> => {
+    // Primero: si el docente actual ya tiene esta destreza asignada en este grado, está disponible
+    const asignacionPropia = asignaturas.find(
+      a => a.gradoId === gradoEfectivoId && a.destrezaId === destrezaId
+    );
+    if (asignacionPropia) return true;
+
+    // Segundo: consultar si OTRO docente la tiene asignada
     try {
       const q = query(
         collection(db, 'asignaturasDocente'),
-        where('gradoId', '==', selectedGradoId),
+        where('gradoId', '==', gradoEfectivoId),
         where('destrezaId', '==', destrezaId),
         where('anioLectivoId', '==', anioActivo?.id),
         where('activo', '==', true)
       );
       const snap = await getDocs(q);
-      
-      if (snap.empty) return true;
-      
-      const asignacionExistente = snap.docs[0].data();
-      return asignacionExistente.docenteId === user?.uid;
+      return snap.empty;
     } catch (error) {
       console.error('Error verificando disponibilidad:', error);
       return false;
@@ -315,7 +237,7 @@ export default function MiHorario() {
   };
 
   const asignarMateria = async (destrezaId: string) => {
-    if (!user?.uid || !anioActivo?.id || !selectedGradoId) return;
+    if (!user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
 
     setSaving(true);
     try {
@@ -329,7 +251,7 @@ export default function MiHorario() {
       const destreza = destrezas.find(d => d.id === destrezaId);
       await addDoc(collection(db, 'asignaturasDocente'), {
         docenteId: user.uid,
-        gradoId: selectedGradoId,
+        gradoId: gradoEfectivoId,
         destrezaId,
         anioLectivoId: anioActivo.id,
         activo: true,
@@ -344,9 +266,8 @@ export default function MiHorario() {
     }
   };
 
-  // ✅ MODIFICADO: Usa modal de confirmación personalizado
   const asignarTodasDelAmbito = async (ambitoId: string) => {
-    if (!user?.uid || !anioActivo?.id || !selectedGradoId) return;
+    if (!user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
 
     const grupo = destrezasPorAmbito.find(g => g.ambito.id === ambitoId);
     if (!grupo) return;
@@ -378,7 +299,7 @@ export default function MiHorario() {
 
         await addDoc(collection(db, 'asignaturasDocente'), {
           docenteId: user.uid,
-          gradoId: selectedGradoId,
+          gradoId: gradoEfectivoId,
           destrezaId: destreza.id,
           anioLectivoId: anioActivo.id,
           activo: true,
@@ -405,7 +326,6 @@ export default function MiHorario() {
     }
   };
 
-  // ✅ MODIFICADO: Usa modal de confirmación personalizado
   const removerMateria = async (asignacionId: string) => {
     const asignatura = asignaturas.find(a => a.id === asignacionId);
     const destreza = asignatura ? destrezas.find(d => d.id === asignatura.destrezaId) : null;
@@ -469,9 +389,10 @@ export default function MiHorario() {
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  if (loading) {
+  // ✅ Loading hasta que el Context esté listo
+  if (!ready) {
     return (
-      <Layout title="Mi Horario" subtitle="Configura las materias que dictas" showBack>
+      <Layout>
         <div className="flex items-center justify-center py-20">
           <FaSpinner className="animate-spin text-4xl text-blue-600" />
         </div>
@@ -481,7 +402,7 @@ export default function MiHorario() {
 
   if (!anioActivo) {
     return (
-      <Layout title="Mi Horario" subtitle="Configura las materias que dictas" showBack>
+      <Layout>
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
           <FaExclamationTriangle className="text-yellow-600 text-4xl mx-auto mb-3" />
           <p className="text-yellow-800">No hay año lectivo activo</p>
@@ -490,34 +411,21 @@ export default function MiHorario() {
     );
   }
 
-  const gradoActual = grados.find(g => g.id === selectedGradoId);
+  const gradoActual = gradosFiltrados.find(g => g.id === gradoEfectivoId);
   const esInicialOPreparatoria = gradoActual ? esGradoInicial(gradoActual.nombre) : false;
 
   return (
-    <Layout title="Mi Horario" subtitle="Configura las materias que dictas en cada grado" showBack>
+    <Layout>
       <div className="space-y-6">
-        {/* Banner de año lectivo */}
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
-          <div className="flex items-center gap-2 text-blue-800">
-            <FaChalkboardTeacher className="text-sm" />
-            <span className="text-sm font-medium">Año lectivo:</span>
-            <span className="text-base font-bold text-blue-900">{anioActivo.nombre}</span>
-            <span className="ml-auto flex items-center gap-1 text-xs text-blue-600">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-              En vivo
-            </span>
-          </div>
-        </div>
-
         {/* Selector de grados */}
-        {grados.length > 0 && (
+        {gradosFiltrados.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
               <FaGraduationCap className="text-blue-600" />
               Selecciona un Grado:
             </h3>
             <div className="flex flex-wrap gap-2">
-              {grados.map(grado => {
+              {gradosFiltrados.map(grado => {
                 const countAsignadas = asignaturas.filter(a => a.gradoId === grado.id).length;
                 const esInicial = esGradoInicial(grado.nombre);
                 return (
@@ -525,7 +433,7 @@ export default function MiHorario() {
                     key={grado.id}
                     onClick={() => setSelectedGradoId(grado.id)}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border-2 flex items-center gap-2 ${
-                      selectedGradoId === grado.id
+                      gradoEfectivoId === grado.id
                         ? 'bg-blue-600 text-white border-blue-600'
                         : 'bg-white text-slate-700 border-slate-200 hover:border-blue-400'
                     }`}
@@ -538,7 +446,7 @@ export default function MiHorario() {
                     )}
                     {countAsignadas > 0 && (
                       <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
-                        selectedGradoId === grado.id
+                        gradoEfectivoId === grado.id
                           ? 'bg-white text-blue-600'
                           : 'bg-blue-100 text-blue-700'
                       }`}>
@@ -553,7 +461,7 @@ export default function MiHorario() {
         )}
 
         {/* Panel de materias asignadas */}
-        {selectedGradoId && (
+        {gradoEfectivoId && (
           <div className="bg-white rounded-xl shadow-sm border-2 border-green-200 overflow-hidden">
             <div className="bg-linear-to-r from-green-600 to-green-700 px-5 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -611,7 +519,7 @@ export default function MiHorario() {
         )}
 
         {/* Lista de materias disponibles */}
-        {selectedGradoId && (
+        {gradoEfectivoId && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <h3 className="text-base font-semibold text-slate-800 mb-1">
               Materias Disponibles
@@ -739,7 +647,7 @@ export default function MiHorario() {
         )}
 
         {/* Mensaje si no hay grados */}
-        {grados.length === 0 && (
+        {gradosFiltrados.length === 0 && ready && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
             <FaExclamationTriangle className="text-yellow-600 text-4xl mx-auto mb-3" />
             <p className="text-yellow-800 font-medium mb-2">No tienes grados asignados</p>
@@ -750,7 +658,7 @@ export default function MiHorario() {
         )}
       </div>
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
+      {/* ✅ CONTENEDOR DE TOASTS */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];

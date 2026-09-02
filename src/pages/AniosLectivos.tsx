@@ -1,24 +1,25 @@
-import { useState, useEffect, startTransition, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { 
   collection, 
-  query, 
-  orderBy, 
   addDoc, 
   updateDoc, 
   deleteDoc, 
   doc,
   serverTimestamp,
   getDocs,
-  where
+  where,
+  query
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
+import { useData } from '../context/DataContext';
 import type { AnioLectivo, PeriodoEvaluacion } from '../types';
 import Layout from '../components/Layout';
 import ConfirmModal from '../components/ConfirmModal';
 import { 
   FaPlus, FaEdit, FaTrash, FaCheck, FaTimes, FaCalendarAlt, FaInfoCircle, FaClock, FaSpinner,
-  FaCheckCircle, FaTimesCircle, FaExclamationTriangle, FaQuestionCircle} from 'react-icons/fa';
+  FaCheckCircle, FaTimesCircle, FaExclamationTriangle, FaQuestionCircle
+} from 'react-icons/fa';
 
 interface PeriodoCalculado {
   nombre: string;
@@ -26,8 +27,6 @@ interface PeriodoCalculado {
   fechaFin: string;
   orden: number;
 }
-
-// ==================== TIPOS PARA MODALES ====================
 
 interface Toast {
   id: string;
@@ -50,8 +49,10 @@ interface ConfirmModalState {
 
 export default function AniosLectivos() {
   const { user } = useAuth();
-  const [anios, setAnios] = useState<AnioLectivo[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
+  const { aniosLectivos, ready } = useData();
+
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -66,10 +67,8 @@ export default function AniosLectivos() {
 
   const [periodosEditables, setPeriodosEditables] = useState<PeriodoCalculado[]>([]);
 
-  // ✅ NUEVO: Sistema de toasts (reemplaza alert)
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // ✅ NUEVO: Modal de confirmación personalizado (reemplaza confirm)
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
     title: "",
@@ -78,7 +77,14 @@ export default function AniosLectivos() {
     onCancel: () => {},
   });
 
+  // ✅ Años lectivos ordenados desc por nombre (derivado del Context, sin estado)
+  const anios = [...aniosLectivos].sort((a, b) => {
+    if (!a.nombre || !b.nombre) return 0;
+    return b.nombre.localeCompare(a.nombre);
+  });
+
   // ==================== HELPERS DE NOTIFICACIÓN ====================
+  // ✅ Solo useCallback en helpers estables (sin dependencias derivadas)
 
   const mostrarToast = useCallback((
     type: Toast['type'],
@@ -142,7 +148,7 @@ export default function AniosLectivos() {
 
   const nombreGenerado = calcularNombre(formData.fechaInicio, formData.fechaFin);
 
-  const calcularPeriodos = useCallback((fechaInicio: string, fechaFin: string, tipo: 'trimestral' | 'quimestral'): PeriodoCalculado[] => {
+  const calcularPeriodos = (fechaInicio: string, fechaFin: string, tipo: 'trimestral' | 'quimestral'): PeriodoCalculado[] => {
     if (!fechaInicio || !fechaFin) return [];
 
     const inicio = new Date(fechaInicio);
@@ -173,7 +179,7 @@ export default function AniosLectivos() {
     }
     
     return periodos;
-  }, []);
+  };
 
   const actualizarPeriodo = (index: number, campo: 'fechaInicio' | 'fechaFin', valor: string) => {
     setPeriodosEditables(prev => {
@@ -183,39 +189,20 @@ export default function AniosLectivos() {
     });
   };
 
-  const cargarAnios = useCallback(async () => {
-    try {
-      const q = query(collection(db, 'aniosLectivos'), orderBy('nombre', 'desc'));
-      const snap = await getDocs(q);
-      const data = snap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as AnioLectivo));
-      
-      startTransition(() => {
-        setAnios(data);
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error('Error cargando años lectivos:', error);
-      startTransition(() => {
-        setLoading(false);
-      });
-    }
-  }, []);
-
-  const cargarPeriodosExistentes = useCallback(async (anioId: string) => {
+  // ✅ Lectura puntual solo cuando se EDITA un año (necesita períodos del año específico)
+  async function cargarPeriodosExistentes(anioId: string) {
     try {
       const q = query(
         collection(db, 'periodosEvaluacion'),
         where('anioLectivoId', '==', anioId),
-        orderBy('orden', 'asc')
       );
       const snap = await getDocs(q);
-      const data = snap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as PeriodoEvaluacion));
+      const data = snap.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        } as PeriodoEvaluacion))
+        .sort((a, b) => (a.orden || 0) - (b.orden || 0));
       
       if (data.length > 0) {
         setPeriodosEditables(data.map(p => ({
@@ -228,7 +215,7 @@ export default function AniosLectivos() {
     } catch (error) {
       console.error('Error cargando períodos:', error);
     }
-  }, []);
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -285,7 +272,7 @@ export default function AniosLectivos() {
     setShowConfirmModal(false);
   };
 
-  const guardarAnioLectivo = async (nombre: string, forzarActivo = false) => {
+  async function guardarAnioLectivo(nombre: string, forzarActivo = false) {
     setIsSaving(true);
     
     try {
@@ -358,14 +345,14 @@ export default function AniosLectivos() {
         5000
       );
       resetForm();
-      await cargarAnios();
+      // ✅ NO se llama a cargarAnios(): el Context detecta los cambios automáticamente
     } catch (error) {
       console.error('Error guardando año lectivo:', error);
       mostrarToast('error', 'Error al guardar', 'No se pudo guardar el año lectivo. Intenta nuevamente.');
     } finally {
       setIsSaving(false);
     }
-  };
+  }
 
   const handleEdit = (anio: AnioLectivo) => {
     setFormData({
@@ -380,8 +367,7 @@ export default function AniosLectivos() {
     cargarPeriodosExistentes(anio.id);
   };
 
-  // ✅ MODIFICADO: Usa modal de confirmación personalizado
-  const handleDelete = async (id: string) => {
+  async function handleDelete(id: string) {
     const anio = anios.find(a => a.id === id);
     const confirmado = await confirmar(
       `Eliminar año lectivo ${anio?.nombre || ''}`,
@@ -405,14 +391,14 @@ export default function AniosLectivos() {
 
       await deleteDoc(doc(db, 'aniosLectivos', id));
       mostrarToast('success', 'Año lectivo eliminado', `${anio?.nombre} y sus períodos fueron eliminados correctamente.`);
-      await cargarAnios();
+      // ✅ El Context detecta el cambio automáticamente
     } catch (error) {
       console.error('Error eliminando:', error);
       mostrarToast('error', 'Error al eliminar', 'No se pudo eliminar el año lectivo.');
     }
-  };
+  }
 
-  const handleActivar = async (id: string) => {
+  async function handleActivar(id: string) {
     const anio = anios.find(a => a.id === id);
     setIsSaving(true);
     try {
@@ -423,14 +409,14 @@ export default function AniosLectivos() {
       await Promise.all(updates);
       await updateDoc(doc(db, 'aniosLectivos', id), { activo: true });
       mostrarToast('success', 'Período activado', `${anio?.nombre} ahora es el período académico vigente.`);
-      await cargarAnios();
+      // ✅ El Context detecta el cambio automáticamente
     } catch (error) {
       console.error('Error activando:', error);
       mostrarToast('error', 'Error al activar', 'No se pudo activar el período.');
     } finally {
       setIsSaving(false);
     }
-  };
+  }
 
   const resetForm = () => {
     setFormData({
@@ -443,10 +429,6 @@ export default function AniosLectivos() {
     setShowForm(false);
     setPeriodosEditables([]);
   };
-
-  useEffect(() => {
-    cargarAnios();
-  }, [cargarAnios]);
 
   // ==================== CONFIG DE TOASTS ====================
 
@@ -483,9 +465,10 @@ export default function AniosLectivos() {
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  if (loading) {
+  // ✅ Loading global: espera a que el Context cargue los datos maestros
+  if (!ready) {
     return (
-      <Layout title="Años Lectivos" subtitle="Gestiona los periodos académicos del sistema" showBack>
+      <Layout>
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
@@ -879,7 +862,7 @@ export default function AniosLectivos() {
         type="warning"
       />
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
+      {/* ✅ CONTENEDOR DE TOASTS */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];

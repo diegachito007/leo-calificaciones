@@ -11,7 +11,7 @@ import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import Layout from '../components/Layout';
 import {
-  FaSave, FaBuilding, FaUserTie, FaImage, FaCheck, FaTimes, FaExclamationTriangle,
+  FaSave, FaBuilding, FaUserTie, FaCheck, FaTimes, FaExclamationTriangle,
   FaCheckCircle, FaTimesCircle, FaInfoCircle
 } from 'react-icons/fa';
 
@@ -20,14 +20,11 @@ interface ConfiguracionInstitucional {
   nombreInstitucion: string;
   codigoAmie: string;
   nombreRector: string;
-  logo?: string;
   updatedAt?: Timestamp | null;
   updatedBy?: string;
   createdAt?: Timestamp | null;
   createdBy?: string;
 }
-
-// ==================== TIPOS PARA TOASTS ====================
 
 interface Toast {
   id: string;
@@ -42,17 +39,13 @@ export default function InstitutionSettings() {
   const [saving, setSaving] = useState(false);
   const [hasData, setHasData] = useState(false);
 
-  // ✅ NUEVO: Sistema de toasts (reemplaza alert)
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const [formData, setFormData] = useState<ConfiguracionInstitucional>({
     nombreInstitucion: '',
     codigoAmie: '',
     nombreRector: '',
-    logo: ''
   });
-
-  // ==================== HELPERS DE NOTIFICACIÓN ====================
 
   const mostrarToast = useCallback((
     type: Toast['type'],
@@ -72,8 +65,6 @@ export default function InstitutionSettings() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // ==================== CARGA Y GUARDADO ====================
-
   const cargarConfiguracion = useCallback(async () => {
     try {
       setLoading(true);
@@ -85,7 +76,6 @@ export default function InstitutionSettings() {
           nombreInstitucion: docData.nombreInstitucion || '',
           codigoAmie: docData.codigoAmie || '',
           nombreRector: docData.nombreRector || '',
-          logo: docData.logo || ''
         });
         setHasData(true);
       } else {
@@ -114,7 +104,6 @@ export default function InstitutionSettings() {
         nombreInstitucion: formData.nombreInstitucion.trim(),
         codigoAmie: formData.codigoAmie.trim(),
         nombreRector: formData.nombreRector.trim(),
-        logo: formData.logo || '',
         updatedAt: serverTimestamp(),
         updatedBy: user?.uid || ''
       };
@@ -150,8 +139,6 @@ export default function InstitutionSettings() {
     };
     loadData();
   }, [cargarConfiguracion]);
-
-  // ==================== CONFIG DE TOASTS ====================
 
   const toastConfig = {
     success: {
@@ -203,7 +190,6 @@ export default function InstitutionSettings() {
       subtitle="Datos de la institución para reportes y documentos"
       showBack
     >
-      {/* ✅ Mensaje si no hay configuración */}
       {!hasData && (
         <div className="bg-amber-50 border-2 border-amber-300 rounded-xl px-6 py-5 mb-6">
           <div className="flex items-start gap-3">
@@ -222,7 +208,6 @@ export default function InstitutionSettings() {
         </div>
       )}
 
-      {/* ✅ Formulario */}
       <form onSubmit={handleSubmit} className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="bg-linear-to-r from-blue-600 to-blue-700 px-5 py-3">
           <h3 className="text-white font-semibold text-base flex items-center gap-2">
@@ -232,7 +217,6 @@ export default function InstitutionSettings() {
         </div>
 
         <div className="p-6 space-y-6">
-          {/* Sección 1: Datos Generales */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
@@ -263,7 +247,6 @@ export default function InstitutionSettings() {
             </div>
           </div>
 
-          {/* Separador */}
           <div className="border-t border-slate-200 pt-6">
             <h4 className="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
               <FaUserTie className="text-blue-600" />
@@ -288,40 +271,6 @@ export default function InstitutionSettings() {
             </div>
           </div>
 
-          {/* Separador */}
-          <div className="border-t border-slate-200 pt-6">
-            <h4 className="text-sm font-semibold text-slate-700 mb-4 flex items-center gap-2">
-              <FaImage className="text-blue-600" />
-              Logo Institucional
-            </h4>
-
-            <div className="flex items-start gap-4">
-              <div className="w-24 h-24 rounded-lg border-2 border-dashed border-slate-300 flex items-center justify-center bg-slate-50 overflow-hidden shrink-0">
-                {formData.logo ? (
-                  <img src={formData.logo} alt="Logo" className="w-full h-full object-contain p-1" />
-                ) : (
-                  <span className="text-xs text-slate-400 text-center px-2">Sin logo</span>
-                )}
-              </div>
-              <div className="flex-1">
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                  URL del logo o Base64
-                </label>
-                <input
-                  type="text"
-                  value={formData.logo}
-                  onChange={(e) => setFormData({...formData, logo: e.target.value})}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                  placeholder="https://... o data:image/png;base64,..."
-                />
-                <p className="text-xs text-slate-500 mt-1">
-                  Puedes pegar una URL o el código base64 completo del logo
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Vista previa */}
           {(formData.nombreInstitucion || formData.codigoAmie || formData.nombreRector) && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
               <div className="flex items-center gap-2 text-blue-800 mb-2">
@@ -342,7 +291,6 @@ export default function InstitutionSettings() {
             </div>
           )}
 
-          {/* Botones */}
           <div className="flex gap-2 pt-4 border-t border-slate-200">
             <button
               type="submit"
@@ -364,7 +312,6 @@ export default function InstitutionSettings() {
         </div>
       </form>
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];

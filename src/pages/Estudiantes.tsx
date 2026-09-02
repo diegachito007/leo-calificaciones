@@ -1,4 +1,4 @@
-import { useState, useEffect, startTransition, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   collection,
   query,
@@ -13,7 +13,8 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
-import type { Estudiante, Grado, AnioLectivo } from '../types';
+import { useData } from '../context/DataContext';
+import type { Estudiante } from '../types';
 import Layout from '../components/Layout';
 import {
   FaEdit,
@@ -24,17 +25,16 @@ import {
   FaInfoCircle,
   FaSearch,
   FaExclamationTriangle,
-  FaCalendarAlt,
   FaUserTie,
   FaBookOpen,
   FaLock,
   FaUpload,
   FaCheckCircle,
   FaTimesCircle,
-  FaQuestionCircle
+  FaQuestionCircle,
+  FaSpinner
 } from 'react-icons/fa';
 
-// ✅ Función para formatear texto: MAYÚSCULAS, sin tildes y sin números
 const formatText = (text: string): string => {
   if (!text) return '';
   return text
@@ -43,8 +43,6 @@ const formatText = (text: string): string => {
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase();
 };
-
-// ==================== TIPOS PARA MODALES ====================
 
 interface Toast {
   id: string;
@@ -65,17 +63,22 @@ interface ConfirmModalState {
   onCancel: () => void;
 }
 
+interface EstudianteParseado {
+  cedula: string;
+  apellidos: string;
+  nombres: string;
+}
+
 export default function Estudiantes() {
   const { user, userData } = useAuth();
+  const { grados, anioActivo, ready } = useData();
+  
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
-  const [grados, setGrados] = useState<Grado[]>([]);
-  const [aniosLectivos, setAniosLectivos] = useState<AnioLectivo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingEstudiantes, setLoadingEstudiantes] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedGradoId, setSelectedGradoId] = useState<string | null>(null);
   
-  // Estados para edición individual
   const [formData, setFormData] = useState({
     apellidos: '',
     nombres: '',
@@ -84,16 +87,12 @@ export default function Estudiantes() {
   });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
 
-  // ✅ Estados para ingreso masivo
   const [showMassiveForm, setShowMassiveForm] = useState(false);
   const [massiveData, setMassiveData] = useState("");
-  const [parsedStudents, setParsedStudents] = useState<{cedula: string, apellidos: string, nombres: string}[]>([]);
   const [isSavingMassive, setIsSavingMassive] = useState(false);
 
-  // ✅ NUEVO: Sistema de toasts (reemplaza alert)
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // ✅ NUEVO: Modal de confirmación personalizado (reemplaza confirm)
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
     title: "",
@@ -102,12 +101,31 @@ export default function Estudiantes() {
     onCancel: () => {},
   });
 
+  const gradosFiltrados = (() => {
+    if (
+      userData?.role === 'docente' &&
+      userData?.gradosAsignados &&
+      userData.gradosAsignados.length > 0
+    ) {
+      const asignados = new Set(userData.gradosAsignados);
+      return grados.filter((g) => asignados.has(g.id));
+    }
+    return grados;
+  })();
+
+  const gradoEfectivoId = selectedGradoId || (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : null);
+
   const docenteSinGrados = userData?.role === 'docente' && (!userData?.gradosAsignados || userData.gradosAsignados.length === 0);
   const esAdmin = userData?.role === 'super_admin';
-  const anioActivo = aniosLectivos.find(a => a.activo);
 
-  // ==================== HELPERS DE NOTIFICACIÓN ====================
+  const tutorDeAnioActivo = (() => {
+    if (!userData?.tutorDe) return [];
+    return gradosFiltrados
+      .filter(g => userData.tutorDe?.includes(g.id))
+      .map(g => g.id);
+  })();
 
+  // ✅ Helpers de notificación (useCallback está bien aquí porque no dependen de valores derivados)
   const mostrarToast = useCallback((
     type: Toast['type'],
     title: string,
@@ -157,26 +175,17 @@ export default function Estudiantes() {
     });
   }, []);
 
-  // ==================== LÓGICA PRINCIPAL ====================
-
-  // ✅ Filtrar tutorDe solo para el año lectivo activo
-  const tutorDeAnioActivo = useMemo(() => {
-    if (!userData?.tutorDe) return [];
-    return grados.filter(g => userData.tutorDe?.includes(g.id)).map(g => g.id);
-  }, [grados, userData]);
-
-  const puedeGestionarEstudiantes = useCallback((gradoId: string): boolean => {
+  const puedeGestionarEstudiantes = (gradoId: string): boolean => {
     if (esAdmin) return true;
     if (userData?.role === 'docente') {
       return userData?.tutorDe?.includes(gradoId) || false;
     }
     return false;
-  }, [esAdmin, userData?.role, userData?.tutorDe]);
+  };
 
-  // ✅ Solo puede registrar si es admin o tutor del grado seleccionado
-  const puedeRegistrar = (esAdmin || (userData?.role === 'docente' && selectedGradoId && tutorDeAnioActivo.includes(selectedGradoId))) && !!selectedGradoId;
+  const puedeRegistrar = (esAdmin || (userData?.role === 'docente' && gradoEfectivoId && tutorDeAnioActivo.includes(gradoEfectivoId))) && !!gradoEfectivoId;
 
-  const resetForm = useCallback(() => {
+  const resetForm = () => {
     setFormData({
       apellidos: '',
       nombres: '',
@@ -185,138 +194,25 @@ export default function Estudiantes() {
     });
     setEditingId(null);
     setValidationErrors([]);
-  }, []);
+  };
 
-  const cargarAniosLectivos = useCallback(async () => {
-    try {
-      const q = query(collection(db, 'aniosLectivos'), where('activo', '==', true));
-      const snap = await getDocs(q);
-      const data = snap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as AnioLectivo));
-      startTransition(() => {
-        setAniosLectivos(data);
-      });
-    } catch (error) {
-      console.error('Error cargando años lectivos:', error);
-    }
-  }, []);
-
-  const cargarGrados = useCallback(async () => {
-    try {
-      let q;
-      if (userData?.role === 'docente' && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
-        q = query(
-          collection(db, 'grados'),
-          where('__name__', 'in', userData.gradosAsignados),
-          where('activo', '==', true),
-          orderBy('orden', 'asc')
-        );
-      } else if (userData?.role === 'docente') {
-        startTransition(() => {
-          setGrados([]);
-        });
-        return;
-      } else {
-        q = query(
-          collection(db, 'grados'),
-          where('activo', '==', true),
-          orderBy('orden', 'asc')
-        );
-      }
-      const snap = await getDocs(q);
-      const data = snap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Grado));
-      startTransition(() => {
-        setGrados(data);
-        if (userData?.role === 'docente' && data.length > 0 && !selectedGradoId) {
-          setSelectedGradoId(data[0].id);
-        }
-      });
-    } catch (error) {
-      console.error('Error cargando grados:', error);
-    }
-  }, [userData, selectedGradoId]);
-
-  const cargarEstudiantes = useCallback(async () => {
-    if (userData?.role === 'docente' && !selectedGradoId) {
-      startTransition(() => {
-        setEstudiantes([]);
-        setLoading(false);
-      });
+  // ✅ Cargar estudiantes cuando cambia el grado
+  useEffect(() => {
+    if (!ready) return;
+    
+    // Si es docente sin grado seleccionado, no cargar nada (valor derivado maneja UI)
+    if (userData?.role === 'docente' && !gradoEfectivoId) {
       return;
     }
 
-    let q;
-    if (userData?.role === 'docente' && selectedGradoId) {
-      q = query(
-        collection(db, 'estudiantes'),
-        where('gradoId', '==', selectedGradoId),
-        orderBy('apellidos', 'asc')
-      );
-    } else if (esAdmin && selectedGradoId) {
-      q = query(
-        collection(db, 'estudiantes'),
-        where('gradoId', '==', selectedGradoId),
-        orderBy('apellidos', 'asc')
-      );
-    } else {
-      q = query(
-        collection(db, 'estudiantes'),
-        orderBy('apellidos', 'asc')
-      );
-    }
-    
-    try {
-      const snap = await getDocs(q);
-      const data = snap.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      } as Estudiante));
-      startTransition(() => {
-        setEstudiantes(data);
-      });
-    } catch (error) {
-      console.error('Error cargando estudiantes:', error);
-    } finally {
-      startTransition(() => {
-        setLoading(false);
-      });
-    }
-  }, [userData, selectedGradoId, esAdmin]);
-
-  useEffect(() => {
-    let isMounted = true;
-
     const fetchEstudiantes = async () => {
-      if (!selectedGradoId && !esAdmin) {
-        if (isMounted) {
-          startTransition(() => {
-            setEstudiantes([]);
-            setLoading(false);
-          });
-        }
-        return;
-      }
-
-      if (isMounted) {
-        setLoading(true);
-      }
-
+      setLoadingEstudiantes(true);
+      
       let q;
-      if (userData?.role === 'docente' && selectedGradoId) {
+      if ((userData?.role === 'docente' || esAdmin) && gradoEfectivoId) {
         q = query(
           collection(db, 'estudiantes'),
-          where('gradoId', '==', selectedGradoId),
-          orderBy('apellidos', 'asc')
-        );
-      } else if (esAdmin && selectedGradoId) {
-        q = query(
-          collection(db, 'estudiantes'),
-          where('gradoId', '==', selectedGradoId),
+          where('gradoId', '==', gradoEfectivoId),
           orderBy('apellidos', 'asc')
         );
       } else {
@@ -332,131 +228,171 @@ export default function Estudiantes() {
           id: doc.id,
           ...doc.data()
         } as Estudiante));
-        if (isMounted) {
-          startTransition(() => {
-            setEstudiantes(data);
-            setLoading(false);
-          });
-        }
+        setEstudiantes(data);
       } catch (error) {
         console.error('Error cargando estudiantes:', error);
-        if (isMounted) {
-          startTransition(() => {
-            setLoading(false);
-          });
-        }
+      } finally {
+        setLoadingEstudiantes(false);
       }
     };
 
     fetchEstudiantes();
+  }, [gradoEfectivoId, esAdmin, userData?.role, ready]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [selectedGradoId, esAdmin, userData?.role]);
+  // ✅ Función para recargar estudiantes después de guardar/editar/eliminar
+  async function recargarEstudiantes() {
+    if (userData?.role === 'docente' && !gradoEfectivoId) {
+      setEstudiantes([]);
+      return;
+    }
 
-  // ✅ Parseo de datos masivos (Formato: Cédula, Apellidos y Nombres)
-  const parseMassiveData = useCallback(() => {
-    const lines = massiveData.trim().split('\n');
-    const students: {cedula: string, apellidos: string, nombres: string}[] = [];
+    let q;
+    if ((userData?.role === 'docente' || esAdmin) && gradoEfectivoId) {
+      q = query(
+        collection(db, 'estudiantes'),
+        where('gradoId', '==', gradoEfectivoId),
+        orderBy('apellidos', 'asc')
+      );
+    } else {
+      q = query(
+        collection(db, 'estudiantes'),
+        orderBy('apellidos', 'asc')
+      );
+    }
+    
+    try {
+      const snap = await getDocs(q);
+      const data = snap.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Estudiante));
+      setEstudiantes(data);
+    } catch (error) {
+      console.error('Error recargando estudiantes:', error);
+    }
+  }
+
+  const parsearListaMasiva = (data: string): { students: EstudianteParseado[]; errors: string[] } => {
+    const lines = data.trim().split('\n');
+    const students: EstudianteParseado[] = [];
     const errors: string[] = [];
 
     lines.forEach((line, index) => {
-      const parts = line.split(',').map(p => p.trim());
-      
-      if (parts.length < 2) {
-        errors.push(`Línea ${index + 1}: Formato inválido. Use: Cédula, Apellidos y Nombres`);
+      const lineaNormalizada = line.replace(/\t/g, ' ').trim();
+      if (!lineaNormalizada) return;
+
+      let cedula: string;
+      let nombreCompleto: string;
+
+      if (lineaNormalizada.includes(',')) {
+        const firstComma = lineaNormalizada.indexOf(',');
+        cedula = lineaNormalizada.substring(0, firstComma).trim();
+        nombreCompleto = lineaNormalizada.substring(firstComma + 1).trim();
+      } else {
+        const words = lineaNormalizada.split(/\s+/);
+        cedula = words[0].trim();
+        nombreCompleto = words.slice(1).join(' ').trim();
+      }
+
+      if (!cedula) {
+        errors.push(`Línea ${index + 1}: La cédula/código es obligatorio`);
         return;
       }
-      
-      const [cedula, ...nombreCompletoParts] = parts;
-      const nombreCompleto = nombreCompletoParts.join(' ').trim();
-      
-      if (cedula.length !== 10 || !/^\d+$/.test(cedula)) {
-        errors.push(`Línea ${index + 1}: La cédula "${cedula}" debe tener 10 dígitos numéricos`);
+
+      if (cedula.length < 1 || cedula.length > 10) {
+        errors.push(`Línea ${index + 1}: La cédula/código "${cedula}" debe tener entre 1 y 10 caracteres`);
         return;
       }
-      
-      if (!nombreCompleto || nombreCompleto.length < 10) {
-        errors.push(`Línea ${index + 1}: El nombre completo es muy corto (mínimo 10 caracteres)`);
-        return;
-      }
-      
-      if (/\d/.test(nombreCompleto)) {
-        errors.push(`Línea ${index + 1}: El nombre no puede contener números`);
+
+      if (!nombreCompleto || nombreCompleto.length < 3) {
+        errors.push(`Línea ${index + 1}: El nombre completo es muy corto (mínimo 3 caracteres)`);
         return;
       }
 
       const nombreLimpio = formatText(nombreCompleto);
       const palabras = nombreLimpio.split(' ').filter(p => p.length > 0);
       
-      if (palabras.length < 3) {
-        errors.push(`Línea ${index + 1}: Se requieren al menos 3 palabras (2 apellidos + 1 nombre)`);
+      if (palabras.length < 2) {
+        errors.push(`Línea ${index + 1}: Se requieren al menos 2 palabras (apellido y nombre)`);
         return;
       }
       
-      const apellidos = palabras.slice(0, 2).join(' ');
-      const nombres = palabras.slice(2).join(' ');
+      let apellidos: string;
+      let nombres: string;
+      
+      if (palabras.length === 2) {
+        apellidos = palabras[0];
+        nombres = palabras[1];
+      } else {
+        apellidos = palabras.slice(0, 2).join(' ');
+        nombres = palabras.slice(2).join(' ');
+      }
 
       students.push({ cedula, apellidos, nombres });
     });
 
-    if (errors.length > 0) {
-      setValidationErrors(errors);
-      setParsedStudents([]);
-    } else {
-      const cedulasVistas = new Set<string>();
-      const duplicadosInternos = students.filter(s => {
-        if (cedulasVistas.has(s.cedula)) return true;
-        cedulasVistas.add(s.cedula);
-        return false;
-      });
+    return { students, errors };
+  };
 
-      if (duplicadosInternos.length > 0) {
-        setValidationErrors(['Existen cédulas duplicadas en la lista ingresada']);
-        setParsedStudents([]);
-      } else {
-        setValidationErrors([]);
-        setParsedStudents(students);
-      }
-    }
-  }, [massiveData]);
-
-  // ✅ MODIFICADO: Usa toasts en lugar de alert
-  const guardarEstudiantesMasivos = useCallback(async () => {
+  async function guardarEstudiantesMasivos() {
     if (!anioActivo) {
       mostrarToast('warning', 'Sin año lectivo', 'No hay un año lectivo activo.');
       return;
     }
-    if (!selectedGradoId) {
+    if (!gradoEfectivoId) {
       mostrarToast('warning', 'Sin grado seleccionado', 'Debe seleccionar un grado primero.');
       return;
     }
-    if (parsedStudents.length === 0) {
-      mostrarToast('warning', 'Sin estudiantes válidos', 'No hay estudiantes válidos para registrar.');
+    if (!massiveData.trim()) {
+      setValidationErrors(['No hay datos para procesar. Pegue la lista de estudiantes.']);
+      return;
+    }
+
+    const { students, errors } = parsearListaMasiva(massiveData);
+    if (errors.length > 0) {
+      setValidationErrors(errors);
+      return;
+    }
+    if (students.length === 0) {
+      setValidationErrors(['No se encontraron estudiantes válidos. Verifique el formato.']);
+      return;
+    }
+
+    const cedulasVistas = new Set<string>();
+    const duplicadosInternos: string[] = [];
+    students.forEach(s => {
+      if (cedulasVistas.has(s.cedula)) {
+        duplicadosInternos.push(s.cedula);
+      } else {
+        cedulasVistas.add(s.cedula);
+      }
+    });
+    if (duplicadosInternos.length > 0) {
+      const unicos = [...new Set(duplicadosInternos)].join(', ');
+      setValidationErrors([`Existen cédulas/códigos duplicados en la lista: ${unicos}`]);
       return;
     }
 
     setIsSavingMassive(true);
     try {
-      const q = query(collection(db, 'estudiantes'), where('gradoId', '==', selectedGradoId));
+      const q = query(collection(db, 'estudiantes'), where('gradoId', '==', gradoEfectivoId));
       const snap = await getDocs(q);
       const existentes = new Set(snap.docs.map(doc => doc.data().cedula));
 
-      const duplicados = parsedStudents.filter(s => existentes.has(s.cedula));
+      const duplicados = students.filter(s => existentes.has(s.cedula));
       if (duplicados.length > 0) {
         const cedulasDuplicadas = duplicados.map(s => s.cedula).join(', ');
-        setValidationErrors([`Las siguientes cédulas ya existen en este grado: ${cedulasDuplicadas}`]);
+        setValidationErrors([`Las siguientes cédulas/códigos ya existen en este grado: ${cedulasDuplicadas}`]);
         setIsSavingMassive(false);
         return;
       }
 
-      const promesas = parsedStudents.map(async (est) => {
+      const promesas = students.map(async (est) => {
         await addDoc(collection(db, 'estudiantes'), {
           cedula: est.cedula,
           apellidos: est.apellidos,
           nombres: est.nombres,
-          gradoId: selectedGradoId,
+          gradoId: gradoEfectivoId,
           anioLectivoId: anioActivo.id,
           activo: true,
           createdAt: serverTimestamp(),
@@ -468,29 +404,28 @@ export default function Estudiantes() {
       
       mostrarToast(
         'success',
-        'Registro masivo completado',
-        `Se registraron ${parsedStudents.length} estudiante(s) correctamente.`,
+        'Registro completado',
+        `Se registraron ${students.length} estudiante(s) correctamente.`,
         5000
       );
       setMassiveData("");
-      setParsedStudents([]);
-      setShowMassiveForm(false);
       setValidationErrors([]);
-      await cargarEstudiantes();
+      setShowMassiveForm(false);
+      await recargarEstudiantes();
     } catch (error) {
       console.error('Error guardando estudiantes masivos:', error);
       mostrarToast('error', 'Error al guardar', 'No se pudieron registrar los estudiantes.');
     } finally {
       setIsSavingMassive(false);
     }
-  }, [parsedStudents, selectedGradoId, anioActivo, user, cargarEstudiantes, mostrarToast]);
+  }
 
-  const validarEstudiante = useCallback((cedula: string, apellidos: string, nombres: string, excludeId?: string): string[] => {
+  const validarEstudiante = (cedula: string, apellidos: string, nombres: string, excludeId?: string): string[] => {
     const errors: string[] = [];
     if (!cedula || cedula.trim() === '') {
-      errors.push('La cédula es obligatoria');
-    } else if (cedula.length < 10) {
-      errors.push(`La cédula "${cedula}" debe tener al menos 10 dígitos`);
+      errors.push('La cédula/código es obligatorio');
+    } else if (cedula.trim().length < 1 || cedula.trim().length > 10) {
+      errors.push(`La cédula/código debe tener entre 1 y 10 caracteres`);
     }
     if (!apellidos || apellidos.trim() === '') {
       errors.push('Los apellidos son obligatorios');
@@ -503,13 +438,13 @@ export default function Estudiantes() {
         e.cedula === cedula.trim() && e.id !== excludeId
       );
       if (existeDuplicado) {
-        errors.push(`Ya existe un estudiante con la cédula "${cedula}"`);
+        errors.push(`Ya existe un estudiante con la cédula/código "${cedula}"`);
       }
     }
     return errors;
-  }, [estudiantes]);
+  };
 
-  const guardarEstudianteIndividual = useCallback(async () => {
+  async function guardarEstudianteIndividual() {
     const errors = validarEstudiante(formData.cedula, formData.apellidos, formData.nombres, editingId || undefined);
     if (errors.length > 0) {
       setValidationErrors(errors);
@@ -526,20 +461,20 @@ export default function Estudiantes() {
         });
       }
       resetForm();
-      await cargarEstudiantes();
+      await recargarEstudiantes();
       mostrarToast('success', 'Estudiante actualizado', `"${formData.apellidos} ${formData.nombres}" se actualizó correctamente.`);
     } catch (error) {
       console.error('Error guardando estudiante:', error);
       mostrarToast('error', 'Error al guardar', 'No se pudo actualizar el estudiante.');
     }
-  }, [formData, editingId, resetForm, cargarEstudiantes, validarEstudiante, mostrarToast]);
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await guardarEstudianteIndividual();
   };
 
-  const handleEdit = useCallback((estudiante: Estudiante) => {
+  const handleEdit = (estudiante: Estudiante) => {
     if (!puedeGestionarEstudiantes(estudiante.gradoId)) {
       mostrarToast('error', 'Sin permisos', 'No tienes permisos para editar estudiantes de este grado.');
       return;
@@ -553,10 +488,9 @@ export default function Estudiantes() {
     setEditingId(estudiante.id);
     setValidationErrors([]);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [puedeGestionarEstudiantes, mostrarToast]);
+  };
 
-  // ✅ MODIFICADO: Usa modal de confirmación personalizado
-  const handleDelete = useCallback(async (id: string) => {
+  async function handleDelete(id: string) {
     const estudiante = estudiantes.find(e => e.id === id);
     if (!estudiante) return;
     if (!puedeGestionarEstudiantes(estudiante.gradoId)) {
@@ -566,7 +500,7 @@ export default function Estudiantes() {
     
     const confirmado = await confirmar(
       `Eliminar a ${estudiante.apellidos} ${estudiante.nombres}`,
-      `¿Estás seguro de eliminar a este estudiante?\n\nCédula: ${estudiante.cedula || 'Sin cédula'}\nGrado: ${grados.find(g => g.id === estudiante.gradoId)?.nombre || 'Desconocido'}\n\nEsta acción no se puede deshacer.`,
+      `¿Estás seguro de eliminar a este estudiante?\n\nCédula: ${estudiante.cedula || 'Sin cédula'}\nGrado: ${gradosFiltrados.find(g => g.id === estudiante.gradoId)?.nombre || 'Desconocido'}\n\nEsta acción no se puede deshacer.`,
       {
         confirmText: "Sí, eliminar",
         cancelText: "Cancelar",
@@ -579,14 +513,14 @@ export default function Estudiantes() {
     try {
       await deleteDoc(doc(db, 'estudiantes', id));
       mostrarToast('success', 'Estudiante eliminado', `"${estudiante.apellidos} ${estudiante.nombres}" fue eliminado correctamente.`);
-      await cargarEstudiantes();
+      await recargarEstudiantes();
     } catch (error) {
       console.error('Error eliminando:', error);
       mostrarToast('error', 'Error al eliminar', 'No se pudo eliminar el estudiante.');
     }
-  }, [cargarEstudiantes, estudiantes, puedeGestionarEstudiantes, confirmar, mostrarToast, grados]);
+  }
 
-  const handleToggleActivo = useCallback(async (id: string, estadoActual: boolean) => {
+  async function handleToggleActivo(id: string, estadoActual: boolean) {
     const estudiante = estudiantes.find(e => e.id === id);
     if (!estudiante) return;
     if (!puedeGestionarEstudiantes(estudiante.gradoId)) {
@@ -597,17 +531,12 @@ export default function Estudiantes() {
       await updateDoc(doc(db, 'estudiantes', id), {
         activo: !estadoActual
       });
-      await cargarEstudiantes();
+      await recargarEstudiantes();
     } catch (error) {
       console.error('Error actualizando estado:', error);
       mostrarToast('error', 'Error al actualizar', 'No se pudo cambiar el estado del estudiante.');
     }
-  }, [cargarEstudiantes, estudiantes, puedeGestionarEstudiantes, mostrarToast]);
-
-  useEffect(() => {
-    cargarAniosLectivos();
-    cargarGrados();
-  }, [cargarAniosLectivos, cargarGrados]);
+  }
 
   const estudiantesFiltrados = estudiantes.filter(est => {
     const searchText = searchTerm.toLowerCase();
@@ -618,7 +547,8 @@ export default function Estudiantes() {
     );
   });
 
-  // ==================== CONFIG DE TOASTS ====================
+  // ✅ Valor derivado: estudiantes a mostrar (vacío si docente sin grado)
+  const estudiantesAMostrar = (userData?.role === 'docente' && !gradoEfectivoId) ? [] : estudiantesFiltrados;
 
   const toastConfig = {
     success: {
@@ -653,13 +583,13 @@ export default function Estudiantes() {
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  if (loading) {
+  if (!ready) {
     return (
-      <Layout title="Estudiantes" subtitle="Gestión y registro de estudiantes" showBack>
+      <Layout>
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
-            <p className="text-slate-600 text-sm font-medium">Cargando estudiantes...</p>
+            <p className="text-slate-600 text-sm font-medium">Cargando...</p>
           </div>
         </div>
       </Layout>
@@ -667,11 +597,7 @@ export default function Estudiantes() {
   }
 
   return (
-    <Layout
-      title="Estudiantes"
-      subtitle="Gestión y registro de estudiantes"
-      showBack
-    >
+    <Layout>
       {docenteSinGrados && (
         <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl px-8 py-12 mb-6">
           <div className="flex items-start gap-4 max-w-3xl">
@@ -686,16 +612,6 @@ export default function Estudiantes() {
                 Contacta al administrador del sistema para que te asigne los grados que podrás gestionar.
               </p>
             </div>
-          </div>
-        </div>
-      )}
-
-      {!docenteSinGrados && anioActivo && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6">
-          <div className="flex items-center gap-2 text-blue-800">
-            <FaCalendarAlt className="text-sm" />
-            <span className="text-sm font-medium">Trabajando con año lectivo:</span>
-            <span className="text-base font-bold text-blue-900">{anioActivo.nombre}</span>
           </div>
         </div>
       )}
@@ -716,8 +632,7 @@ export default function Estudiantes() {
         </div>
       )}
 
-      {/* ✅ Botones de grados asignados para docentes */}
-      {!docenteSinGrados && grados.length > 0 && (
+      {!docenteSinGrados && gradosFiltrados.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 p-4">
           <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
             <FaBookOpen className="text-blue-600" />
@@ -728,7 +643,7 @@ export default function Estudiantes() {
               <button
                 onClick={() => setSelectedGradoId(null)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border-2 ${
-                  selectedGradoId === null
+                  gradoEfectivoId === null
                     ? 'bg-blue-600 text-white border-blue-600'
                     : 'bg-white text-slate-700 border-slate-200 hover:border-blue-400'
                 }`}
@@ -736,14 +651,14 @@ export default function Estudiantes() {
                 Todos los grados
               </button>
             )}
-            {grados.map((grado) => {
+            {gradosFiltrados.map((grado) => {
               const esTutor = tutorDeAnioActivo.includes(grado.id);
               return (
                 <button
                   key={grado.id}
                   onClick={() => setSelectedGradoId(grado.id)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border-2 flex items-center gap-2 ${
-                    selectedGradoId === grado.id
+                    gradoEfectivoId === grado.id
                       ? 'bg-blue-600 text-white border-blue-600'
                       : 'bg-white text-slate-700 border-slate-200 hover:border-blue-400'
                   }`}
@@ -761,7 +676,6 @@ export default function Estudiantes() {
         </div>
       )}
 
-      {/* ✅ Formulario de edición individual */}
       {editingId && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 overflow-hidden">
           <div className="bg-linear-to-r from-blue-600 to-blue-700 px-5 py-3 flex items-center justify-between">
@@ -794,15 +708,17 @@ export default function Estudiantes() {
             )}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Cédula/Identificación *</label>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Cédula/Código *</label>
                 <input
                   type="text"
                   value={formData.cedula}
                   onChange={(e) => setFormData({...formData, cedula: e.target.value})}
-                  placeholder="Ej: 1712345678"
+                  placeholder="Ej: 1712345678 o A123"
+                  maxLength={10}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                   required
                 />
+                <p className="text-xs text-slate-500 mt-1">Máximo 10 caracteres (cédula o código de estudiante)</p>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">Apellidos *</label>
@@ -849,7 +765,6 @@ export default function Estudiantes() {
         </div>
       )}
 
-      {/* ✅ Formulario de Registro Masivo */}
       {showMassiveForm && puedeRegistrar && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 overflow-hidden">
           <div className="bg-linear-to-r from-green-600 to-green-700 px-5 py-3 flex items-center justify-between">
@@ -858,10 +773,10 @@ export default function Estudiantes() {
             </h3>
             <button
               type="button"
-              onClick={() => { setShowMassiveForm(false); setMassiveData(""); setParsedStudents([]); setValidationErrors([]); }}
+              onClick={() => { setShowMassiveForm(false); setMassiveData(""); setValidationErrors([]); }}
               className="text-white text-sm hover:bg-white/20 px-3 py-1 rounded transition"
             >
-              Cancelar
+              Cerrar
             </button>
           </div>
           <div className="p-5">
@@ -870,7 +785,7 @@ export default function Estudiantes() {
                 <div className="flex items-start gap-2">
                   <FaExclamationTriangle className="text-red-600 mt-0.5 shrink-0" />
                   <div>
-                    <h4 className="text-red-800 font-semibold text-sm mb-1">Errores de formato:</h4>
+                    <h4 className="text-red-800 font-semibold text-sm mb-1">Corrige estos errores:</h4>
                     <ul className="text-red-700 text-sm space-y-1">
                       {validationErrors.map((error, idx) => (
                         <li key={idx}>• {error}</li>
@@ -887,53 +802,38 @@ export default function Estudiantes() {
               </label>
               <textarea
                 value={massiveData}
-                onChange={(e) => setMassiveData(e.target.value)}
-                placeholder="Ejemplo:&#10;1712345678, PEREZ GARCIA JUAN CARLOS&#10;1723456789, LOPEZ MARTINEZ MARIA ELENA"
-                rows={8}
+                onChange={(e) => { setMassiveData(e.target.value); setValidationErrors([]); }}
+                placeholder={"Ejemplo (cualquiera de los dos formatos funciona):\n\n1712345678 PEREZ GARCIA JUAN CARLOS\n1723456789 LOPEZ MARTINEZ MARIA ELENA\n\nO con coma:\n1712345678, PEREZ GARCIA JUAN CARLOS\n1723456789, LOPEZ MARTINEZ MARIA ELENA"}
+                rows={10}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all"
               />
-              <p className="text-xs text-slate-500 mt-2 flex items-center gap-1">
-                <FaInfoCircle /> Formato obligatorio: <strong>CÉDULA, APELLIDOS Y NOMBRES</strong> (separados por coma). Se convertirán automáticamente a mayúsculas y se separarán en apellidos (2 primeras palabras) y nombres (el resto).
-              </p>
-            </div>
-
-            <div className="flex gap-2 mb-4">
-              <button
-                onClick={parseMassiveData}
-                disabled={isSavingMassive || !massiveData.trim()}
-                className="inline-flex items-center gap-2 bg-slate-600 hover:bg-slate-700 disabled:bg-slate-300 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium"
-              >
-                <FaSearch className="text-xs" /> Validar Lista
-              </button>
-            </div>
-
-            {parsedStudents.length > 0 && (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
-                <div className="flex items-center gap-2 text-green-800 mb-3">
-                  <FaCheck className="text-sm" />
-                  <span className="text-sm font-bold">Vista Previa: Se registrarán {parsedStudents.length} estudiante(s) en {grados.find(g => g.id === selectedGradoId)?.nombre} {grados.find(g => g.id === selectedGradoId)?.paralelo}</span>
-                </div>
-                <div className="max-h-40 overflow-y-auto space-y-1">
-                  {parsedStudents.map((est, idx) => (
-                    <div key={idx} className="text-sm text-slate-700 bg-white px-3 py-1.5 rounded border border-green-100">
-                      <span className="font-mono font-semibold">{est.cedula}</span> - {est.apellidos}, {est.nombres}
-                    </div>
-                  ))}
-                </div>
+              <div className="text-xs text-slate-500 mt-2 space-y-1">
+                <p className="flex items-start gap-1">
+                  <FaInfoCircle className="mt-0.5 shrink-0" />
+                  <span><strong>Formatos aceptados:</strong> Puedes pegar directamente desde Word, Excel o bloc de notas.</span>
+                </p>
+                <p className="ml-5">• <code className="bg-slate-100 px-1 rounded">1712345678 PEREZ GARCIA JUAN</code> (sin coma)</p>
+                <p className="ml-5">• <code className="bg-slate-100 px-1 rounded">1712345678, PEREZ GARCIA JUAN</code> (con coma)</p>
+                <p className="ml-5 text-slate-400">La primera palabra/campo = cédula o código. El resto = apellidos y nombres.</p>
+                <p className="ml-5 text-amber-600 font-semibold">⚠️ Lo más importante: NO debe haber cédulas/códigos repetidos.</p>
               </div>
-            )}
+            </div>
 
             <div className="flex gap-2 pt-3 border-t border-slate-200">
               <button
                 onClick={guardarEstudiantesMasivos}
-                disabled={isSavingMassive || parsedStudents.length === 0}
+                disabled={isSavingMassive || !massiveData.trim()}
                 className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-lg transition-all text-sm font-semibold"
               >
-                {isSavingMassive ? <><FaTimes className="text-xs animate-spin" /> Procesando...</> : <><FaCheck className="text-xs" /> Guardar {parsedStudents.length} Estudiante(s)</>}
+                {isSavingMassive ? (
+                  <><FaSpinner className="text-xs animate-spin" /> Validando y guardando...</>
+                ) : (
+                  <><FaCheck className="text-xs" /> Guardar Estudiantes</>
+                )}
               </button>
               <button
                 type="button"
-                onClick={() => { setShowMassiveForm(false); setMassiveData(""); setParsedStudents([]); setValidationErrors([]); }}
+                onClick={() => { setShowMassiveForm(false); setMassiveData(""); setValidationErrors([]); }}
                 className="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-lg transition-all text-sm font-medium"
               >
                 <FaTimes className="text-xs" /> Cancelar
@@ -945,8 +845,7 @@ export default function Estudiantes() {
 
       {!docenteSinGrados && (
         <>
-          {/* Mensaje si no hay grado seleccionado para docente */}
-          {userData?.role === 'docente' && !selectedGradoId && (
+          {userData?.role === 'docente' && !gradoEfectivoId && (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center mb-6">
               <FaBookOpen className="text-4xl text-slate-400 mx-auto mb-3" />
               <p className="text-slate-600 font-medium mb-1">Selecciona un grado para ver los estudiantes</p>
@@ -954,8 +853,7 @@ export default function Estudiantes() {
             </div>
           )}
 
-          {/* Lista de estudiantes */}
-          {(selectedGradoId || esAdmin) && (
+          {(gradoEfectivoId || esAdmin) && (
             <>
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 p-4 flex flex-col sm:flex-row justify-between items-center gap-4">
                 <div className="relative w-full sm:w-96">
@@ -969,10 +867,9 @@ export default function Estudiantes() {
                   />
                 </div>
                 
-                {/* ✅ Botón de Registro Masivo */}
                 {puedeRegistrar && (
                   <button
-                    onClick={() => setShowMassiveForm(true)}
+                    onClick={() => { setShowMassiveForm(true); setValidationErrors([]); }}
                     className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm"
                   >
                     <FaUpload className="text-sm" /> Registrar Estudiantes
@@ -981,7 +878,6 @@ export default function Estudiantes() {
               </div>
 
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                {/* ✅ TABLA RESPONSIVE: Se convierte en tarjetas en móvil */}
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-slate-50 border-b border-slate-200 hidden md:table-header-group">
@@ -999,7 +895,16 @@ export default function Estudiantes() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
-                      {estudiantesFiltrados.length === 0 ? (
+                      {loadingEstudiantes ? (
+                        <tr>
+                          <td colSpan={4} className="px-5 py-16 text-center">
+                            <div className="flex flex-col items-center">
+                              <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
+                              <p className="text-slate-600 text-sm font-medium">Cargando estudiantes...</p>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : estudiantesAMostrar.length === 0 ? (
                         <tr>
                           <td colSpan={4} className="px-5 py-16 text-center">
                             <div className="flex flex-col items-center">
@@ -1018,20 +923,18 @@ export default function Estudiantes() {
                           </td>
                         </tr>
                       ) : (
-                        estudiantesFiltrados.map((est) => {
-                          const grado = grados.find(g => g.id === est.gradoId);
+                        estudiantesAMostrar.map((est) => {
+                          const grado = gradosFiltrados.find(g => g.id === est.gradoId);
                           const puedeEditar = puedeGestionarEstudiantes(est.gradoId);
                           
                           return (
                             <tr key={est.id} className="block md:table-row border-b md:border-b-0 border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
                               
-                              {/* Columna 1: Nombre y Cédula (Visible siempre) */}
                               <td className="px-5 py-4 block md:table-cell">
                                 <div className="flex flex-col">
                                   <span className="font-semibold text-slate-900 text-sm">{est.apellidos} {est.nombres}</span>
                                   {est.cedula && <span className="text-slate-500 text-xs mt-1">CI: {est.cedula}</span>}
                                   
-                                  {/* ✅ MÓVIL: Estado y Acciones apiladas debajo (Solo si es tutor) */}
                                   {puedeEditar && (
                                     <div className="mt-3 flex flex-col gap-2 md:hidden">
                                       <button
@@ -1061,7 +964,6 @@ export default function Estudiantes() {
                                     </div>
                                   )}
                                   
-                                  {/* ✅ MÓVIL: Indicador de solo lectura (Si no es tutor) */}
                                   {!puedeEditar && (
                                     <div className="mt-2 text-xs text-slate-400 italic md:hidden flex items-center gap-1">
                                       <FaLock className="text-[10px]" /> Solo lectura
@@ -1070,7 +972,6 @@ export default function Estudiantes() {
                                 </div>
                               </td>
 
-                              {/* Columna 2: Grado (Desktop: Solo Admin) */}
                               {esAdmin && (
                                 <td className="hidden md:table-cell px-5 py-4">
                                   {grado && (
@@ -1084,7 +985,6 @@ export default function Estudiantes() {
                                 </td>
                               )}
 
-                              {/* Columna 3: Estado (Desktop: Solo si puede editar) */}
                               {puedeEditar && (
                                 <td className="hidden md:table-cell px-5 py-4 text-center">
                                   <button
@@ -1100,7 +1000,6 @@ export default function Estudiantes() {
                                 </td>
                               )}
 
-                              {/* Columna 4: Acciones (Desktop: Solo si puede editar) */}
                               {puedeEditar && (
                                 <td className="hidden md:table-cell px-5 py-4">
                                   <div className="flex justify-center gap-2">
@@ -1127,10 +1026,10 @@ export default function Estudiantes() {
                   </table>
                 </div>
                 
-                {estudiantesFiltrados.length > 0 && (
+                {estudiantesAMostrar.length > 0 && !loadingEstudiantes && (
                   <div className="bg-slate-50 px-5 py-3 border-t border-slate-200">
                     <div className="flex items-center justify-between text-xs text-slate-600">
-                      <span>Mostrando <strong>{estudiantesFiltrados.length}</strong> estudiante{estudiantesFiltrados.length !== 1 ? 's' : ''}{searchTerm && ` de ${estudiantes.length}`}</span>
+                      <span>Mostrando <strong>{estudiantesAMostrar.length}</strong> estudiante{estudiantesAMostrar.length !== 1 ? 's' : ''}{searchTerm && ` de ${estudiantes.length}`}</span>
                       <span>{estudiantes.filter(e => e.activo).length} activo{estudiantes.filter(e => e.activo).length !== 1 ? 's' : ''}</span>
                     </div>
                   </div>
@@ -1139,7 +1038,6 @@ export default function Estudiantes() {
             </>
           )}
 
-          {/* ✅ Información de permisos para docentes */}
           {userData?.role === 'docente' && (
             <div className="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-4">
               <div className="flex items-start gap-2">
@@ -1162,7 +1060,6 @@ export default function Estudiantes() {
         </>
       )}
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -1192,7 +1089,6 @@ export default function Estudiantes() {
         })}
       </div>
 
-      {/* ✅ MODAL DE CONFIRMACIÓN PERSONALIZADO */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">

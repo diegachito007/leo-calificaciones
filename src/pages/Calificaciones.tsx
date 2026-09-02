@@ -1,4 +1,4 @@
-import { useState, useEffect, startTransition, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   collection,
   query,
@@ -15,22 +15,14 @@ import {
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
+import { useData } from "../context/DataContext";
 import { Link } from "react-router-dom";
-import type {
-  Estudiante,
-  Grado,
-  AnioLectivo,
-  Ambito,
-  Destreza,
-  PeriodoEvaluacion,
-} from "../types";
+import type { Estudiante } from "../types";
 import Layout from "../components/Layout";
 import {
   FaUserCheck,
   FaExclamationTriangle,
   FaTasks,
-  FaCalendarAlt,
-  FaClock,
   FaSave,
   FaSpinner,
   FaGraduationCap,
@@ -199,7 +191,10 @@ const esBachillerato = (gradoNombre: string): boolean => {
     gradoNombre.includes("10mo") ||
     gradoNombre.includes("1ro BGU") ||
     gradoNombre.includes("2do BGU") ||
-    gradoNombre.includes("3ro BGU")
+    gradoNombre.includes("3ro BGU") ||
+    gradoNombre.includes("1ro BC") ||
+    gradoNombre.includes("2do BC") ||
+    gradoNombre.includes("3ro BC")
   );
 };
 
@@ -212,18 +207,22 @@ const esGradoInicial = (gradoNombre: string): boolean => {
 
 export default function Calificaciones() {
   const { user, userData } = useAuth();
-  const [aniosLectivos, setAniosLectivos] = useState<AnioLectivo[]>([]);
-  const [grados, setGrados] = useState<Grado[]>([]);
-  const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
-  const [ambitos, setAmbitos] = useState<Ambito[]>([]);
-  const [destrezas, setDestrezas] = useState<Destreza[]>([]);
-  const [actividades, setActividades] = useState<ActividadData[]>([]);
-  const [periodos, setPeriodos] = useState<PeriodoEvaluacion[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
 
+  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
+  const {
+    grados,
+    ambitos,
+    destrezas,
+    anioActivo,
+    periodoActual,
+    nombresDocentes,
+    ready,
+  } = useData();
+
+  const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
+  const [actividades, setActividades] = useState<ActividadData[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
   const [asignaturasDocente, setAsignaturasDocente] = useState<AsignaturaDocente[]>([]);
-  const [nombresDocentes, setNombresDocentes] = useState<Record<string, string>>({});
 
   const [activeTab, setActiveTab] = useState<"asistencia" | "calificaciones">("asistencia");
   const [selectedGradoId, setSelectedGradoId] = useState("");
@@ -264,10 +263,8 @@ export default function Calificaciones() {
   const [carruselIndex, setCarruselIndex] = useState(0);
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // ✅ Sistema de toasts (reemplaza alert)
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // ✅ Modal de confirmación personalizado
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
     title: "",
@@ -276,44 +273,53 @@ export default function Calificaciones() {
     onCancel: () => {},
   });
 
-  const periodoActual = periodos.find((p) => {
-    const hoy = new Date();
-    const inicio = new Date(p.fechaInicio);
-    const fin = new Date(p.fechaFin);
-    return hoy >= inicio && hoy <= fin;
-  });
+  // ✅ Grados filtrados localmente (sin lectura a Firestore)
+  const gradosFiltrados = (() => {
+    if (
+      userData?.role === "docente" &&
+      userData?.gradosAsignados &&
+      userData.gradosAsignados.length > 0
+    ) {
+      const asignados = new Set(userData.gradosAsignados);
+      return grados.filter((g) => asignados.has(g.id));
+    }
+    return grados;
+  })();
+
+  // ✅ Grado efectivo: seleccionado o primer grado por defecto (sin useEffect+setState)
+  const gradoEfectivoId = selectedGradoId || (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : "");
+  const gradoEfectivoNombre = selectedGradoNombre || (gradosFiltrados.length > 0 ? gradosFiltrados[0].nombre : "");
 
   const docenteSinGrados =
     userData?.role === "docente" &&
     (!userData?.gradosAsignados || userData.gradosAsignados.length === 0);
-  const anioActivo = aniosLectivos.find((a) => a.activo);
-  const esGradoBachillerato = esBachillerato(selectedGradoNombre);
-  const esGradoInicialActual = esGradoInicial(selectedGradoNombre);
+
+  const esGradoBachillerato = esBachillerato(gradoEfectivoNombre);
+  const esGradoInicialActual = esGradoInicial(gradoEfectivoNombre);
 
   const nombreDocente = (uid?: string) => (uid ? nombresDocentes[uid] || "Docente" : "");
 
-  const materiasDelGradoDocente = useMemo(() => {
-    if (!selectedGradoId) return [];
+  const materiasDelGradoDocente = (() => {
+    if (!gradoEfectivoId) return [];
     const destrezasIds = asignaturasDocente
-      .filter((a) => a.gradoId === selectedGradoId)
+      .filter((a) => a.gradoId === gradoEfectivoId)
       .map((a) => a.destrezaId);
     return destrezas.filter((d) => destrezasIds.includes(d.id));
-  }, [selectedGradoId, asignaturasDocente, destrezas]);
+  })();
 
-  const ambitosDisponibles = useMemo(() => {
-    if (!selectedGradoId) return [];
+  const ambitosDisponibles = (() => {
+    if (!gradoEfectivoId) return [];
     const ambitosIds = new Set(materiasDelGradoDocente.map((d) => d.ambitoId));
     return ambitos.filter((a) => ambitosIds.has(a.id));
-  }, [selectedGradoId, materiasDelGradoDocente, ambitos]);
+  })();
 
-  const destrezasDisponibles = useMemo(() => {
+  const destrezasDisponibles = (() => {
     if (!selectedAmbitoId) return [];
     const destrezasIds = new Set(materiasDelGradoDocente.map((d) => d.id));
     return destrezas.filter((d) => d.ambitoId === selectedAmbitoId && destrezasIds.has(d.id));
-  }, [selectedAmbitoId, materiasDelGradoDocente, destrezas]);
+  })();
 
   const gradoTieneMateriasConfiguradas = materiasDelGradoDocente.length > 0;
-
   const materiaSeleccionada = esGradoBachillerato ? selectedMateriaId : selectedAmbitoId;
 
   const todosConAsistencia =
@@ -374,112 +380,6 @@ export default function Calificaciones() {
 
   // ==================== CARGA DE DATOS ====================
 
-  const cargarDatos = useCallback(async () => {
-    try {
-      const aniosQuery = query(collection(db, "aniosLectivos"), where("activo", "==", true));
-      const aniosSnap = await getDocs(aniosQuery);
-      const aniosData = aniosSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as AnioLectivo);
-
-      let periodosData: PeriodoEvaluacion[] = [];
-      if (aniosData.length > 0) {
-        const periodosQuery = query(
-          collection(db, "periodosEvaluacion"),
-          where("anioLectivoId", "==", aniosData[0].id),
-          orderBy("orden", "asc")
-        );
-        const periodosSnap = await getDocs(periodosQuery);
-        periodosData = periodosSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as PeriodoEvaluacion);
-      }
-
-      const usuariosSnap = await getDocs(collection(db, "usuarios"));
-      const nombres: Record<string, string> = {};
-      usuariosSnap.docs.forEach((d) => {
-        const data = d.data() as { nombreDocumento?: string; displayName?: string; email?: string };
-        nombres[d.id] = data.nombreDocumento || data.displayName || data.email || "Docente";
-      });
-
-      let gradosQuery;
-      if (userData?.role === "docente" && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
-        gradosQuery = query(
-          collection(db, "grados"),
-          where("__name__", "in", userData.gradosAsignados),
-          where("activo", "==", true),
-          orderBy("orden", "asc")
-        );
-      } else if (userData?.role === "docente") {
-        startTransition(() => {
-          setAniosLectivos(aniosData);
-          setPeriodos(periodosData);
-          setNombresDocentes(nombres);
-          setGrados([]);
-          setLoading(false);
-        });
-        return;
-      } else {
-        gradosQuery = query(collection(db, "grados"), where("activo", "==", true), orderBy("orden", "asc"));
-      }
-
-      const gradosSnap = await getDocs(gradosQuery);
-      const gradosData = gradosSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Grado);
-
-      startTransition(() => {
-        setAniosLectivos(aniosData);
-        setPeriodos(periodosData);
-        setNombresDocentes(nombres);
-        setGrados(gradosData);
-        if (gradosData.length > 0 && !selectedGradoId) {
-          setSelectedGradoId(gradosData[0].id);
-          setSelectedGradoNombre(gradosData[0].nombre);
-        }
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error("Error cargando datos:", error);
-      startTransition(() => setLoading(false));
-    }
-  }, [selectedGradoId, userData]);
-
-  const cargarEstudiantes = useCallback(async (gradoId: string) => {
-    try {
-      const q = query(
-        collection(db, "estudiantes"),
-        where("gradoId", "==", gradoId),
-        where("activo", "==", true),
-        orderBy("apellidos", "asc")
-      );
-      const snap = await getDocs(q);
-      const data = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Estudiante);
-
-      startTransition(() => {
-        setEstudiantes(data);
-        setAsistencias({});
-        setActiveTab("asistencia");
-      });
-    } catch (error) {
-      console.error("Error cargando estudiantes:", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    const qAmbitos = query(collection(db, "ambitos"), where("activo", "==", true));
-    const unsubAmbitos = onSnapshot(qAmbitos, (snapshot) => {
-      const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Ambito))
-        .sort((a, b) => (a.orden || 0) - (b.orden || 0));
-      setAmbitos(data);
-    });
-    return () => unsubAmbitos();
-  }, []);
-
-  useEffect(() => {
-    const qDestrezas = query(collection(db, "destrezas"), where("activo", "==", true));
-    const unsubDestrezas = onSnapshot(qDestrezas, (snapshot) => {
-      const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Destreza))
-        .sort((a, b) => (a.orden || 0) - (b.orden || 0));
-      setDestrezas(data);
-    });
-    return () => unsubDestrezas();
-  }, []);
-
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
 
@@ -503,7 +403,7 @@ export default function Calificaciones() {
       const q = query(collection(db, "actividades"), where("destrezaId", "==", destrezaId), orderBy("fecha", "desc"));
       const snap = await getDocs(q);
       const data = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as ActividadData);
-      startTransition(() => setActividades(data));
+      setActividades(data);
     } catch (error) {
       console.error("Error cargando actividades:", error);
     }
@@ -529,10 +429,8 @@ export default function Calificaciones() {
         };
       });
 
-      startTransition(() => {
-        setCalificaciones(calificacionesMap);
-        setCarruselIndex(0);
-      });
+      setCalificaciones(calificacionesMap);
+      setCarruselIndex(0);
     } catch (error) {
       console.error("Error cargando calificaciones:", error);
     }
@@ -548,7 +446,7 @@ export default function Calificaciones() {
 
     setIsSaving(true);
     try {
-      const anioLectivoId = aniosLectivos[0]?.id || "";
+      const anioLectivoId = anioActivo?.id || "";
       const periodoId = periodoActual?.id || "";
       const ambitoIdParaGuardar = esGradoInicialActual ? "general" : materiaSeleccionada;
 
@@ -566,7 +464,7 @@ export default function Calificaciones() {
 
         const datos = {
           estudianteId: est.id,
-          gradoId: selectedGradoId,
+          gradoId: gradoEfectivoId,
           anioLectivoId,
           periodoId,
           fecha: fechaAsistencia,
@@ -612,7 +510,7 @@ export default function Calificaciones() {
 
     setIsSaving(true);
     try {
-      const anioLectivoId = aniosLectivos[0]?.id || "";
+      const anioLectivoId = anioActivo?.id || "";
       const periodoId = periodoActual?.id || "";
 
       const datos = {
@@ -621,7 +519,7 @@ export default function Calificaciones() {
         fecha: actividadForm.fecha,
         destrezaId: selectedDestrezaId,
         ambitoId: selectedAmbitoId,
-        gradoId: selectedGradoId,
+        gradoId: gradoEfectivoId,
         anioLectivoId,
         periodoId,
         docenteId: user?.uid || "",
@@ -912,30 +810,93 @@ export default function Calificaciones() {
 
   // ==================== EFFECTS ====================
 
+  // ✅ Cargar estudiantes cuando cambia el grado (lógica inline, sin dependencia de función)
   useEffect(() => {
-    cargarDatos();
-  }, [cargarDatos]);
+    if (!gradoEfectivoId) return;
+
+    const fetchEstudiantes = async () => {
+      try {
+        const q = query(
+          collection(db, "estudiantes"),
+          where("gradoId", "==", gradoEfectivoId),
+          where("activo", "==", true),
+          orderBy("apellidos", "asc")
+        );
+        const snap = await getDocs(q);
+        const data = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as Estudiante);
+
+        setEstudiantes(data);
+        setAsistencias({});
+        setActiveTab("asistencia");
+      } catch (error) {
+        console.error("Error cargando estudiantes:", error);
+      }
+    };
+
+    fetchEstudiantes();
+  }, [gradoEfectivoId]);
+
+  // ✅ Cargar actividades cuando cambia la destreza (lógica inline)
+  useEffect(() => {
+    if (!selectedDestrezaId) return;
+
+    const fetchActividades = async () => {
+      try {
+        const q = query(
+          collection(db, "actividades"),
+          where("destrezaId", "==", selectedDestrezaId),
+          orderBy("fecha", "desc")
+        );
+        const snap = await getDocs(q);
+        const data = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as ActividadData);
+        setActividades(data);
+      } catch (error) {
+        console.error("Error cargando actividades:", error);
+      }
+    };
+
+    fetchActividades();
+  }, [selectedDestrezaId]);
+
+  // ✅ Cargar calificaciones cuando cambia la actividad (lógica inline)
+  useEffect(() => {
+    if (!selectedActividadId) return;
+
+    const fetchCalificaciones = async () => {
+      try {
+        const q = query(
+          collection(db, "calificaciones"),
+          where("actividadId", "==", selectedActividadId)
+        );
+        const snap = await getDocs(q);
+        const data = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }) as unknown as CalificacionData);
+
+        const calificacionesMap: Record<
+          string,
+          { nota: string; observacion: string; refuerzo?: RefuerzoData | null; docenteId?: string; editadoPor?: string }
+        > = {};
+        data.forEach((calificacion) => {
+          calificacionesMap[calificacion.estudianteId] = {
+            nota: String(calificacion.nota),
+            observacion: calificacion.observacion || "",
+            refuerzo: calificacion.refuerzo || null,
+            docenteId: calificacion.docenteId,
+            editadoPor: calificacion.editadoPor,
+          };
+        });
+
+        setCalificaciones(calificacionesMap);
+        setCarruselIndex(0);
+      } catch (error) {
+        console.error("Error cargando calificaciones:", error);
+      }
+    };
+
+    fetchCalificaciones();
+  }, [selectedActividadId]);
 
   useEffect(() => {
-    if (selectedGradoId) {
-      cargarEstudiantes(selectedGradoId);
-    }
-  }, [selectedGradoId, cargarEstudiantes]);
-
-  useEffect(() => {
-    if (selectedDestrezaId) {
-      cargarActividades(selectedDestrezaId);
-    }
-  }, [selectedDestrezaId, cargarActividades]);
-
-  useEffect(() => {
-    if (selectedActividadId) {
-      cargarCalificaciones(selectedActividadId);
-    }
-  }, [selectedActividadId, cargarCalificaciones]);
-
-  useEffect(() => {
-    if (activeTab !== "asistencia" || !selectedGradoId || !fechaAsistencia) {
+    if (activeTab !== "asistencia" || !gradoEfectivoId || !fechaAsistencia) {
       return;
     }
 
@@ -952,7 +913,7 @@ export default function Calificaciones() {
 
     const q = query(
       collection(db, "asistencias"),
-      where("gradoId", "==", selectedGradoId),
+      where("gradoId", "==", gradoEfectivoId),
       where("fecha", "==", fechaAsistencia),
       where("ambitoId", "==", ambitoIdParaBuscar)
     );
@@ -974,9 +935,8 @@ export default function Calificaciones() {
     });
 
     return () => unsubscribe();
-  }, [activeTab, selectedGradoId, fechaAsistencia, selectedMateriaId, selectedAmbitoId, esGradoBachillerato, esGradoInicialActual]);
+  }, [activeTab, gradoEfectivoId, fechaAsistencia, selectedMateriaId, selectedAmbitoId, esGradoBachillerato, esGradoInicialActual]);
 
-  // Detector del teclado virtual
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
@@ -1031,9 +991,9 @@ export default function Calificaciones() {
 
   // ==================== RENDER ====================
 
-  if (loading) {
+  if (!ready) {
     return (
-      <Layout title="Calificaciones" subtitle="Registro de notas y asistencia" showBack>
+      <Layout>
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
@@ -1045,11 +1005,11 @@ export default function Calificaciones() {
   }
 
   const actividadSeleccionada = actividades.find((a) => a.id === selectedActividadId);
-  const gradoActual = grados.find((g) => g.id === selectedGradoId);
+  const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
   return (
-    <Layout title="Calificaciones" subtitle="Registro de notas y asistencia" showBack>
+    <Layout>
       {docenteSinGrados && (
         <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl px-8 py-12 mb-6">
           <div className="flex items-start gap-4 max-w-3xl">
@@ -1068,43 +1028,15 @@ export default function Calificaciones() {
 
       {!docenteSinGrados && (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-            {anioActivo && (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-                <div className="flex items-center gap-2 text-blue-800">
-                  <FaCalendarAlt className="text-sm shrink-0" />
-                  <span className="text-xs font-medium">Año lectivo:</span>
-                  <span className="text-sm font-bold text-blue-900 truncate">{anioActivo.nombre}</span>
-                </div>
-              </div>
-            )}
-            {periodoActual ? (
-              <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2">
-                <div className="flex items-center gap-2 text-green-800">
-                  <FaClock className="text-sm shrink-0" />
-                  <span className="text-xs font-medium">Período actual:</span>
-                  <span className="text-sm font-bold text-green-900 truncate">{periodoActual.nombre}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
-                <div className="flex items-center gap-2 text-yellow-800">
-                  <FaExclamationTriangle className="text-sm shrink-0" />
-                  <span className="text-xs font-medium">No hay período activo en esta fecha</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {grados.length > 0 ? (
+          {gradosFiltrados.length > 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-4 p-4">
               <h3 className="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
                 <FaGraduationCap className="text-blue-600" />
                 Selecciona un Grado
               </h3>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                {grados.map((grado) => {
-                  const isSelected = selectedGradoId === grado.id;
+                {gradosFiltrados.map((grado) => {
+                  const isSelected = gradoEfectivoId === grado.id;
                   const materiasCount = asignaturasDocente.filter(a => a.gradoId === grado.id).length;
                   const esInicial = esGradoInicial(grado.nombre);
                   return (
@@ -1168,7 +1100,7 @@ export default function Calificaciones() {
             </div>
           )}
 
-          {selectedGradoId && !gradoTieneMateriasConfiguradas && (
+          {gradoEfectivoId && !gradoTieneMateriasConfiguradas && (
             <div className="bg-orange-50 border-2 border-orange-300 rounded-xl p-6 mb-4">
               <div className="flex items-start gap-4">
                 <div className="bg-orange-100 p-3 rounded-full shrink-0">
@@ -1196,7 +1128,7 @@ export default function Calificaciones() {
             </div>
           )}
 
-          {selectedGradoId && gradoTieneMateriasConfiguradas && (
+          {gradoEfectivoId && gradoTieneMateriasConfiguradas && (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="border-b border-slate-200 p-3">
                 <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center justify-between">
@@ -1593,7 +1525,7 @@ export default function Calificaciones() {
                             const notaFinal = calcularNotaFinal(
                               notaOriginal || 0,
                               calificacion?.refuerzo,
-                              actividadSeleccionada.estrategiaNota
+                              actividadSeleccionada?.estrategiaNota || "promediar"
                             );
                             const letra = notaOriginal !== undefined ? notaALetra(notaFinal) : "";
                             const necesitaRefuerzo = !esGradoInicialActual &&
@@ -1607,8 +1539,8 @@ export default function Calificaciones() {
                               <div
                                 key={est.id}
                                 className={`border rounded-lg p-3 transition-colors ${
-                                  index === carruselIndex 
-                                    ? "border-indigo-400 bg-indigo-50/30 shadow-sm md:border-slate-200 md:bg-transparent md:shadow-none" 
+                                  index === carruselIndex
+                                    ? "border-indigo-400 bg-indigo-50/30 shadow-sm md:border-slate-200 md:bg-transparent md:shadow-none"
                                     : "border-slate-200 hover:border-blue-300"
                                 }`}
                               >
@@ -2037,7 +1969,6 @@ export default function Calificaciones() {
         </div>
       )}
 
-      {/* ✅ Modal de confirmación personalizado */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
@@ -2076,7 +2007,6 @@ export default function Calificaciones() {
         </div>
       )}
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];

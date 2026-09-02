@@ -11,13 +11,8 @@ import {
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
-import type {
-  Grado,
-  Estudiante,
-  Destreza,
-  Ambito,
-  PeriodoEvaluacion,
-} from "../types";
+import { useData } from "../context/DataContext";
+import type { Estudiante, Ambito, Destreza } from "../types";
 import Layout from "../components/Layout";
 import {
   FaUserCheck,
@@ -148,18 +143,8 @@ const getDiasDelPeriodo = (fechaInicio: string, fechaFin: string): Date[] => {
 
 const NOMBRES_DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie"];
 const NOMBRES_MESES = [
-  "Enero",
-  "Febrero",
-  "Marzo",
-  "Abril",
-  "Mayo",
-  "Junio",
-  "Julio",
-  "Agosto",
-  "Septiembre",
-  "Octubre",
-  "Noviembre",
-  "Diciembre",
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ];
 
 const ESTADO_CONFIG = {
@@ -197,13 +182,19 @@ const ESTADO_CONFIG = {
 
 export default function ReporteAsistencias() {
   const { user, userData } = useAuth();
-  const [grados, setGrados] = useState<Grado[]>([]);
+
+  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
+  const {
+    grados,
+    ambitos,
+    destrezas,
+    periodos,
+    ready,
+  } = useData();
+
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
-  const [ambitos, setAmbitos] = useState<Ambito[]>([]);
-  const [destrezas, setDestrezas] = useState<Destreza[]>([]);
   const [asistencias, setAsistencias] = useState<AsistenciaData[]>([]);
-  const [periodos, setPeriodos] = useState<PeriodoEvaluacion[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingEstudiantes, setLoadingEstudiantes] = useState(true);
 
   const [tipoReporte, setTipoReporte] = useState<TipoReporte>("semanal");
   const [semanaActual, setSemanaActual] = useState<Date>(
@@ -227,12 +218,37 @@ export default function ReporteAsistencias() {
   const [motivoJustificacion, setMotivoJustificacion] = useState("");
   const [isJustificando, setIsJustificando] = useState(false);
 
-  // ✅ NUEVO: Sistema de toasts
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const periodoInicializado = useRef(false);
 
+  // ✅ Cargar estudiantes (única lectura necesaria al entrar)
+  useEffect(() => {
+    if (!ready) return;
+
+    const fetchEstudiantes = async () => {
+      try {
+        const q = query(
+          collection(db, "estudiantes"),
+          where("activo", "==", true),
+        );
+        const snap = await getDocs(q);
+        const data = snap.docs.map(
+          (d) => ({ id: d.id, ...d.data() }) as Estudiante,
+        );
+        setEstudiantes(data);
+      } catch (error) {
+        console.error("Error cargando estudiantes:", error);
+      } finally {
+        setLoadingEstudiantes(false);
+      }
+    };
+
+    fetchEstudiantes();
+  }, [ready]);
+
   const esTutor = (userData?.tutorDe?.length ?? 0) > 0;
+
   const gradosTutor = useMemo(() => {
     return grados.filter((g) => userData?.tutorDe?.includes(g.id));
   }, [grados, userData]);
@@ -241,7 +257,7 @@ export default function ReporteAsistencias() {
     const gradosConMaterias = new Set(
       asistencias
         .filter((a) => a.registradoPor === user?.uid)
-        .map((a) => a.gradoId)
+        .map((a) => a.gradoId),
     );
     return grados.filter((g) => gradosConMaterias.has(g.id));
   }, [grados, asistencias, user?.uid]);
@@ -270,13 +286,21 @@ export default function ReporteAsistencias() {
     return vistaActiva;
   }, [vistaActiva, esTutor, gradosDocente]);
 
+  // ✅ Inicializar período seleccionado (desde datos del Context)
+  useEffect(() => {
+    if (periodos.length > 0 && !periodoInicializado.current) {
+      setPeriodoSeleccionado(periodos[0].id);
+      periodoInicializado.current = true;
+    }
+  }, [periodos]);
+
   // ==================== HELPERS DE NOTIFICACIÓN ====================
 
   const mostrarToast = useCallback((
     type: Toast["type"],
     title: string,
     message?: string,
-    duration = 4000
+    duration = 4000,
   ) => {
     const id = `toast-${Date.now()}-${Math.random()}`;
     const toast: Toast = { id, type, title, message };
@@ -290,88 +314,7 @@ export default function ReporteAsistencias() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // ==================== EFFECTS ====================
-
-  useEffect(() => {
-    const unsubs: (() => void)[] = [];
-
-    const qGrados = query(
-      collection(db, "grados"),
-      where("activo", "==", true),
-    );
-    unsubs.push(
-      onSnapshot(qGrados, (snap) => {
-        setGrados(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Grado));
-      }),
-    );
-
-    const qEst = query(
-      collection(db, "estudiantes"),
-      where("activo", "==", true),
-    );
-    unsubs.push(
-      onSnapshot(qEst, (snap) => {
-        setEstudiantes(
-          snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
-        );
-      }),
-    );
-
-    const qAmb = query(collection(db, "ambitos"), where("activo", "==", true));
-    unsubs.push(
-      onSnapshot(qAmb, (snap) => {
-        setAmbitos(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Ambito));
-      }),
-    );
-
-    const qDes = query(
-      collection(db, "destrezas"),
-      where("activo", "==", true),
-    );
-    unsubs.push(
-      onSnapshot(qDes, (snap) => {
-        setDestrezas(
-          snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Destreza),
-        );
-      }),
-    );
-
-    return () => unsubs.forEach((u) => u());
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const cargarPeriodos = async () => {
-      try {
-        const q = query(
-          collection(db, "periodosEvaluacion"),
-          where("activo", "==", true),
-        );
-        const snap = await getDocs(q);
-        const data = snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }) as PeriodoEvaluacion)
-          .sort((a, b) => (a.orden || 0) - (b.orden || 0));
-
-        if (isMounted) {
-          setPeriodos(data);
-          if (data.length > 0 && !periodoInicializado.current) {
-            setPeriodoSeleccionado(data[0].id);
-            periodoInicializado.current = true;
-          }
-          setLoading(false);
-        }
-      } catch (error) {
-        console.error("Error cargando períodos:", error);
-        if (isMounted) setLoading(false);
-      }
-    };
-
-    cargarPeriodos();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  // ==================== LISTENER DE ASISTENCIAS (único necesario) ====================
 
   useEffect(() => {
     let isMounted = true;
@@ -513,8 +456,8 @@ export default function ReporteAsistencias() {
         .map((a) => a.ambitoId as string),
     );
     return Array.from(ambitosIds).map((id) => {
-      const ambito = ambitos.find((a) => a.id === id);
-      const destreza = destrezas.find((d) => d.id === id);
+      const ambito = ambitos.find((a: Ambito) => a.id === id);
+      const destreza = destrezas.find((d: Destreza) => d.id === id);
       return { id, nombre: ambito?.nombre || destreza?.nombre || "Sin nombre" };
     });
   }, [asistencias, gradoTutorEfectivo, ambitos, destrezas]);
@@ -583,7 +526,7 @@ export default function ReporteAsistencias() {
       (a) =>
         a.gradoId === gradoDocenteEfectivo && a.registradoPor === user?.uid,
     );
-  }, [asistencias, gradoDocenteEfectivo, user]);
+  }, [asistencias, gradoDocenteEfectivo, user?.uid]);
 
   const materiasDocenteGrado = useMemo(() => {
     const ambitosIds = new Set(
@@ -592,8 +535,8 @@ export default function ReporteAsistencias() {
         .map((a) => a.ambitoId as string),
     );
     return Array.from(ambitosIds).map((id) => {
-      const ambito = ambitos.find((a) => a.id === id);
-      const destreza = destrezas.find((d) => d.id === id);
+      const ambito = ambitos.find((a: Ambito) => a.id === id);
+      const destreza = destrezas.find((d: Destreza) => d.id === id);
       return { id, nombre: ambito?.nombre || destreza?.nombre || "Sin nombre" };
     });
   }, [asistenciasDocente, ambitos, destrezas]);
@@ -681,8 +624,7 @@ export default function ReporteAsistencias() {
     );
   };
 
-  // ✅ MODIFICADO: Usa toasts en lugar de alert
-  const justificarDiasSeleccionados = async () => {
+  async function justificarDiasSeleccionados() {
     if (!estudianteJustificarId || diasJustificar.size === 0) {
       mostrarToast("warning", "Selección requerida", "Debes seleccionar al menos un día para justificar.");
       return;
@@ -725,7 +667,7 @@ export default function ReporteAsistencias() {
         "success",
         "Justificación completada",
         `Se justificaron ${asistenciasAActualizar.length} ausencia(s) correctamente.`,
-        5000
+        5000,
       );
       setShowJustificarModal(false);
       setEstudianteJustificarId(null);
@@ -737,7 +679,7 @@ export default function ReporteAsistencias() {
     } finally {
       setIsJustificando(false);
     }
-  };
+  }
 
   const generarHTMLImpresion = (): string => {
     const esVistaTutor = vistaEfectiva === "tutor" && esTutor;
@@ -818,10 +760,7 @@ export default function ReporteAsistencias() {
       } else {
         const filas = estudiantesGradoTutor
           .map((est, idx) => {
-            let P = 0,
-              T = 0,
-              A = 0,
-              J = 0;
+            let P = 0, T = 0, A = 0, J = 0;
             Object.values(matrizTutor[est.id] || {}).forEach((mats) =>
               Object.values(mats).forEach((r) => {
                 if (r.estado === "P") P++;
@@ -900,11 +839,7 @@ export default function ReporteAsistencias() {
       } else {
         const filas = materiasDocenteGrado
           .map((m) => {
-            let P = 0,
-              T = 0,
-              A = 0,
-              J = 0,
-              sesiones = 0;
+            let P = 0, T = 0, A = 0, J = 0, sesiones = 0;
             Object.values(matrizDocente[m.id] || {}).forEach((d) => {
               P += d.P;
               T += d.T;
@@ -1020,7 +955,6 @@ export default function ReporteAsistencias() {
 </html>`;
   };
 
-  // ✅ MODIFICADO: Usa toast en lugar de alert para el mensaje de popup bloqueado
   const handlePrint = () => {
     const html = generarHTMLImpresion();
     const win = window.open("", "_blank");
@@ -1028,7 +962,7 @@ export default function ReporteAsistencias() {
       mostrarToast(
         "warning",
         "Ventana emergente bloqueada",
-        "Permite las ventanas emergentes en tu navegador para poder imprimir el reporte."
+        "Permite las ventanas emergentes en tu navegador para poder imprimir el reporte.",
       );
       return;
     }
@@ -1040,8 +974,6 @@ export default function ReporteAsistencias() {
   const puedeImprimir =
     (vistaEfectiva === "tutor" && estudiantesGradoTutor.length > 0) ||
     (vistaEfectiva === "docente" && materiasDocenteGrado.length > 0);
-
-  // ==================== CONFIG DE TOASTS ====================
 
   const toastConfig = {
     success: {
@@ -1074,13 +1006,10 @@ export default function ReporteAsistencias() {
     },
   };
 
-  if (loading) {
+  // ✅ Loading global: espera a que el Context cargue los datos maestros
+  if (!ready || loadingEstudiantes) {
     return (
-      <Layout
-        title="Reporte de Asistencias"
-        subtitle="Estadísticas de asistencia"
-        showBack
-      >
+      <Layout>
         <div className="flex items-center justify-center py-20">
           <FaSpinner className="animate-spin text-4xl text-blue-600" />
         </div>
@@ -1093,11 +1022,7 @@ export default function ReporteAsistencias() {
   );
 
   return (
-    <Layout
-      title="Reporte de Asistencias"
-      subtitle="Control de asistencia por grado y materia"
-      showBack
-    >
+    <Layout>
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
         <div className="flex flex-wrap gap-2 items-center">
           <button
@@ -1873,7 +1798,6 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];

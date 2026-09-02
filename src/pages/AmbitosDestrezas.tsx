@@ -1,25 +1,16 @@
-import {
-  useState,
-  useEffect,
-  startTransition,
-  useCallback,
-  useRef,
-} from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   collection,
-  query,
-  orderBy,
   addDoc,
   updateDoc,
   deleteDoc,
   doc,
   serverTimestamp,
-  getDocs,
-  where,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
-import type { Ambito, Destreza, Grado, AnioLectivo } from "../types";
+import { useData } from "../context/DataContext";
+import type { Ambito, Destreza } from "../types";
 import Layout from "../components/Layout";
 import {
   FaPlus,
@@ -66,17 +57,19 @@ interface ConfirmModalState {
 
 export default function AmbitosDestrezas() {
   const { user } = useAuth();
-  const [grados, setGrados] = useState<Grado[]>([]);
-  const [aniosLectivos, setAniosLectivos] = useState<AnioLectivo[]>([]);
-  const [ambitos, setAmbitos] = useState<Ambito[]>([]);
-  const [destrezas, setDestrezas] = useState<Destreza[]>([]);
-  const [todosLosAmbitos, setTodosLosAmbitos] = useState<Ambito[]>([]);
-  const [loading, setLoading] = useState(true);
+
+  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
+  const {
+    grados: todosLosGrados,
+    ambitos: todosLosAmbitosContext,
+    destrezas: todasLasDestrezasContext,
+    anioActivo,
+    ready,
+  } = useData();
+
   const [isSaving, setIsSaving] = useState(false);
   const [selectedGradoId, setSelectedGradoId] = useState("");
-  const [currentView, setCurrentView] = useState<"ambitos" | "destrezas">(
-    "ambitos",
-  );
+  const [currentView, setCurrentView] = useState<"ambitos" | "destrezas">("ambitos");
   const [selectedAmbitoId, setSelectedAmbitoId] = useState<string | null>(null);
   const [showAmbitoForm, setShowAmbitoForm] = useState(false);
   const [editingAmbitoId, setEditingAmbitoId] = useState<string | null>(null);
@@ -91,9 +84,7 @@ export default function AmbitosDestrezas() {
   const [showConfirmAmbitoModal, setShowConfirmAmbitoModal] = useState(false);
 
   const [showDestrezaForm, setShowDestrezaForm] = useState(false);
-  const [editingDestrezaId, setEditingDestrezaId] = useState<string | null>(
-    null,
-  );
+  const [editingDestrezaId, setEditingDestrezaId] = useState<string | null>(null);
   const [destrezaMassiveData, setDestrezaMassiveData] = useState("");
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
 
@@ -101,10 +92,8 @@ export default function AmbitosDestrezas() {
   const [selectedDestGrados, setSelectedDestGrados] = useState<string[]>([]);
   const [isCopying, setIsCopying] = useState(false);
 
-  // ✅ NUEVO: Sistema de toasts (reemplaza alert)
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // ✅ NUEVO: Modal de confirmación personalizado (reemplaza confirm)
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
     title: "",
@@ -114,6 +103,40 @@ export default function AmbitosDestrezas() {
   });
 
   const destrezaFormRef = useRef<HTMLDivElement>(null);
+
+  // ==================== VALORES DERIVADOS (sin estado, sin lecturas) ====================
+
+  // Grados del año activo (filtrados localmente)
+  const grados = (() => {
+    if (!anioActivo) return [];
+    return todosLosGrados
+      .filter((g) => g.anioLectivoId === anioActivo.id && g.activo)
+      .sort((a, b) => (a.orden || 0) - (b.orden || 0));
+  })();
+
+  // Grado efectivo: seleccionado o primer grado (sin useEffect+setState)
+  const gradoEfectivoId = selectedGradoId || (grados.length > 0 ? grados[0].id : "");
+
+  // Ámbitos del grado seleccionado (derivados del Context)
+  const ambitos = (() => {
+    if (!gradoEfectivoId) return [];
+    return todosLosAmbitosContext
+      .filter((a) => a.gradoId === gradoEfectivoId)
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  })();
+
+  // Destrezas del grado seleccionado (derivadas del Context)
+  const destrezas = (() => {
+    if (!gradoEfectivoId) return [];
+    return todasLasDestrezasContext
+      .filter((d) => d.gradoId === gradoEfectivoId)
+      .sort((a, b) => (a.orden || 0) - (b.orden || 0));
+  })();
+
+  // Todos los ámbitos ordenados por nombre (para modal de copiar)
+  const todosLosAmbitos = (() => {
+    return [...todosLosAmbitosContext].sort((a, b) => a.nombre.localeCompare(b.nombre));
+  })();
 
   // ==================== HELPERS DE NOTIFICACIÓN ====================
 
@@ -186,202 +209,70 @@ export default function AmbitosDestrezas() {
     setValidationErrors([]);
   }, []);
 
-  // ==================== CARGA DE DATOS ====================
+  // ==================== PARSEO Y VALIDACIÓN ====================
 
-  const cargarAniosLectivos = useCallback(async () => {
-    try {
-      const q = query(
-        collection(db, "aniosLectivos"),
-        where("activo", "==", true),
-      );
-      const snap = await getDocs(q);
-      const data = snap.docs.map(
-        (doc) => ({ id: doc.id, ...doc.data() }) as AnioLectivo,
-      );
-      startTransition(() => {
-        setAniosLectivos(data);
-      });
-    } catch (error) {
-      console.error("Error cargando años lectivos:", error);
-    }
-  }, []);
+  const parseAmbitosMassiveData = (data: string): { ambitos: string[]; parseErrors: string[] } => {
+    const lines = data.trim().split("\n");
+    const ambitosList: string[] = [];
+    const parseErrors: string[] = [];
 
-  const cargarGrados = useCallback(async () => {
-    try {
-      const anioActivo = aniosLectivos.find((a) => a.activo);
+    lines.forEach((line, index) => {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) return;
 
-      if (!anioActivo) {
-        startTransition(() => {
-          setGrados([]);
-          setLoading(false);
-        });
+      if (trimmedLine.length < 1) {
+        parseErrors.push(`Línea ${index + 1}: El nombre del ámbito no puede estar vacío.`);
         return;
       }
 
-      const q = query(
-        collection(db, "grados"),
-        where("anioLectivoId", "==", anioActivo.id),
-        where("activo", "==", true),
-        orderBy("orden", "asc"),
+      ambitosList.push(trimmedLine);
+    });
+
+    return { ambitos: ambitosList, parseErrors };
+  };
+
+  // ✅ Función normal (depende de `ambitos` derivado, no puede ser useCallback)
+  const validarAmbitosMasivos = (ambitosList: string[]): string[] => {
+    const allErrors: string[] = [];
+    const nombresVistos = new Set<string>();
+
+    ambitosList.forEach((nombre, index) => {
+      const errors: string[] = [];
+
+      if (nombresVistos.has(nombre.toLowerCase())) {
+        errors.push(`Ámbito "${nombre}" duplicado en el lote`);
+      }
+      nombresVistos.add(nombre.toLowerCase());
+
+      const existe = ambitos.some(
+        (a) => a.nombre.toLowerCase() === nombre.toLowerCase(),
       );
+      if (existe) {
+        errors.push(`Ya existe un ámbito llamado "${nombre}" en este grado`);
+      }
 
-      const snap = await getDocs(q);
-      const data = snap.docs.map(
-        (doc) => ({ id: doc.id, ...doc.data() }) as Grado,
-      );
+      if (errors.length > 0) {
+        allErrors.push(`Línea ${index + 1}: ${errors.join(", ")}`);
+      }
+    });
 
-      startTransition(() => {
-        setGrados(data);
-        if (data.length > 0 && !selectedGradoId) {
-          setSelectedGradoId(data[0].id);
-        }
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error("Error cargando grados:", error);
-      startTransition(() => setLoading(false));
-    }
-  }, [selectedGradoId, aniosLectivos]);
-
-  const cargarTodosLosAmbitos = useCallback(async () => {
-    try {
-      const q = query(collection(db, "ambitos"), where("activo", "==", true));
-      const snap = await getDocs(q);
-      const data = snap.docs
-        .map((doc) => ({ id: doc.id, ...doc.data() }) as Ambito)
-        .sort((a, b) => a.nombre.localeCompare(b.nombre));
-      startTransition(() => setTodosLosAmbitos(data));
-    } catch (error) {
-      console.error("Error cargando todos los ámbitos:", error);
-    }
-  }, []);
-
-  const cargarAmbitos = useCallback(async (gradoId: string) => {
-    try {
-      startTransition(() => {
-        setLoading(true);
-      });
-
-      const q = query(
-        collection(db, "ambitos"),
-        where("gradoId", "==", gradoId),
-        orderBy("nombre", "asc"),
-      );
-      const snap = await getDocs(q);
-      const data = snap.docs.map(
-        (doc) => ({ id: doc.id, ...doc.data() }) as Ambito,
-      );
-
-      startTransition(() => {
-        setAmbitos(data);
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error("Error cargando ámbitos:", error);
-      startTransition(() => {
-        setLoading(false);
-      });
-    }
-  }, []);
-
-  const cargarDestrezas = useCallback(async (gradoId: string) => {
-    try {
-      const q = query(
-        collection(db, "destrezas"),
-        where("gradoId", "==", gradoId),
-        orderBy("orden", "asc"),
-      );
-      const snap = await getDocs(q);
-      const data = snap.docs.map(
-        (doc) => ({ id: doc.id, ...doc.data() }) as Destreza,
-      );
-
-      startTransition(() => {
-        setDestrezas(data);
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error("Error cargando destrezas:", error);
-      startTransition(() => {
-        setLoading(false);
-      });
-    }
-  }, []);
-
-  // ==================== PARSEO Y VALIDACIÓN ====================
-
-  const parseAmbitosMassiveData = useCallback(
-    (data: string): { ambitos: string[]; parseErrors: string[] } => {
-      const lines = data.trim().split("\n");
-      const ambitosList: string[] = [];
-      const parseErrors: string[] = [];
-
-      lines.forEach((line, index) => {
-        const trimmedLine = line.trim();
-        if (!trimmedLine) return;
-
-        if (trimmedLine.length < 1) {
-          parseErrors.push(
-            `Línea ${index + 1}: El nombre del ámbito no puede estar vacío.`,
-          );
-          return;
-        }
-
-        ambitosList.push(trimmedLine);
-      });
-
-      return { ambitos: ambitosList, parseErrors };
-    },
-    [],
-  );
-
-  const validarAmbitosMasivos = useCallback(
-    (ambitosList: string[]): string[] => {
-      const allErrors: string[] = [];
-      const nombresVistos = new Set<string>();
-
-      ambitosList.forEach((nombre, index) => {
-        const errors: string[] = [];
-
-        if (nombresVistos.has(nombre.toLowerCase())) {
-          errors.push(`Ámbito "${nombre}" duplicado en el lote`);
-        }
-        nombresVistos.add(nombre.toLowerCase());
-
-        const existe = ambitos.some(
-          (a) => a.nombre.toLowerCase() === nombre.toLowerCase(),
-        );
-        if (existe) {
-          errors.push(`Ya existe un ámbito llamado "${nombre}" en este grado`);
-        }
-
-        if (errors.length > 0) {
-          allErrors.push(`Línea ${index + 1}: ${errors.join(", ")}`);
-        }
-      });
-
-      return allErrors;
-    },
-    [ambitos],
-  );
+    return allErrors;
+  };
 
   // ==================== GUARDADO DE ÁMBITOS ====================
 
-  const guardarAmbitosMasivos = useCallback(async () => {
+  const guardarAmbitosMasivos = () => {
     if (!ambitoMassiveData.trim()) {
-      setValidationErrors([
-        "No hay datos para procesar. Ingrese al menos un ámbito.",
-      ]);
+      setValidationErrors(["No hay datos para procesar. Ingrese al menos un ámbito."]);
       return;
     }
 
-    if (!selectedGradoId) {
+    if (!gradoEfectivoId) {
       setValidationErrors(["Debe seleccionar un grado antes de registrar."]);
       return;
     }
 
-    const { ambitos: ambitosList, parseErrors } =
-      parseAmbitosMassiveData(ambitoMassiveData);
+    const { ambitos: ambitosList, parseErrors } = parseAmbitosMassiveData(ambitoMassiveData);
 
     if (parseErrors.length > 0) {
       setValidationErrors(parseErrors);
@@ -390,9 +281,7 @@ export default function AmbitosDestrezas() {
     }
 
     if (ambitosList.length === 0) {
-      setValidationErrors([
-        "No se encontraron ámbitos válidos. Verifique el formato.",
-      ]);
+      setValidationErrors(["No se encontraron ámbitos válidos. Verifique el formato."]);
       return;
     }
 
@@ -406,25 +295,19 @@ export default function AmbitosDestrezas() {
     setParsedAmbitos(ambitosList);
     setValidationErrors([]);
     setShowConfirmAmbitoModal(true);
-  }, [
-    ambitoMassiveData,
-    selectedGradoId,
-    parseAmbitosMassiveData,
-    validarAmbitosMasivos,
-  ]);
+  };
 
-  const confirmarGuardadoAmbitosMasivos = useCallback(async () => {
+  async function confirmarGuardadoAmbitosMasivos() {
     setShowConfirmAmbitoModal(false);
     setIsSaving(true);
 
     try {
-      const maxOrden =
-        ambitos.length > 0 ? Math.max(...ambitos.map((a) => a.orden || 0)) : 0;
+      const maxOrden = ambitos.length > 0 ? Math.max(...ambitos.map((a) => a.orden || 0)) : 0;
 
       const batch = parsedAmbitos.map(async (nombre, index) => {
         await addDoc(collection(db, "ambitos"), {
           nombre: nombre.trim(),
-          gradoId: selectedGradoId,
+          gradoId: gradoEfectivoId,
           orden: maxOrden + index + 1,
           activo: true,
           createdAt: serverTimestamp(),
@@ -433,8 +316,7 @@ export default function AmbitosDestrezas() {
       });
 
       await Promise.all(batch);
-      await cargarAmbitos(selectedGradoId);
-      await cargarTodosLosAmbitos();
+      // ✅ NO se llama a cargarAmbitos/cargarTodosLosAmbitos: el Context se actualiza solo
       resetAmbitoForm();
       mostrarToast(
         "success",
@@ -443,43 +325,27 @@ export default function AmbitosDestrezas() {
       );
     } catch (error) {
       console.error("Error guardando ámbitos masivos:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudieron guardar los ámbitos.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudieron guardar los ámbitos.");
     } finally {
       setIsSaving(false);
     }
-  }, [
-    parsedAmbitos,
-    selectedGradoId,
-    ambitos,
-    user,
-    cargarAmbitos,
-    cargarTodosLosAmbitos,
-    resetAmbitoForm,
-    mostrarToast,
-  ]);
+  }
 
-  const guardarAmbito = useCallback(async () => {
+  async function guardarAmbito() {
     const errors: string[] = [];
     if (!ambitoFormData.nombre.trim()) {
       errors.push("El nombre del ámbito es obligatorio");
     }
-    if (!selectedGradoId) {
+    if (!gradoEfectivoId) {
       errors.push("Debe seleccionar un grado");
     }
     const existe = ambitos.find(
       (a) =>
         a.nombre.toLowerCase() === ambitoFormData.nombre.trim().toLowerCase() &&
-        a.gradoId === selectedGradoId &&
         a.id !== editingAmbitoId,
     );
     if (existe) {
-      errors.push(
-        `Ya existe un ámbito llamado "${ambitoFormData.nombre}" en este grado`,
-      );
+      errors.push(`Ya existe un ámbito llamado "${ambitoFormData.nombre}" en este grado`);
     }
     if (errors.length > 0) {
       setValidationErrors(errors);
@@ -495,13 +361,10 @@ export default function AmbitosDestrezas() {
           updatedAt: serverTimestamp(),
         });
       } else {
-        const maxOrden =
-          ambitos.length > 0
-            ? Math.max(...ambitos.map((a) => a.orden || 0))
-            : 0;
+        const maxOrden = ambitos.length > 0 ? Math.max(...ambitos.map((a) => a.orden || 0)) : 0;
         await addDoc(collection(db, "ambitos"), {
           nombre: ambitoFormData.nombre.trim(),
-          gradoId: selectedGradoId,
+          gradoId: gradoEfectivoId,
           orden: maxOrden + 1,
           activo: true,
           createdAt: serverTimestamp(),
@@ -514,47 +377,25 @@ export default function AmbitosDestrezas() {
         `"${ambitoFormData.nombre}" se guardó correctamente.`,
       );
       resetAmbitoForm();
-      await cargarAmbitos(selectedGradoId);
-      await cargarTodosLosAmbitos();
+      // ✅ El Context detecta el cambio automáticamente
     } catch (error) {
       console.error("Error guardando ámbito:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudo guardar el ámbito.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudo guardar el ámbito.");
     } finally {
       setIsSaving(false);
     }
-  }, [
-    ambitoFormData,
-    selectedGradoId,
-    editingAmbitoId,
-    ambitos,
-    user,
-    resetAmbitoForm,
-    cargarAmbitos,
-    cargarTodosLosAmbitos,
-    mostrarToast,
-  ]);
+  }
 
   // ==================== COPIAR A OTROS GRADOS ====================
 
-  const copiarAGrados = useCallback(async () => {
+  // ✅ Optimizado: usa datos del Context para verificar duplicados localmente (sin lecturas)
+  async function copiarAGrados() {
     if (selectedDestGrados.length === 0) {
-      mostrarToast(
-        "warning",
-        "Selecciona grados de destino",
-        "Debes seleccionar al menos un grado para copiar.",
-      );
+      mostrarToast("warning", "Selecciona grados de destino", "Debes seleccionar al menos un grado para copiar.");
       return;
     }
     if (ambitos.length === 0) {
-      mostrarToast(
-        "warning",
-        "Sin ámbitos para copiar",
-        "El grado actual no tiene ámbitos para copiar.",
-      );
+      mostrarToast("warning", "Sin ámbitos para copiar", "El grado actual no tiene ámbitos para copiar.");
       return;
     }
 
@@ -564,63 +405,62 @@ export default function AmbitosDestrezas() {
       let destrezasCreadas = 0;
 
       for (const destGradoId of selectedDestGrados) {
-        const qAmbDest = query(
-          collection(db, "ambitos"),
-          where("gradoId", "==", destGradoId),
-        );
-        const snapAmbDest = await getDocs(qAmbDest);
-        const ambitosDest = snapAmbDest.docs.map(
-          (d) => ({ id: d.id, ...d.data() }) as Ambito,
-        );
+        // ✅ Ámbitos del grado destino desde el Context (sin lectura a Firestore)
+        const ambitosDestContext = todosLosAmbitosContext.filter(a => a.gradoId === destGradoId);
+        // Mapa de IDs que se van creando durante la copia (para destrezas del mismo loop)
+        const ambitosCreadosMap: Record<string, string> = {};
 
         for (const ambitoOrigen of ambitos) {
-          let ambitoDestId = ambitosDest.find(
-            (a) => a.nombre.toLowerCase() === ambitoOrigen.nombre.toLowerCase(),
-          )?.id;
-
+          // Buscar si el ámbito ya existe en destino (del Context) o en los creados en este loop
+          let ambitoDestId = ambitosCreadosMap[ambitoOrigen.nombre.toLowerCase()];
+          
           if (!ambitoDestId) {
-            const ref = await addDoc(collection(db, "ambitos"), {
-              nombre: ambitoOrigen.nombre,
-              gradoId: destGradoId,
-              orden: ambitoOrigen.orden || 0,
-              activo: true,
-              createdAt: serverTimestamp(),
-              createdBy: user?.uid,
-            });
-            ambitoDestId = ref.id;
-            ambitosCreados++;
+            const existenteEnDestino = ambitosDestContext.find(
+              (a) => a.nombre.toLowerCase() === ambitoOrigen.nombre.toLowerCase(),
+            );
+            
+            if (existenteEnDestino) {
+              ambitoDestId = existenteEnDestino.id;
+            } else {
+              const ref = await addDoc(collection(db, "ambitos"), {
+                nombre: ambitoOrigen.nombre,
+                gradoId: destGradoId,
+                orden: ambitoOrigen.orden || 0,
+                activo: true,
+                createdAt: serverTimestamp(),
+                createdBy: user?.uid,
+              });
+              ambitoDestId = ref.id;
+              ambitosCreadosMap[ambitoOrigen.nombre.toLowerCase()] = ambitoDestId;
+              ambitosCreados++;
+            }
           }
 
-          const qDesOrigen = query(
-            collection(db, "destrezas"),
-            where("ambitoId", "==", ambitoOrigen.id),
-          );
-          const snapDesOrigen = await getDocs(qDesOrigen);
-          const destrezasOrigen = snapDesOrigen.docs
-            .map((d) => ({ id: d.id, ...d.data() }) as Destreza)
+          // ✅ Destrezas del ámbito origen desde el Context (sin lectura)
+          const destrezasOrigen = todasLasDestrezasContext
+            .filter((d) => d.ambitoId === ambitoOrigen.id)
             .sort((a, b) => (a.orden || 0) - (b.orden || 0));
 
-          const qDesDest = query(
-            collection(db, "destrezas"),
-            where("ambitoId", "==", ambitoDestId),
-          );
-          const snapDesDest = await getDocs(qDesDest);
-          const destrezasDest = snapDesDest.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as Destreza,
-          );
+          // ✅ Destrezas del ámbito destino desde el Context
+          const destrezasDestContext = todasLasDestrezasContext.filter(d => d.ambitoId === ambitoDestId);
+          
+          // Destrezas ya creadas en este loop para el mismo ámbito destino
+          const destrezasCreadasEnLoop = new Set<string>();
 
-          let ordenMax =
-            destrezasDest.length > 0
-              ? Math.max(...destrezasDest.map((d) => d.orden || 0))
-              : 0;
+          let ordenMax = destrezasDestContext.length > 0
+            ? Math.max(...destrezasDestContext.map((d) => d.orden || 0))
+            : 0;
 
           for (const destrezaOrigen of destrezasOrigen) {
-            const existe = destrezasDest.some(
-              (d) =>
-                d.descripcion.toLowerCase() ===
-                destrezaOrigen.descripcion.toLowerCase(),
+            const lowerDesc = destrezaOrigen.descripcion.toLowerCase();
+            
+            // Verificar duplicado en contexto + en lo que llevamos creando
+            const existeEnContexto = destrezasDestContext.some(
+              (d) => d.descripcion.toLowerCase() === lowerDesc,
             );
-            if (!existe) {
+            const existeEnLoop = destrezasCreadasEnLoop.has(lowerDesc);
+            
+            if (!existeEnContexto && !existeEnLoop) {
               ordenMax += 1;
               await addDoc(collection(db, "destrezas"), {
                 nombre: destrezaOrigen.nombre,
@@ -632,6 +472,7 @@ export default function AmbitosDestrezas() {
                 createdAt: serverTimestamp(),
                 createdBy: user?.uid,
               });
+              destrezasCreadasEnLoop.add(lowerDesc);
               destrezasCreadas++;
             }
           }
@@ -646,29 +487,14 @@ export default function AmbitosDestrezas() {
       );
       setShowCopyModal(false);
       setSelectedDestGrados([]);
-      await cargarTodosLosAmbitos();
-      await cargarAmbitos(selectedGradoId);
-      await cargarDestrezas(selectedGradoId);
+      // ✅ El Context se actualiza automáticamente
     } catch (error) {
       console.error("Error copiando ámbitos y destrezas:", error);
-      mostrarToast(
-        "error",
-        "Error al copiar",
-        "No se pudieron copiar ámbitos y destrezas.",
-      );
+      mostrarToast("error", "Error al copiar", "No se pudieron copiar ámbitos y destrezas.");
     } finally {
       setIsCopying(false);
     }
-  }, [
-    selectedDestGrados,
-    ambitos,
-    user,
-    selectedGradoId,
-    cargarTodosLosAmbitos,
-    cargarAmbitos,
-    cargarDestrezas,
-    mostrarToast,
-  ]);
+  }
 
   const toggleDestGrado = (gradoId: string) => {
     setSelectedDestGrados((prev) =>
@@ -680,7 +506,7 @@ export default function AmbitosDestrezas() {
 
   // ==================== GUARDADO DE DESTREZAS ====================
 
-  const analizarYGuardarDestrezas = useCallback(async () => {
+  async function analizarYGuardarDestrezas() {
     const errors: string[] = [];
     if (!selectedAmbitoId) {
       errors.push("No hay un ámbito seleccionado");
@@ -711,24 +537,18 @@ export default function AmbitosDestrezas() {
     }
 
     if (destrezasList.length === 0) {
-      setValidationErrors([
-        "No se encontraron destrezas válidas. Escribe al menos una.",
-      ]);
+      setValidationErrors(["No se encontraron destrezas válidas. Escribe al menos una."]);
       return;
     }
 
-    const ambitoDestrezas = destrezas.filter(
-      (d) => d.ambitoId === selectedAmbitoId,
-    );
+    const ambitoDestrezas = destrezas.filter((d) => d.ambitoId === selectedAmbitoId);
     const duplicadas = destrezasList.filter((d) =>
       ambitoDestrezas.some(
         (existente) => existente.descripcion.toLowerCase() === d.toLowerCase(),
       ),
     );
     if (duplicadas.length > 0) {
-      setValidationErrors([
-        `${duplicadas.length} destreza(s) ya existe(n) en este ámbito.`,
-      ]);
+      setValidationErrors([`${duplicadas.length} destreza(s) ya existe(n) en este ámbito.`]);
       return;
     }
 
@@ -742,9 +562,7 @@ export default function AmbitosDestrezas() {
       vistas.add(lower);
     });
     if (duplicadasInternas.length > 0) {
-      setValidationErrors([
-        `${duplicadasInternas.length} destreza(s) duplicada(s) en el lote.`,
-      ]);
+      setValidationErrors([`${duplicadasInternas.length} destreza(s) duplicada(s) en el lote.`]);
       return;
     }
 
@@ -758,7 +576,7 @@ export default function AmbitosDestrezas() {
           nombre: nombre.trim(),
           descripcion: texto.trim(),
           ambitoId: selectedAmbitoId,
-          gradoId: selectedGradoId,
+          gradoId: gradoEfectivoId,
           orden: ambitoDestrezas.length + index + 1,
           activo: true,
           createdAt: serverTimestamp(),
@@ -767,7 +585,6 @@ export default function AmbitosDestrezas() {
       });
 
       await Promise.all(batch);
-      await cargarDestrezas(selectedGradoId);
       resetDestrezaForm();
       mostrarToast(
         "success",
@@ -776,112 +593,42 @@ export default function AmbitosDestrezas() {
       );
     } catch (error) {
       console.error("Error guardando destrezas:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudieron guardar las destrezas.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudieron guardar las destrezas.");
     } finally {
       setIsSaving(false);
     }
-  }, [
-    destrezaMassiveData,
-    selectedAmbitoId,
-    selectedGradoId,
-    ambitos,
-    destrezas,
-    user,
-    cargarDestrezas,
-    resetDestrezaForm,
-    mostrarToast,
-  ]);
+  }
 
   // ==================== EDITAR / ELIMINAR ====================
 
-  const handleEditAmbito = useCallback((ambito: Ambito) => {
+  const handleEditAmbito = (ambito: Ambito) => {
     setAmbitoFormData({ nombre: ambito.nombre, orden: ambito.orden || 0 });
     setEditingAmbitoId(ambito.id);
     setShowAmbitoForm(true);
     setIsAmbitoMassive(false);
     setValidationErrors([]);
-  }, []);
+  };
 
-  // ✅ MODIFICADO: Usa modal de confirmación personalizado
-  const handleDeleteAmbito = useCallback(
-    async (id: string) => {
-      const ambito = ambitos.find((a) => a.id === id);
-      const destrezasDelAmbito = destrezas.filter((d) => d.ambitoId === id);
-      let confirmado: boolean;
+  async function handleDeleteAmbito(id: string) {
+    const ambito = ambitos.find((a) => a.id === id);
+    const destrezasDelAmbito = destrezas.filter((d) => d.ambitoId === id);
+    let confirmado: boolean;
 
-      if (destrezasDelAmbito.length > 0) {
-        confirmado = await confirmar(
-          `Eliminar "${ambito?.nombre || "ámbito"}"`,
-          `Este ámbito tiene ${destrezasDelAmbito.length} destreza(s). ¿Eliminar también las destrezas asociadas? Esta acción no se puede deshacer.`,
-          {
-            confirmText: "Sí, eliminar todo",
-            cancelText: "Cancelar",
-            confirmColor: "bg-red-600 hover:bg-red-700",
-            icon: FaTrash,
-          },
-        );
-      } else {
-        confirmado = await confirmar(
-          `Eliminar "${ambito?.nombre || "ámbito"}"`,
-          `¿Estás seguro de eliminar este ámbito? Esta acción no se puede deshacer.`,
-          {
-            confirmText: "Sí, eliminar",
-            cancelText: "Cancelar",
-            confirmColor: "bg-red-600 hover:bg-red-700",
-            icon: FaTrash,
-          },
-        );
-      }
-      if (!confirmado) return;
-
-      try {
-        if (destrezasDelAmbito.length > 0) {
-          const deleteDestrezas = destrezasDelAmbito.map((d) =>
-            deleteDoc(doc(db, "destrezas", d.id)),
-          );
-          await Promise.all(deleteDestrezas);
-        }
-        await deleteDoc(doc(db, "ambitos", id));
-        mostrarToast(
-          "success",
-          "Ámbito eliminado",
-          `"${ambito?.nombre}" y sus destrezas fueron eliminados.`,
-        );
-        await cargarAmbitos(selectedGradoId);
-        await cargarDestrezas(selectedGradoId);
-        await cargarTodosLosAmbitos();
-      } catch (error) {
-        console.error("Error eliminando:", error);
-        mostrarToast(
-          "error",
-          "Error al eliminar",
-          "No se pudo eliminar el ámbito.",
-        );
-      }
-    },
-    [
-      ambitos,
-      destrezas,
-      selectedGradoId,
-      cargarAmbitos,
-      cargarDestrezas,
-      cargarTodosLosAmbitos,
-      confirmar,
-      mostrarToast,
-    ],
-  );
-
-  // ✅ MODIFICADO: Usa modal de confirmación personalizado
-  const handleDeleteDestreza = useCallback(
-    async (id: string) => {
-      const destreza = destrezas.find((d) => d.id === id);
-      const confirmado = await confirmar(
-        "Eliminar destreza",
-        `¿Estás seguro de eliminar esta destreza?\n\n"${(destreza?.descripcion || "").substring(0, 120)}..."`,
+    if (destrezasDelAmbito.length > 0) {
+      confirmado = await confirmar(
+        `Eliminar "${ambito?.nombre || "ámbito"}"`,
+        `Este ámbito tiene ${destrezasDelAmbito.length} destreza(s). ¿Eliminar también las destrezas asociadas? Esta acción no se puede deshacer.`,
+        {
+          confirmText: "Sí, eliminar todo",
+          cancelText: "Cancelar",
+          confirmColor: "bg-red-600 hover:bg-red-700",
+          icon: FaTrash,
+        },
+      );
+    } else {
+      confirmado = await confirmar(
+        `Eliminar "${ambito?.nombre || "ámbito"}"`,
+        `¿Estás seguro de eliminar este ámbito? Esta acción no se puede deshacer.`,
         {
           confirmText: "Sí, eliminar",
           cancelText: "Cancelar",
@@ -889,25 +636,54 @@ export default function AmbitosDestrezas() {
           icon: FaTrash,
         },
       );
-      if (!confirmado) return;
+    }
+    if (!confirmado) return;
 
-      try {
-        await deleteDoc(doc(db, "destrezas", id));
-        mostrarToast("success", "Destreza eliminada", "La destreza fue eliminada correctamente.");
-        await cargarDestrezas(selectedGradoId);
-      } catch (error) {
-        console.error("Error eliminando:", error);
-        mostrarToast(
-          "error",
-          "Error al eliminar",
-          "No se pudo eliminar la destreza.",
+    try {
+      if (destrezasDelAmbito.length > 0) {
+        const deleteDestrezas = destrezasDelAmbito.map((d) =>
+          deleteDoc(doc(db, "destrezas", d.id)),
         );
+        await Promise.all(deleteDestrezas);
       }
-    },
-    [destrezas, selectedGradoId, cargarDestrezas, confirmar, mostrarToast],
-  );
+      await deleteDoc(doc(db, "ambitos", id));
+      mostrarToast(
+        "success",
+        "Ámbito eliminado",
+        `"${ambito?.nombre}" y sus destrezas fueron eliminados.`,
+      );
+      // ✅ El Context detecta los cambios automáticamente
+    } catch (error) {
+      console.error("Error eliminando:", error);
+      mostrarToast("error", "Error al eliminar", "No se pudo eliminar el ámbito.");
+    }
+  }
 
-  const handleEditDestreza = useCallback((destreza: Destreza) => {
+  async function handleDeleteDestreza(id: string) {
+    const destreza = destrezas.find((d) => d.id === id);
+    const confirmado = await confirmar(
+      "Eliminar destreza",
+      `¿Estás seguro de eliminar esta destreza?\n\n"${(destreza?.descripcion || "").substring(0, 120)}..."`,
+      {
+        confirmText: "Sí, eliminar",
+        cancelText: "Cancelar",
+        confirmColor: "bg-red-600 hover:bg-red-700",
+        icon: FaTrash,
+      },
+    );
+    if (!confirmado) return;
+
+    try {
+      await deleteDoc(doc(db, "destrezas", id));
+      mostrarToast("success", "Destreza eliminada", "La destreza fue eliminada correctamente.");
+      // ✅ El Context detecta el cambio automáticamente
+    } catch (error) {
+      console.error("Error eliminando:", error);
+      mostrarToast("error", "Error al eliminar", "No se pudo eliminar la destreza.");
+    }
+  }
+
+  const handleEditDestreza = (destreza: Destreza) => {
     setDestrezaMassiveData(destreza.descripcion);
     setEditingDestrezaId(destreza.id);
     setShowDestrezaForm(true);
@@ -919,9 +695,9 @@ export default function AmbitosDestrezas() {
         block: "center",
       });
     }, 100);
-  }, []);
+  };
 
-  const guardarDestrezaIndividual = useCallback(async () => {
+  async function guardarDestrezaIndividual() {
     if (!destrezaMassiveData.trim()) {
       setValidationErrors(["La destreza no puede estar vacía"]);
       return;
@@ -945,7 +721,7 @@ export default function AmbitosDestrezas() {
           nombre: destrezaMassiveData.substring(0, 100).trim(),
           descripcion: destrezaMassiveData.trim(),
           ambitoId: selectedAmbitoId,
-          gradoId: selectedGradoId,
+          gradoId: gradoEfectivoId,
           orden: ambitoDestrezas.length + 1,
           activo: true,
           createdAt: serverTimestamp(),
@@ -957,30 +733,14 @@ export default function AmbitosDestrezas() {
         editingDestrezaId ? "Destreza actualizada" : "Destreza creada",
         "La destreza se guardó correctamente.",
       );
-      await cargarDestrezas(selectedGradoId);
       resetDestrezaForm();
     } catch (error) {
       console.error("Error:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudo guardar la destreza.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudo guardar la destreza.");
     } finally {
       setIsSaving(false);
     }
-  }, [
-    destrezaMassiveData,
-    selectedAmbitoId,
-    selectedGradoId,
-    editingDestrezaId,
-    ambitos,
-    destrezas,
-    user,
-    cargarDestrezas,
-    resetDestrezaForm,
-    mostrarToast,
-  ]);
+  }
 
   // ==================== NAVEGACIÓN ====================
 
@@ -988,20 +748,20 @@ export default function AmbitosDestrezas() {
     return destrezas.filter((d) => d.ambitoId === ambitoId);
   };
 
-  const irADestrezas = useCallback((ambitoId: string) => {
+  const irADestrezas = (ambitoId: string) => {
     setSelectedAmbitoId(ambitoId);
     setCurrentView("destrezas");
     setValidationErrors([]);
-  }, []);
+  };
 
-  const volverAAmbitos = useCallback(() => {
+  const volverAAmbitos = () => {
     setCurrentView("ambitos");
     setSelectedAmbitoId(null);
     resetDestrezaForm();
-  }, [resetDestrezaForm]);
+  };
 
-  const handlePrint = useCallback(() => {
-    const gradoActual = grados.find((g) => g.id === selectedGradoId);
+  const handlePrint = () => {
+    const gradoActual = grados.find((g) => g.id === gradoEfectivoId);
     if (!gradoActual) return;
 
     const ambitosConDestrezas = ambitos.map((ambito) => ({
@@ -1037,11 +797,7 @@ export default function AmbitosDestrezas() {
           ${
             ambito.destrezas.length > 0
               ? ambito.destrezas
-                  .map(
-                    (d) => `
-            <div class="destreza">${d.descripcion}</div>
-          `,
-                  )
+                  .map((d) => `<div class="destreza">${d.descripcion}</div>`)
                   .join("")
               : '<div class="destreza" style="color: #999; font-style: italic;">No hay destrezas registradas en este ámbito.</div>'
           }
@@ -1066,27 +822,7 @@ export default function AmbitosDestrezas() {
         printWindow.print();
       }, 500);
     }
-  }, [grados, selectedGradoId, ambitos, destrezas]);
-
-  // ==================== EFFECTS ====================
-
-  useEffect(() => {
-    cargarAniosLectivos();
-  }, [cargarAniosLectivos]);
-
-  useEffect(() => {
-    if (aniosLectivos.length > 0) {
-      cargarGrados();
-      cargarTodosLosAmbitos();
-    }
-  }, [aniosLectivos, cargarGrados, cargarTodosLosAmbitos]);
-
-  useEffect(() => {
-    if (selectedGradoId) {
-      cargarAmbitos(selectedGradoId);
-      cargarDestrezas(selectedGradoId);
-    }
-  }, [selectedGradoId, cargarAmbitos, cargarDestrezas]);
+  };
 
   // ==================== CONFIG DE TOASTS ====================
 
@@ -1123,13 +859,10 @@ export default function AmbitosDestrezas() {
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  if (loading) {
+  // ✅ Loading: espera a que el Context cargue los datos maestros
+  if (!ready) {
     return (
-      <Layout
-        title="Ámbitos y Destrezas"
-        subtitle="Configura competencias y destrezas"
-        showBack
-      >
+      <Layout>
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
@@ -1141,29 +874,18 @@ export default function AmbitosDestrezas() {
   }
 
   const ambitoSeleccionado = ambitos.find((a) => a.id === selectedAmbitoId);
-  const destrezasDelAmbito = selectedAmbitoId
-    ? getDestrezasByAmbito(selectedAmbitoId)
-    : [];
-  const anioActivo = aniosLectivos.find((a) => a.activo);
-  const gradoOrigen = grados.find((g) => g.id === selectedGradoId);
-  const gradosDestino = grados.filter((g) => g.id !== selectedGradoId);
+  const destrezasDelAmbito = selectedAmbitoId ? getDestrezasByAmbito(selectedAmbitoId) : [];
+  const gradoOrigen = grados.find((g) => g.id === gradoEfectivoId);
+  const gradosDestino = grados.filter((g) => g.id !== gradoEfectivoId);
 
   return (
-    <Layout
-      title="Ámbitos y Destrezas"
-      subtitle="Configura competencias y destrezas por grado"
-      showBack
-    >
+    <Layout>
       {anioActivo && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-6">
           <div className="flex items-center gap-2 text-blue-800">
             <FaCalendarAlt className="text-sm" />
-            <span className="text-sm font-medium">
-              Trabajando con año lectivo:
-            </span>
-            <span className="text-base font-bold text-blue-900">
-              {anioActivo.nombre}
-            </span>
+            <span className="text-sm font-medium">Trabajando con año lectivo:</span>
+            <span className="text-base font-bold text-blue-900">{anioActivo.nombre}</span>
           </div>
         </div>
       )}
@@ -1177,8 +899,7 @@ export default function AmbitosDestrezas() {
                 No hay año lectivo activo
               </h4>
               <p className="text-yellow-700 text-sm">
-                Debes crear y activar un año lectivo primero en el módulo de
-                Años Lectivos.
+                Debes crear y activar un año lectivo primero en el módulo de Años Lectivos.
               </p>
             </div>
           </div>
@@ -1200,15 +921,14 @@ export default function AmbitosDestrezas() {
                 No hay grados disponibles
               </h4>
               <p className="text-yellow-700 text-sm">
-                Debes crear y activar grados para el año lectivo vigente antes
-                de registrar ámbitos.
+                Debes crear y activar grados para el año lectivo vigente antes de registrar ámbitos.
               </p>
             </div>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
             {grados.map((grado) => {
-              const isSelected = selectedGradoId === grado.id;
+              const isSelected = gradoEfectivoId === grado.id;
               const ambitosCount = todosLosAmbitos.filter(
                 (a) => a.gradoId === grado.id,
               ).length;
@@ -1245,9 +965,7 @@ export default function AmbitosDestrezas() {
                             {ambitosCount} ámbito{ambitosCount !== 1 ? "s" : ""}
                           </span>
                         ) : (
-                          <span className="text-orange-600 font-medium">
-                            Sin ámbitos
-                          </span>
+                          <span className="text-orange-600 font-medium">Sin ámbitos</span>
                         )}
                       </div>
                     </div>
@@ -1272,16 +990,14 @@ export default function AmbitosDestrezas() {
             <FaArrowLeft className="text-xs" /> Ámbitos
           </button>
           <span className="text-slate-400">/</span>
-          <span className="text-slate-700 font-medium">
-            {ambitoSeleccionado.nombre}
-          </span>
+          <span className="text-slate-700 font-medium">{ambitoSeleccionado.nombre}</span>
           <span className="text-slate-400">/</span>
           <span className="text-slate-500">Destrezas</span>
         </div>
       )}
 
       {/* VISTA: LISTA DE ÁMBITOS */}
-      {currentView === "ambitos" && selectedGradoId && (
+      {currentView === "ambitos" && gradoEfectivoId && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="bg-linear-to-r from-purple-600 to-purple-700 px-5 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -1318,7 +1034,7 @@ export default function AmbitosDestrezas() {
                 disabled={isSaving}
                 className="inline-flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-all text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <FaPlus className="text-xs" />{" "}
+                <FaPlus className="text-xs" />
                 {showAmbitoForm ? "Cancelar" : "Nuevo Ámbito"}
               </button>
             </div>
@@ -1371,10 +1087,7 @@ export default function AmbitosDestrezas() {
                         type="text"
                         value={ambitoFormData.nombre}
                         onChange={(e) =>
-                          setAmbitoFormData({
-                            ...ambitoFormData,
-                            nombre: e.target.value,
-                          })
+                          setAmbitoFormData({ ...ambitoFormData, nombre: e.target.value })
                         }
                         placeholder="Ej: Comunicación Oral"
                         disabled={isSaving}
@@ -1389,12 +1102,11 @@ export default function AmbitosDestrezas() {
                       >
                         {isSaving ? (
                           <>
-                            <FaSpinner className="text-xs animate-spin" />{" "}
-                            Guardando...
+                            <FaSpinner className="text-xs animate-spin" /> Guardando...
                           </>
                         ) : (
                           <>
-                            <FaCheck className="text-xs" />{" "}
+                            <FaCheck className="text-xs" />
                             {editingAmbitoId ? "Actualizar" : "Guardar"}
                           </>
                         )}
@@ -1423,8 +1135,7 @@ export default function AmbitosDestrezas() {
                         className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-sans focus:ring-2 focus:ring-purple-500 disabled:bg-slate-100 disabled:cursor-not-allowed"
                       />
                       <p className="text-xs text-slate-500 mt-1">
-                        <FaInfoCircle className="inline mr-1" /> Escribe cada
-                        ámbito en una línea separada.
+                        <FaInfoCircle className="inline mr-1" /> Escribe cada ámbito en una línea separada.
                       </p>
                     </div>
                     <div className="flex gap-2">
@@ -1435,8 +1146,7 @@ export default function AmbitosDestrezas() {
                       >
                         {isSaving ? (
                           <>
-                            <FaSpinner className="text-xs animate-spin" />{" "}
-                            Procesando...
+                            <FaSpinner className="text-xs animate-spin" /> Procesando...
                           </>
                         ) : (
                           <>
@@ -1475,9 +1185,7 @@ export default function AmbitosDestrezas() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
-                            <h4 className="font-semibold text-slate-900">
-                              {ambito.nombre}
-                            </h4>
+                            <h4 className="font-semibold text-slate-900">{ambito.nombre}</h4>
                             <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
                               {count} destreza{count !== 1 ? "s" : ""}
                             </span>
@@ -1539,21 +1247,16 @@ export default function AmbitosDestrezas() {
               disabled={isSaving}
               className="inline-flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <FaPlus className="text-xs" />{" "}
+              <FaPlus className="text-xs" />
               {showDestrezaForm ? "Cancelar" : "Agregar Destrezas"}
             </button>
           </div>
 
           <div className="p-5">
             {showDestrezaForm && (
-              <div
-                ref={destrezaFormRef}
-                className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4"
-              >
+              <div ref={destrezaFormRef} className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">
                 <h4 className="text-sm font-semibold text-slate-800 mb-3">
-                  {editingDestrezaId
-                    ? "Editar Destreza"
-                    : "Agregar Destrezas (Masivo)"}
+                  {editingDestrezaId ? "Editar Destreza" : "Agregar Destrezas (Masivo)"}
                 </h4>
                 {validationErrors.length > 0 && (
                   <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
@@ -1597,26 +1300,20 @@ export default function AmbitosDestrezas() {
                   <div className="flex gap-2">
                     <button
                       onClick={
-                        editingDestrezaId
-                          ? guardarDestrezaIndividual
-                          : analizarYGuardarDestrezas
+                        editingDestrezaId ? guardarDestrezaIndividual : analizarYGuardarDestrezas
                       }
                       disabled={isSaving}
                       className="flex-1 inline-flex items-center justify-center gap-2 bg-teal-600 hover:bg-teal-700 text-white px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-70 disabled:cursor-not-allowed"
                     >
                       {isSaving ? (
                         <>
-                          <FaSpinner className="text-xs animate-spin" />{" "}
-                          {editingDestrezaId
-                            ? "Actualizando..."
-                            : "Procesando..."}
+                          <FaSpinner className="text-xs animate-spin" />
+                          {editingDestrezaId ? "Actualizando..." : "Procesando..."}
                         </>
                       ) : (
                         <>
-                          <FaCheck className="text-xs" />{" "}
-                          {editingDestrezaId
-                            ? "Actualizar"
-                            : "Analizar y Guardar"}
+                          <FaCheck className="text-xs" />
+                          {editingDestrezaId ? "Actualizar" : "Analizar y Guardar"}
                         </>
                       )}
                     </button>
@@ -1636,9 +1333,7 @@ export default function AmbitosDestrezas() {
               <div className="text-center py-12 text-slate-500">
                 <FaTasks className="text-4xl mx-auto mb-3 text-slate-300" />
                 <p className="font-medium mb-1">No hay destrezas registradas</p>
-                <p className="text-sm mb-3">
-                  Agrega las destrezas de este ámbito
-                </p>
+                <p className="text-sm mb-3">Agrega las destrezas de este ámbito</p>
                 <button
                   onClick={() => setShowDestrezaForm(true)}
                   disabled={isSaving}
@@ -1704,9 +1399,7 @@ export default function AmbitosDestrezas() {
             </div>
             <p className="text-slate-600 mb-4">
               Se analizaron y validaron correctamente{" "}
-              <strong className="text-purple-700">
-                {parsedAmbitos.length}
-              </strong>{" "}
+              <strong className="text-purple-700">{parsedAmbitos.length}</strong>{" "}
               ámbito(s). ¿Deseas registrarlos en el sistema?
             </p>
             <div className="bg-slate-50 rounded-lg p-3 mb-4 max-h-40 overflow-y-auto">
@@ -1724,8 +1417,7 @@ export default function AmbitosDestrezas() {
               >
                 {isSaving ? (
                   <>
-                    <FaSpinner className="text-xs animate-spin" />{" "}
-                    Registrando...
+                    <FaSpinner className="text-xs animate-spin" /> Registrando...
                   </>
                 ) : (
                   <>
@@ -1864,7 +1556,7 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
+      {/* ✅ CONTENEDOR DE TOASTS */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];

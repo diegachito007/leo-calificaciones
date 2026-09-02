@@ -14,8 +14,6 @@ import {
   FaInfoCircle
 } from 'react-icons/fa';
 
-// ==================== TIPOS PARA MODALES ====================
-
 interface Toast {
   id: string;
   type: 'success' | 'error' | 'warning' | 'info';
@@ -28,10 +26,7 @@ export default function Configuracion() {
   const [nombreDocumento, setNombreDocumento] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // ✅ NUEVO: Sistema de toasts (reemplaza alert y el estado "saved")
   const [toasts, setToasts] = useState<Toast[]>([]);
-
-  // ==================== HELPERS DE NOTIFICACIÓN ====================
 
   const mostrarToast = useCallback((
     type: Toast['type'],
@@ -51,7 +46,6 @@ export default function Configuracion() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // ✅ Cargar datos actuales del usuario
   useEffect(() => {
     if (userData) {
       startTransition(() => {
@@ -81,8 +75,6 @@ export default function Configuracion() {
       setSaving(false);
     }
   };
-
-  // ==================== CONFIG DE TOASTS ====================
 
   const toastConfig = {
     success: {
@@ -153,7 +145,7 @@ export default function Configuracion() {
               </div>
             </div>
 
-            {/* ✅ Campo único para nombre en documentos */}
+            {/* Campo único para nombre en documentos */}
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -170,31 +162,8 @@ export default function Configuracion() {
                   required
                 />
                 <p className="text-xs text-slate-500 mt-1">
-                  Escribe exactamente cómo quieres aparecer en boletines y reportes
+                  Escribe exactamente cómo quieres aparecer en boletines y reportes. Puedes incluir tu título (Lic., Mgs., Ing., etc.). Máximo 80 caracteres.
                 </p>
-              </div>
-
-              {/* Sugerencias rápidas */}
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                <p className="text-xs font-semibold text-slate-700 mb-2">
-                  💡 Ejemplos de formato:
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    'Lic. María Pérez',
-                    'Lic. María Pérez García',
-                    'Lic. Pérez García, María',
-                    'Mgs. María José Pérez García',
-                  ].map((ejemplo) => (
-                    <button
-                      key={ejemplo}
-                      onClick={() => setNombreDocumento(ejemplo)}
-                      className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all"
-                    >
-                      {ejemplo}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               {/* Preview de cómo aparecerá */}
@@ -241,29 +210,9 @@ export default function Configuracion() {
             </div>
           </div>
         </div>
-
-        {/* Información adicional */}
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <div className="flex items-start gap-3">
-            <div className="w-8 h-8 bg-yellow-100 rounded-full flex items-center justify-center shrink-0">
-              <FaExclamationTriangle className="text-yellow-600" />
-            </div>
-            <div>
-              <h4 className="font-semibold text-yellow-800 text-sm mb-1">
-                Información importante
-              </h4>
-              <ul className="text-sm text-yellow-700 space-y-1">
-                <li>• Este nombre aparecerá en todos los boletines y documentos oficiales</li>
-                <li>• Puedes incluir tu título (Lic., Mgs., Ing., etc.)</li>
-                <li>• Puedes actualizar esta información en cualquier momento</li>
-                <li>• Máximo 80 caracteres</li>
-              </ul>
-            </div>
-          </div>
-        </div>
       </div>
 
-      {/* ✅ CONTENEDOR DE TOASTS (esquina superior derecha) */}
+      {/* Contenedor de toasts */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
