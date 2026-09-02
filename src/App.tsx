@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { DataProvider } from './context/DataContext'; // ✅ NUEVO
 import type { ReactNode } from 'react';
 
 // Componentes de páginas
@@ -17,7 +18,7 @@ import Configuracion from './pages/Configuracion';
 import PendingApproval from './pages/PendingApproval';
 import MiHorario from './pages/MiHorario';
 import ReporteAsistencias from './pages/ReporteAsistencias';
-import ArchivedAccount from './pages/ArchivedAccount'; // ✅ NUEVO: Pantalla para archivados
+import ArchivedAccount from './pages/ArchivedAccount';
 
 // Formulario público y Panel de administración
 import Matricula from './pages/Matricula';
@@ -62,13 +63,14 @@ function PrivateRoute({ children }: { children: ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
-  // ✅ NUEVO: Manejo de cuentas archivadas
   if (userData.status === 'deleted') {
     return <ArchivedAccount />;
   }
 
   if (userData.status === 'active') {
-    return <>{children}</>;
+    // ✅ SOLO los usuarios activos cargan los datos maestros
+    // (grados, ámbitos, destrezas, años, períodos) UNA SOLA VEZ
+    return <DataProvider>{children}</DataProvider>;
   }
 
   return (
@@ -81,7 +83,6 @@ function PrivateRoute({ children }: { children: ReactNode }) {
   );
 }
 
-// ✅ Componente para rutas protegidas exclusivamente por rol (Super Admin)
 function AdminRoute({ children }: { children: ReactNode }) {
   const { userData } = useAuth();
 
