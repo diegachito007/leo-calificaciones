@@ -72,7 +72,7 @@ interface RefuerzoData {
   detalle: string;
   fecha: string;
   aplicadoPor: string;
-  estrategiaElegida?: EstrategiaNota; // ✅ NUEVO: estrategia usada al aplicar este refuerzo
+  estrategiaElegida?: EstrategiaNota;
 }
 
 interface ActividadData {
@@ -156,10 +156,8 @@ const ESTRATEGIAS_NOTA = [
 
 // ==================== FUNCIONES AUXILIARES ====================
 
-// ✅ Redondea a 2 decimales (ej: 8.666 → 8.67)
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
-// ✅ Convierte nota (con decimales) a letra usando rangos
 const notaALetra = (nota: number): string => {
   if (nota >= 9.5) return "A+";
   if (nota >= 8.5) return "A";
@@ -174,14 +172,12 @@ const notaALetra = (nota: number): string => {
   return "-";
 };
 
-// ✅ Calcula la nota final considerando decimales y estrategia (del refuerzo si existe)
 const calcularNotaFinal = (
   notaOriginal: number,
   refuerzo?: RefuerzoData | null,
   estrategiaDefault: EstrategiaNota = "promediar",
 ): number => {
   if (!refuerzo) return notaOriginal;
-  // La estrategia del refuerzo tiene prioridad (fue elegida al aplicarlo)
   const estrategia = refuerzo.estrategiaElegida || estrategiaDefault;
   switch (estrategia) {
     case "reemplazar":
@@ -215,6 +211,20 @@ const esGradoInicial = (gradoNombre: string): boolean => {
     n.includes("inicial 2") ||
     n.includes("preparatoria")
   );
+};
+
+// ✅ NUEVO: compara si una fecha (YYYY-MM-DD) es hoy
+const esFechaHoy = (fecha: string): boolean => {
+  if (!fecha) return false;
+  const hoy = new Date().toISOString().split("T")[0];
+  return fecha === hoy;
+};
+
+// ✅ NUEVO: compara si una fecha es anterior a hoy (ayer o antes)
+const esFechaAnteriorAHoy = (fecha: string): boolean => {
+  if (!fecha) return false;
+  const hoy = new Date().toISOString().split("T")[0];
+  return fecha < hoy;
 };
 
 // ==================== COMPONENTE ====================
@@ -298,7 +308,6 @@ export default function Calificaciones() {
   const [refuerzoEstudianteId, setRefuerzoEstudianteId] = useState<
     string | null
   >(null);
-  // ✅ Ahora incluye estrategia elegida (default = estrategia de la actividad)
   const [refuerzoForm, setRefuerzoForm] = useState({
     nota: 7,
     detalle: "",
@@ -523,7 +532,6 @@ export default function Calificaciones() {
       > = {};
       data.forEach((calificacion) => {
         calificacionesMap[calificacion.estudianteId] = {
-          // ✅ Formato a string con hasta 2 decimales
           nota:
             typeof calificacion.nota === "number"
               ? String(round2(calificacion.nota))
@@ -750,7 +758,8 @@ export default function Calificaciones() {
     }
   };
 
-  // ✅ Ahora guarda la nota como número con decimales (parseFloat + round2)
+  // ✅ NUEVA LÓGICA: bloquea nota solo si el estudiante está ausente SIN justificar
+  // Y la actividad es HOY. Si es ayer o antes → permite nota (lógica real docente).
   const guardarCalificaciones = async () => {
     if (!selectedActividadId) {
       mostrarToast(
@@ -775,6 +784,9 @@ export default function Calificaciones() {
         existentesMap.set(data.estudianteId, { id: d.id, data });
       });
 
+      const fechaActividad = actividadSeleccionada?.fecha || "";
+      const actividadEsHoy = esFechaHoy(fechaActividad);
+
       const batch = estudiantes.map(async (est) => {
         const calificacion = calificaciones[est.id];
         if (
@@ -784,7 +796,10 @@ export default function Calificaciones() {
         )
           return;
 
-        if (asistenciasDiaActividad[est.id] === "A") return;
+        // ✅ Solo bloquear nota si: ausente + actividad es HOY (mismo día)
+        // Si la actividad fue ayer o antes → permitir (recuperación/trabajo extra)
+        const estadoEseDia = asistenciasDiaActividad[est.id];
+        if (estadoEseDia === "A" && actividadEsHoy) return;
 
         const notaNum = parseFloat(calificacion.nota);
         if (isNaN(notaNum) || notaNum < 0 || notaNum > 10) return;
@@ -794,7 +809,7 @@ export default function Calificaciones() {
         const datos = {
           estudianteId: est.id,
           actividadId: selectedActividadId,
-          nota: round2(notaNum), // ✅ guardamos con 2 decimales
+          nota: round2(notaNum),
           observacion: calificacion.observacion || "",
           refuerzo: calificacion.refuerzo || null,
           updatedAt: serverTimestamp(),
@@ -843,7 +858,6 @@ export default function Calificaciones() {
     }
   };
 
-  // ✅ Ahora guarda también la estrategia elegida dentro del refuerzo
   const aplicarRefuerzo = async () => {
     if (!refuerzoEstudianteId || !selectedActividadId) return;
 
@@ -880,7 +894,7 @@ export default function Calificaciones() {
         detalle: refuerzoForm.detalle.trim(),
         fecha: refuerzoForm.fecha,
         aplicadoPor: user?.uid || "",
-        estrategiaElegida: refuerzoForm.estrategia, // ✅ se persiste la estrategia elegida
+        estrategiaElegida: refuerzoForm.estrategia,
       };
 
       await updateDoc(doc(db, "calificaciones", snap.docs[0].id), {
@@ -969,9 +983,11 @@ export default function Calificaciones() {
     }));
   };
 
-  // ✅ Permite decimales con hasta 2 dígitos (regex: 5, 5., 5.2, 5.25, 10.00)
   const actualizarCalificacion = (estudianteId: string, valor: string) => {
-    if (asistenciasDiaActividad[estudianteId] === "A") return;
+    // ✅ Bloquear edición solo si ausente + actividad HOY
+    const estadoEseDia = asistenciasDiaActividad[estudianteId];
+    const actividadEsHoy = esFechaHoy(actividadSeleccionada?.fecha || "");
+    if (estadoEseDia === "A" && actividadEsHoy) return;
 
     if (valor === "") {
       setCalificaciones((prev) => ({
@@ -981,17 +997,14 @@ export default function Calificaciones() {
       return;
     }
 
-    // Regex: entero o decimal con hasta 2 dígitos
     const regex = /^\d*(\.\d{0,2})?$/;
     if (!regex.test(valor)) return;
 
-    // Validación: no permitir > 10 cuando ya es un número completo
     if (/^\d+(\.\d+)?$/.test(valor)) {
       const num = parseFloat(valor);
       if (num > 10) return;
     }
 
-    // Longitud máxima: "10.00" = 5 caracteres
     if (valor.length > 5) return;
 
     setCalificaciones((prev) => ({
@@ -1010,12 +1023,17 @@ export default function Calificaciones() {
     }));
   };
 
-  // ✅ Aplica nota (entero o decimal) a todos
   const aplicarNotaATodos = (nota: number) => {
+    const fechaActividad = actividadSeleccionada?.fecha || "";
+    const actividadEsHoy = esFechaHoy(fechaActividad);
+
     setCalificaciones((prev) => {
       const nuevas = { ...prev };
       estudiantes.forEach((est) => {
-        if (asistenciasDiaActividad[est.id] === "A") return;
+        // ✅ No aplicar a ausentes de HOY (pero sí a ausentes de ayer o antes)
+        const estadoEseDia = asistenciasDiaActividad[est.id];
+        if (estadoEseDia === "A" && actividadEsHoy) return;
+
         nuevas[est.id] = {
           ...nuevas[est.id],
           nota: String(round2(nota)),
@@ -1330,7 +1348,11 @@ export default function Calificaciones() {
   const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  // ✅ Estrategia efectiva para cálculo en tiempo real del modal de refuerzo
+  // ✅ Fecha de la actividad: ¿es hoy o es antigua?
+  const fechaActividad = actividadSeleccionada?.fecha || "";
+  const actividadEsHoy = esFechaHoy(fechaActividad);
+  const actividadEsAntigua = esFechaAnteriorAHoy(fechaActividad);
+
   const estrategiaEfectivaRefuerzo =
     refuerzoForm.estrategia || actividadSeleccionada?.estrategiaNota || "promediar";
 
@@ -1835,11 +1857,20 @@ export default function Calificaciones() {
                                 {actividadSeleccionada.tipo}:{" "}
                                 {actividadSeleccionada.detalle}
                               </h4>
-                              <p className="text-purple-700 text-xs">
-                                Fecha: {actividadSeleccionada.fecha}
+                              <p className="text-purple-700 text-xs flex items-center gap-2 flex-wrap">
+                                <span>Fecha: {actividadSeleccionada.fecha}</span>
+                                {actividadEsHoy && (
+                                  <span className="px-1.5 py-0.5 bg-blue-200 text-blue-900 rounded text-[10px] font-bold">
+                                    HOY
+                                  </span>
+                                )}
+                                {actividadEsAntigua && (
+                                  <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded text-[10px] font-bold">
+                                    ACTIVIDAD ANTIGUA
+                                  </span>
+                                )}
                                 {!esGradoInicialActual && (
-                                  <>
-                                    {" "}
+                                  <span>
                                     | Estrategia por defecto:{" "}
                                     {
                                       ESTRATEGIAS_NOTA.find(
@@ -1848,12 +1879,37 @@ export default function Calificaciones() {
                                           actividadSeleccionada.estrategiaNota,
                                       )?.label
                                     }
-                                  </>
+                                  </span>
                                 )}
                               </p>
                             </div>
                           </div>
                         </div>
+
+                        {/* ✅ NUEVO: Info de reglas según fecha de la actividad */}
+                        {actividadSeleccionada && (
+                          <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                            <div className="flex items-start gap-2">
+                              <FaInfoCircle className="text-blue-600 mt-0.5 shrink-0" />
+                              <p className="text-xs text-blue-800">
+                                {actividadEsHoy ? (
+                                  <>
+                                    La actividad es <strong>de hoy</strong>. Los estudiantes que estén ausentes sin justificar{" "}
+                                    <strong>NO podrán recibir nota</strong> hasta que el tutor justifique su falta.
+                                  </>
+                                ) : actividadEsAntigua ? (
+                                  <>
+                                    La actividad es <strong>de un día anterior</strong>. Puedes asignar notas{" "}
+                                    <strong>aunque el estudiante esté ausente sin justificar</strong>
+                                    {" "}(recuperaciones, trabajos extra, etc.).
+                                  </>
+                                ) : (
+                                  <>Actividad programada para una fecha futura.</>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                        )}
 
                         <div className="mb-4 flex flex-wrap gap-2 items-center justify-between bg-slate-50 border border-slate-200 rounded-lg p-3">
                           <button
@@ -1913,13 +1969,21 @@ export default function Calificaciones() {
                                 : "";
                             const estadoAsistencia =
                               asistenciasDiaActividad[est.id];
-                            const ausenteEseDia = estadoAsistencia === "A";
+
+                            // ✅ NUEVA LÓGICA: ausente bloqueado SOLO si es el mismo día
+                            const esAusente = estadoAsistencia === "A";
+                            const bloqueadoPorAusenciaHoy =
+                              esAusente && actividadEsHoy;
+                            // Ausente antiguo: sí se puede poner nota (recuperación, etc.)
+                            const ausenteAntiguo =
+                              esAusente && actividadEsAntigua;
+
                             const necesitaRefuerzo =
                               !esGradoInicialActual &&
                               notaOriginal !== undefined &&
                               notaOriginal < 7 &&
                               !calificacion?.refuerzo &&
-                              !ausenteEseDia;
+                              !bloqueadoPorAusenciaHoy;
                             const esDeOtroDocente =
                               calificacion?.docenteId &&
                               calificacion.docenteId !== user?.uid;
@@ -1927,7 +1991,13 @@ export default function Calificaciones() {
                             return (
                               <div
                                 key={est.id}
-                                className="border border-slate-200 hover:border-blue-300 rounded-lg p-3 transition-colors"
+                                className={`border rounded-lg p-3 transition-colors ${
+                                  bloqueadoPorAusenciaHoy
+                                    ? "border-red-300 bg-red-50/40"
+                                    : ausenteAntiguo
+                                      ? "border-amber-300 bg-amber-50/30"
+                                      : "border-slate-200 hover:border-blue-300"
+                                }`}
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex-1 min-w-0">
@@ -1939,23 +2009,28 @@ export default function Calificaciones() {
                                         CI: {est.cedula}
                                       </div>
                                     )}
-                                    {ausenteEseDia && (
+                                    {bloqueadoPorAusenciaHoy && (
                                       <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-red-100 border border-red-300 text-red-700 rounded text-[10px] font-bold">
                                         <FaUserTimes className="text-[9px]" />
-                                        Ausente el día de la actividad (
-                                        {actividadSeleccionada.fecha})
+                                        Ausente hoy — sin nota hasta justificar
                                       </div>
                                     )}
-                                    {!ausenteEseDia &&
-                                      estadoAsistencia === "J" && (
-                                        <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-blue-100 border border-blue-300 text-blue-700 rounded text-[10px] font-bold">
-                                          <FaUserCheck className="text-[9px]" />
-                                          Justificado por tutor
-                                        </div>
-                                      )}
+                                    {ausenteAntiguo && (
+                                      <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 border border-amber-300 text-amber-800 rounded text-[10px] font-bold">
+                                        <FaUserTimes className="text-[9px]" />
+                                        Ausente el día de la actividad (
+                                        {actividadSeleccionada.fecha}) — permite nota
+                                      </div>
+                                    )}
+                                    {!esAusente && estadoAsistencia === "J" && (
+                                      <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-blue-100 border border-blue-300 text-blue-700 rounded text-[10px] font-bold">
+                                        <FaUserCheck className="text-[9px]" />
+                                        Justificado por tutor
+                                      </div>
+                                    )}
                                     {(esDeOtroDocente ||
                                       calificacion?.editadoPor) &&
-                                      !ausenteEseDia && (
+                                      !bloqueadoPorAusenciaHoy && (
                                         <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
                                           <FaUserEdit className="text-[9px]" />
                                           {esDeOtroDocente && (
@@ -1981,10 +2056,10 @@ export default function Calificaciones() {
                                       )}
                                   </div>
                                   <div className="flex items-center gap-2 shrink-0">
-                                    {ausenteEseDia ? (
+                                    {bloqueadoPorAusenciaHoy ? (
                                       <span
                                         className="px-3 py-1.5 rounded text-xs font-bold bg-red-100 border-2 border-red-300 text-red-700"
-                                        title="Estudiante ausente: no puede recibir nota"
+                                        title="Estudiante ausente hoy: no puede recibir nota hasta que el tutor justifique"
                                       >
                                         Sin nota
                                       </span>
@@ -2027,7 +2102,9 @@ export default function Calificaciones() {
                                               ? notaOriginal >= 7
                                                 ? "border-green-500 text-green-700 bg-green-50"
                                                 : "border-red-500 text-red-700 bg-red-50"
-                                              : "border-slate-300 bg-white"
+                                              : ausenteAntiguo
+                                                ? "border-amber-400 bg-amber-50"
+                                                : "border-slate-300 bg-white"
                                           }`}
                                         />
                                         {necesitaRefuerzo && (
@@ -2059,7 +2136,7 @@ export default function Calificaciones() {
                                     )}
                                   </div>
                                 </div>
-                                {calificacion?.refuerzo && !ausenteEseDia && (
+                                {calificacion?.refuerzo && !bloqueadoPorAusenciaHoy && (
                                   <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-xs">
                                     <div className="font-semibold text-orange-800 mb-1 flex items-center gap-2 flex-wrap">
                                       <span>
@@ -2091,7 +2168,7 @@ export default function Calificaciones() {
                                     </div>
                                   </div>
                                 )}
-                                {!ausenteEseDia && (
+                                {!bloqueadoPorAusenciaHoy && (
                                   <div className="mt-2">
                                     <input
                                       type="text"
@@ -2103,8 +2180,16 @@ export default function Calificaciones() {
                                         )
                                       }
                                       tabIndex={-1}
-                                      placeholder="Observación (opcional)..."
-                                      className="w-full border border-slate-300 rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500"
+                                      placeholder={
+                                        ausenteAntiguo
+                                          ? "Observación (sugerido: justificar la nota)"
+                                          : "Observación (opcional)..."
+                                      }
+                                      className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
+                                        ausenteAntiguo
+                                          ? "border-amber-300 bg-amber-50"
+                                          : "border-slate-300"
+                                      }`}
                                     />
                                   </div>
                                 )}
@@ -2494,7 +2579,7 @@ export default function Calificaciones() {
                   type="text"
                   inputMode="decimal"
                   maxLength={5}
-                  value={refuerzoForm.nota === 0 && refuerzoForm.nota === 0 ? String(refuerzoForm.nota) : String(refuerzoForm.nota)}
+                  value={String(refuerzoForm.nota)}
                   onChange={(e) => {
                     const valor = e.target.value;
                     const regex = /^\d*(\.\d{0,2})?$/;
@@ -2505,15 +2590,6 @@ export default function Calificaciones() {
                         const num = parseFloat(valor);
                         if (num <= 10) {
                           setRefuerzoForm({ ...refuerzoForm, nota: num });
-                        }
-                      } else {
-                        // Valor parcial como "5."
-                        if (valor.length <= 5) {
-                          setRefuerzoForm({
-                            ...refuerzoForm,
-                            // @ts-expect-error guardamos string parcial, pero UI lo muestra
-                            notaDisplay: valor,
-                          });
                         }
                       }
                     }
