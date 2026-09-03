@@ -4,7 +4,6 @@ import {
   query,
   orderBy,
   updateDoc,
-  deleteDoc,
   doc,
   serverTimestamp,
   getDocs,
@@ -125,7 +124,6 @@ export default function Estudiantes() {
       .map(g => g.id);
   })();
 
-  // ✅ Helpers de notificación (useCallback está bien aquí porque no dependen de valores derivados)
   const mostrarToast = useCallback((
     type: Toast['type'],
     title: string,
@@ -196,11 +194,9 @@ export default function Estudiantes() {
     setValidationErrors([]);
   };
 
-  // ✅ Cargar estudiantes cuando cambia el grado
   useEffect(() => {
     if (!ready) return;
     
-    // Si es docente sin grado seleccionado, no cargar nada (valor derivado maneja UI)
     if (userData?.role === 'docente' && !gradoEfectivoId) {
       return;
     }
@@ -239,7 +235,6 @@ export default function Estudiantes() {
     fetchEstudiantes();
   }, [gradoEfectivoId, esAdmin, userData?.role, ready]);
 
-  // ✅ Función para recargar estudiantes después de guardar/editar/eliminar
   async function recargarEstudiantes() {
     if (userData?.role === 'docente' && !gradoEfectivoId) {
       setEstudiantes([]);
@@ -377,35 +372,72 @@ export default function Estudiantes() {
     try {
       const q = query(collection(db, 'estudiantes'), where('gradoId', '==', gradoEfectivoId));
       const snap = await getDocs(q);
-      const existentes = new Set(snap.docs.map(doc => doc.data().cedula));
+      const existentes = snap.docs.map(d => ({
+        id: d.id,
+        cedula: d.data().cedula,
+        activo: d.data().activo ?? true
+      }));
+      const mapaExistentes = new Map(existentes.map(e => [e.cedula, e]));
 
-      const duplicados = students.filter(s => existentes.has(s.cedula));
-      if (duplicados.length > 0) {
-        const cedulasDuplicadas = duplicados.map(s => s.cedula).join(', ');
-        setValidationErrors([`Las siguientes cédulas/códigos ya existen en este grado: ${cedulasDuplicadas}`]);
+      // Clasificar: nuevos / a reactivar / duplicados activos (error)
+      const aCrear: EstudianteParseado[] = [];
+      const aReactivar: (EstudianteParseado & { id: string })[] = [];
+      const duplicadosActivos: string[] = [];
+
+      students.forEach(s => {
+        const existente = mapaExistentes.get(s.cedula);
+        if (!existente) {
+          aCrear.push(s);
+        } else if (existente.activo) {
+          duplicadosActivos.push(s.cedula);
+        } else {
+          aReactivar.push({ ...s, id: existente.id });
+        }
+      });
+
+      if (duplicadosActivos.length > 0) {
+        const cedulasDuplicadas = [...new Set(duplicadosActivos)].join(', ');
+        setValidationErrors([
+          `Las siguientes cédulas/códigos ya están ACTIVOS en este grado: ${cedulasDuplicadas}.`,
+          `Los estudiantes INACTIVOS con cédula coincidente se reactivarán automáticamente.`
+        ]);
         setIsSavingMassive(false);
         return;
       }
 
-      const promesas = students.map(async (est) => {
-        await addDoc(collection(db, 'estudiantes'), {
-          cedula: est.cedula,
-          apellidos: est.apellidos,
-          nombres: est.nombres,
-          gradoId: gradoEfectivoId,
-          anioLectivoId: anioActivo.id,
-          activo: true,
-          createdAt: serverTimestamp(),
-          createdBy: user?.uid
-        });
-      });
+      const promesas = [
+        ...aCrear.map(async (est) => {
+          await addDoc(collection(db, 'estudiantes'), {
+            cedula: est.cedula,
+            apellidos: est.apellidos,
+            nombres: est.nombres,
+            gradoId: gradoEfectivoId,
+            anioLectivoId: anioActivo.id,
+            activo: true,
+            createdAt: serverTimestamp(),
+            createdBy: user?.uid
+          });
+        }),
+        ...aReactivar.map(async (est) => {
+          await updateDoc(doc(db, 'estudiantes', est.id), {
+            apellidos: est.apellidos,
+            nombres: est.nombres,
+            activo: true,
+            updatedAt: serverTimestamp(),
+            updatedBy: user?.uid
+          });
+        })
+      ];
 
       await Promise.all(promesas);
-      
+
+      const detalle: string[] = [];
+      if (aCrear.length > 0) detalle.push(`${aCrear.length} nuevo${aCrear.length !== 1 ? 's' : ''}`);
+      if (aReactivar.length > 0) detalle.push(`${aReactivar.length} reactivado${aReactivar.length !== 1 ? 's' : ''}`);
       mostrarToast(
         'success',
         'Registro completado',
-        `Se registraron ${students.length} estudiante(s) correctamente.`,
+        `Procesados ${students.length} estudiante(s): ${detalle.join(', ')}.`,
         5000
       );
       setMassiveData("");
@@ -434,11 +466,15 @@ export default function Estudiantes() {
       errors.push('Los nombres son obligatorios');
     }
     if (cedula) {
-      const existeDuplicado = estudiantes.some(e =>
+      const duplicado = estudiantes.find(e =>
         e.cedula === cedula.trim() && e.id !== excludeId
       );
-      if (existeDuplicado) {
-        errors.push(`Ya existe un estudiante con la cédula/código "${cedula}"`);
+      if (duplicado) {
+        if (duplicado.activo) {
+          errors.push(`Ya existe un estudiante ACTIVO con la cédula/código "${cedula}". No se permiten duplicados activos.`);
+        } else {
+          errors.push(`Existe un estudiante INACTIVO con la cédula/código "${cedula}" (${duplicado.apellidos} ${duplicado.nombres}). Búscalo en la lista y edítalo para reactivarlo en lugar de crear uno nuevo.`);
+        }
       }
     }
     return errors;
@@ -494,29 +530,32 @@ export default function Estudiantes() {
     const estudiante = estudiantes.find(e => e.id === id);
     if (!estudiante) return;
     if (!puedeGestionarEstudiantes(estudiante.gradoId)) {
-      mostrarToast('error', 'Sin permisos', 'No tienes permisos para eliminar estudiantes de este grado.');
+      mostrarToast('error', 'Sin permisos', 'No tienes permisos para desactivar estudiantes de este grado.');
       return;
     }
     
     const confirmado = await confirmar(
-      `Eliminar a ${estudiante.apellidos} ${estudiante.nombres}`,
-      `¿Estás seguro de eliminar a este estudiante?\n\nCédula: ${estudiante.cedula || 'Sin cédula'}\nGrado: ${gradosFiltrados.find(g => g.id === estudiante.gradoId)?.nombre || 'Desconocido'}\n\nEsta acción no se puede deshacer.`,
+      `Desactivar a ${estudiante.apellidos} ${estudiante.nombres}`,
+      `¿Estás seguro de desactivar a este estudiante?\n\nCédula: ${estudiante.cedula || 'Sin cédula'}\nGrado: ${gradosFiltrados.find(g => g.id === estudiante.gradoId)?.nombre || 'Desconocido'}\n\nEl estudiante quedará inactivo y no aparecerá en registros futuros, pero su historial académico (asistencias, notas) se conservará intacto.\n\nPuedes reactivarlo más tarde desde la lista.`,
       {
-        confirmText: "Sí, eliminar",
+        confirmText: "Sí, desactivar",
         cancelText: "Cancelar",
-        confirmColor: "bg-red-600 hover:bg-red-700",
-        icon: FaTrash,
+        confirmColor: "bg-orange-600 hover:bg-orange-700",
+        icon: FaTimes,
       }
     );
     if (!confirmado) return;
     
     try {
-      await deleteDoc(doc(db, 'estudiantes', id));
-      mostrarToast('success', 'Estudiante eliminado', `"${estudiante.apellidos} ${estudiante.nombres}" fue eliminado correctamente.`);
+      await updateDoc(doc(db, 'estudiantes', id), {
+        activo: false,
+        updatedAt: serverTimestamp()
+      });
+      mostrarToast('success', 'Estudiante desactivado', `"${estudiante.apellidos} ${estudiante.nombres}" fue desactivado correctamente.`);
       await recargarEstudiantes();
     } catch (error) {
-      console.error('Error eliminando:', error);
-      mostrarToast('error', 'Error al eliminar', 'No se pudo eliminar el estudiante.');
+      console.error('Error desactivando:', error);
+      mostrarToast('error', 'Error al desactivar', 'No se pudo desactivar el estudiante.');
     }
   }
 
@@ -529,8 +568,14 @@ export default function Estudiantes() {
     }
     try {
       await updateDoc(doc(db, 'estudiantes', id), {
-        activo: !estadoActual
+        activo: !estadoActual,
+        updatedAt: serverTimestamp()
       });
+      mostrarToast(
+        'success',
+        estadoActual ? 'Estudiante desactivado' : 'Estudiante reactivado',
+        `"${estudiante.apellidos} ${estudiante.nombres}" ${estadoActual ? 'fue desactivado' : 'fue reactivado correctamente'}.`
+      );
       await recargarEstudiantes();
     } catch (error) {
       console.error('Error actualizando estado:', error);
@@ -547,7 +592,6 @@ export default function Estudiantes() {
     );
   });
 
-  // ✅ Valor derivado: estudiantes a mostrar (vacío si docente sin grado)
   const estudiantesAMostrar = (userData?.role === 'docente' && !gradoEfectivoId) ? [] : estudiantesFiltrados;
 
   const toastConfig = {
@@ -815,7 +859,7 @@ export default function Estudiantes() {
                 <p className="ml-5">• <code className="bg-slate-100 px-1 rounded">1712345678 PEREZ GARCIA JUAN</code> (sin coma)</p>
                 <p className="ml-5">• <code className="bg-slate-100 px-1 rounded">1712345678, PEREZ GARCIA JUAN</code> (con coma)</p>
                 <p className="ml-5 text-slate-400">La primera palabra/campo = cédula o código. El resto = apellidos y nombres.</p>
-                <p className="ml-5 text-amber-600 font-semibold">⚠️ Lo más importante: NO debe haber cédulas/códigos repetidos.</p>
+                <p className="ml-5 text-amber-600 font-semibold">⚠️ Importante: si una cédula ya está INACTIVA en el grado, se reactivará automáticamente.</p>
               </div>
             </div>
 
@@ -928,11 +972,18 @@ export default function Estudiantes() {
                           const puedeEditar = puedeGestionarEstudiantes(est.gradoId);
                           
                           return (
-                            <tr key={est.id} className="block md:table-row border-b md:border-b-0 border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors">
+                            <tr key={est.id} className={`block md:table-row border-b md:border-b-0 border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors ${!est.activo ? 'bg-red-50/40' : ''}`}>
                               
-                              <td className="px-5 py-4 block md:table-cell">
+                              <td className={`px-5 py-4 block md:table-cell ${!est.activo ? 'opacity-60' : ''}`}>
                                 <div className="flex flex-col">
-                                  <span className="font-semibold text-slate-900 text-sm">{est.apellidos} {est.nombres}</span>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-semibold text-slate-900 text-sm">{est.apellidos} {est.nombres}</span>
+                                    {!est.activo && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 border border-red-300 text-red-700 rounded text-[10px] font-bold">
+                                        <FaTimes className="text-[8px]" /> INACTIVO
+                                      </span>
+                                    )}
+                                  </div>
                                   {est.cedula && <span className="text-slate-500 text-xs mt-1">CI: {est.cedula}</span>}
                                   
                                   {puedeEditar && (
@@ -942,10 +993,10 @@ export default function Estudiantes() {
                                         className={`w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-semibold transition-all ${
                                           est.activo
                                             ? 'bg-green-100 text-green-700 border border-green-200'
-                                            : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                            : 'bg-orange-100 text-orange-700 border border-orange-300'
                                         }`}
                                       >
-                                        {est.activo ? <><FaCheck className="mr-2" /> Activo</> : 'Inactivo'}
+                                        {est.activo ? <><FaCheck className="mr-2" /> Activo</> : <><FaCheck className="mr-2" /> Reactivar</>}
                                       </button>
                                       <div className="flex gap-2">
                                         <button
@@ -958,7 +1009,7 @@ export default function Estudiantes() {
                                           onClick={() => handleDelete(est.id)}
                                           className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 text-sm font-medium transition-all"
                                         >
-                                          <FaTrash /> Eliminar
+                                          <FaTrash /> Desactivar
                                         </button>
                                       </div>
                                     </div>
@@ -991,11 +1042,11 @@ export default function Estudiantes() {
                                     onClick={() => handleToggleActivo(est.id, est.activo)}
                                     className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
                                       est.activo
-                                        ? 'bg-green-100 text-green-700 border border-green-200'
-                                        : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                        ? 'bg-green-100 text-green-700 border border-green-200 hover:bg-green-200'
+                                        : 'bg-orange-100 text-orange-700 border border-orange-300 hover:bg-orange-200'
                                     }`}
                                   >
-                                    {est.activo ? <><FaCheck className="mr-1 text-[10px]" /> Activo</> : 'Inactivo'}
+                                    {est.activo ? <><FaCheck className="mr-1 text-[10px]" /> Activo</> : <><FaCheck className="mr-1 text-[10px]" /> Reactivar</>}
                                   </button>
                                 </td>
                               )}
@@ -1013,7 +1064,7 @@ export default function Estudiantes() {
                                       onClick={() => handleDelete(est.id)}
                                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all bg-red-50 text-red-600 hover:bg-red-100 text-xs font-medium"
                                     >
-                                      <FaTrash /> Eliminar
+                                      <FaTrash /> Desactivar
                                     </button>
                                   </div>
                                 </td>
@@ -1030,7 +1081,7 @@ export default function Estudiantes() {
                   <div className="bg-slate-50 px-5 py-3 border-t border-slate-200">
                     <div className="flex items-center justify-between text-xs text-slate-600">
                       <span>Mostrando <strong>{estudiantesAMostrar.length}</strong> estudiante{estudiantesAMostrar.length !== 1 ? 's' : ''}{searchTerm && ` de ${estudiantes.length}`}</span>
-                      <span>{estudiantes.filter(e => e.activo).length} activo{estudiantes.filter(e => e.activo).length !== 1 ? 's' : ''}</span>
+                      <span>{estudiantes.filter(e => e.activo).length} activo{estudiantes.filter(e => e.activo).length !== 1 ? 's' : ''} · {estudiantes.filter(e => !e.activo).length} inactivo{estudiantes.filter(e => !e.activo).length !== 1 ? 's' : ''}</span>
                     </div>
                   </div>
                 )}
@@ -1050,7 +1101,7 @@ export default function Estudiantes() {
                   </p>
                   <p className="text-xs">
                     {tutorDeAnioActivo.length > 0
-                      ? 'Puedes registrar, editar y eliminar estudiantes solo en los grados donde eres tutor.'
+                      ? 'Puedes registrar, editar y desactivar estudiantes solo en los grados donde eres tutor. Los estudiantes desactivados conservan su historial académico y pueden reactivarse.'
                       : 'Como docente sin rol de tutor, solo puedes visualizar los estudiantes de tus grados asignados.'}
                   </p>
                 </div>
