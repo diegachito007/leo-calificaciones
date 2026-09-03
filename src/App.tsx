@@ -18,6 +18,7 @@ import Configuracion from './pages/Configuracion';
 import PendingApproval from './pages/PendingApproval';
 import MiHorario from './pages/MiHorario';
 import ReporteAsistencias from './pages/ReporteAsistencias';
+import ReporteNotas from './pages/ReporteNotas'; // ✅ NUEVO
 import ArchivedAccount from './pages/ArchivedAccount';
 
 // Formulario público y Panel de administración
@@ -113,6 +114,7 @@ function AppRoutes() {
       <Route path="/mi-horario" element={<PrivateRoute><MiHorario /></PrivateRoute>} />
       <Route path="/calificaciones" element={<PrivateRoute><Calificaciones /></PrivateRoute>} />
       <Route path="/reporte-asistencias" element={<PrivateRoute><ReporteAsistencias /></PrivateRoute>} />
+      <Route path="/reporte-notas" element={<PrivateRoute><ReporteNotas /></PrivateRoute>} /> {/* ✅ NUEVO */}
       <Route path="/reportes" element={<PrivateRoute><Reportes /></PrivateRoute>} />
 
       {/* Perfil personal */}

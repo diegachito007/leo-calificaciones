@@ -21,7 +21,8 @@ import {
   FaChevronDown,
   FaUserGraduate,
   FaChalkboardTeacher,
-  FaClipboardCheck, // ✅ NUEVO: Ícono para Reporte de Asistencias
+  FaClipboardCheck,
+  FaExclamationTriangle, // ✅ NUEVO: Ícono para Reporte de Notas
 } from "react-icons/fa";
 
 interface InstitutionData {
@@ -46,6 +47,7 @@ export default function Dashboard() {
     ambitos: 0,
     calificaciones: 0,
     solicitudesPendientes: 0,
+    estudiantesEnRiesgo: 0, // ✅ NUEVO
   });
   const [institutionData, setInstitutionData] = useState<InstitutionData | null>(null);
   const [loadingInstitution, setLoadingInstitution] = useState(true);
@@ -156,6 +158,39 @@ export default function Dashboard() {
       }
       const calificacionesSnap = await getDocs(calificacionesQuery);
 
+      // ✅ NUEVO: contar estudiantes únicos con notas < 7 (en riesgo)
+      const estudiantesEnRiesgoSet = new Set<string>();
+      try {
+        const idsEstudiantes = estudiantesSnap.docs.map(d => d.id);
+        if (idsEstudiantes.length > 0 && idsEstudiantes.length <= 30) {
+          const notasBajasQuery = query(
+            collection(db, "calificaciones"),
+            where("estudianteId", "in", idsEstudiantes),
+            where("nota", "<=", 6)
+          );
+          const notasBajasSnap = await getDocs(notasBajasQuery);
+          notasBajasSnap.docs.forEach(d => {
+            estudiantesEnRiesgoSet.add(d.data().estudianteId);
+          });
+        } else if (idsEstudiantes.length > 30) {
+          // Dividir en lotes de 30 (límite de 'in' en Firestore)
+          for (let i = 0; i < idsEstudiantes.length; i += 30) {
+            const lote = idsEstudiantes.slice(i, i + 30);
+            const loteQuery = query(
+              collection(db, "calificaciones"),
+              where("estudianteId", "in", lote),
+              where("nota", "<=", 6)
+            );
+            const loteSnap = await getDocs(loteQuery);
+            loteSnap.docs.forEach(d => {
+              estudiantesEnRiesgoSet.add(d.data().estudianteId);
+            });
+          }
+        }
+      } catch (error) {
+        console.error("Error contando estudiantes en riesgo:", error);
+      }
+
       const solicitudesSnap = await getDocs(
         query(collection(db, "solicitudesMatriculas"), where("estado", "==", "pendiente"))
       );
@@ -168,6 +203,7 @@ export default function Dashboard() {
           ambitos: ambitosSnap.size,
           calificaciones: calificacionesSnap.size,
           solicitudesPendientes: solicitudesSnap.size,
+          estudiantesEnRiesgo: estudiantesEnRiesgoSet.size, // ✅ NUEVO
         });
       });
     } catch (error) {
@@ -271,7 +307,6 @@ export default function Dashboard() {
       badge: "NIVEL 4",
       roles: ["super_admin", "docente"],
     },
-    // ✅ NUEVO: Reporte de Asistencias
     {
       path: "/reporte-asistencias",
       name: "Reporte Asistencias",
@@ -279,6 +314,17 @@ export default function Dashboard() {
       color: "from-rose-500 to-rose-600",
       desc: "Control semanal de asistencia por grado y materia",
       stats: "Semanal",
+      badge: "TUTOR/DOCENTE",
+      roles: ["super_admin", "docente"],
+    },
+    // ✅ NUEVO: Reporte de Notas (estudiantes en riesgo académico)
+    {
+      path: "/reporte-notas",
+      name: "Reporte Notas",
+      icon: FaExclamationTriangle,
+      color: "from-amber-500 to-amber-600",
+      desc: "Estudiantes con notas menores a 7 en riesgo académico",
+      stats: `${stats.estudiantesEnRiesgo} en riesgo`,
       badge: "TUTOR/DOCENTE",
       roles: ["super_admin", "docente"],
     },
