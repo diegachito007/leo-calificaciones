@@ -65,11 +65,14 @@ interface AsistenciaData {
   updatedAt?: Timestamp | Date;
 }
 
+type EstrategiaNota = "reemplazar" | "promediar" | "maxima";
+
 interface RefuerzoData {
   nota: number;
   detalle: string;
   fecha: string;
   aplicadoPor: string;
+  estrategiaElegida?: EstrategiaNota; // ✅ NUEVO: estrategia usada al aplicar este refuerzo
 }
 
 interface ActividadData {
@@ -83,7 +86,7 @@ interface ActividadData {
   anioLectivoId: string;
   periodoId: string;
   docenteId: string;
-  estrategiaNota: "reemplazar" | "promediar" | "maxima";
+  estrategiaNota: EstrategiaNota;
   createdAt?: Timestamp | Date;
   updatedAt?: Timestamp | Date;
 }
@@ -153,26 +156,33 @@ const ESTRATEGIAS_NOTA = [
 
 // ==================== FUNCIONES AUXILIARES ====================
 
+// ✅ Redondea a 2 decimales (ej: 8.666 → 8.67)
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+// ✅ Convierte nota (con decimales) a letra usando rangos
 const notaALetra = (nota: number): string => {
-  if (nota >= 10) return "A+";
-  if (nota === 9) return "A";
-  if (nota === 8) return "B+";
-  if (nota === 7) return "B";
-  if (nota === 6) return "C+";
-  if (nota === 5) return "C";
-  if (nota === 4) return "D+";
-  if (nota === 3) return "D";
-  if (nota === 2) return "E+";
-  if (nota === 1) return "E";
+  if (nota >= 9.5) return "A+";
+  if (nota >= 8.5) return "A";
+  if (nota >= 7.5) return "B+";
+  if (nota >= 6.5) return "B";
+  if (nota >= 5.5) return "C+";
+  if (nota >= 4.5) return "C";
+  if (nota >= 3.5) return "D+";
+  if (nota >= 2.5) return "D";
+  if (nota >= 1.5) return "E+";
+  if (nota >= 0.5) return "E";
   return "-";
 };
 
+// ✅ Calcula la nota final considerando decimales y estrategia (del refuerzo si existe)
 const calcularNotaFinal = (
   notaOriginal: number,
   refuerzo?: RefuerzoData | null,
-  estrategia: string = "promediar",
+  estrategiaDefault: EstrategiaNota = "promediar",
 ): number => {
   if (!refuerzo) return notaOriginal;
+  // La estrategia del refuerzo tiene prioridad (fue elegida al aplicarlo)
+  const estrategia = refuerzo.estrategiaElegida || estrategiaDefault;
   switch (estrategia) {
     case "reemplazar":
       return refuerzo.nota;
@@ -180,7 +190,7 @@ const calcularNotaFinal = (
       return Math.max(notaOriginal, refuerzo.nota);
     case "promediar":
     default:
-      return Math.round((notaOriginal + refuerzo.nota) / 2);
+      return round2((notaOriginal + refuerzo.nota) / 2);
   }
 };
 
@@ -281,20 +291,21 @@ export default function Calificaciones() {
     tipo: "Tarea",
     detalle: "",
     fecha: new Date().toISOString().split("T")[0],
-    estrategiaNota: "promediar" as "reemplazar" | "promediar" | "maxima",
+    estrategiaNota: "promediar" as EstrategiaNota,
   });
 
   const [showRefuerzoModal, setShowRefuerzoModal] = useState(false);
   const [refuerzoEstudianteId, setRefuerzoEstudianteId] = useState<
     string | null
   >(null);
+  // ✅ Ahora incluye estrategia elegida (default = estrategia de la actividad)
   const [refuerzoForm, setRefuerzoForm] = useState({
     nota: 7,
     detalle: "",
     fecha: new Date().toISOString().split("T")[0],
+    estrategia: "promediar" as EstrategiaNota,
   });
 
-  // ✅ Refs para los inputs de nota (permite Tab/Enter saltando observación)
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -512,7 +523,11 @@ export default function Calificaciones() {
       > = {};
       data.forEach((calificacion) => {
         calificacionesMap[calificacion.estudianteId] = {
-          nota: String(calificacion.nota),
+          // ✅ Formato a string con hasta 2 decimales
+          nota:
+            typeof calificacion.nota === "number"
+              ? String(round2(calificacion.nota))
+              : String(calificacion.nota ?? ""),
           observacion: calificacion.observacion || "",
           refuerzo: calificacion.refuerzo || null,
           docenteId: calificacion.docenteId,
@@ -526,7 +541,6 @@ export default function Calificaciones() {
     }
   }, []);
 
-  // ✅ OPTIMIZADO: 1 sola lectura para detectar existentes (antes: 1 por estudiante)
   const guardarAsistencia = async () => {
     if (!esGradoInicialActual && !materiaSeleccionadaEfectiva) {
       mostrarToast(
@@ -545,7 +559,6 @@ export default function Calificaciones() {
         ? "general"
         : materiaSeleccionadaEfectiva;
 
-      // 1 consulta única: todas las asistencias del grado+fecha+materia
       const existentesSnap = await getDocs(
         query(
           collection(db, "asistencias"),
@@ -566,7 +579,6 @@ export default function Calificaciones() {
 
         const existente = existentesMap.get(est.id);
 
-        // No sobrescribir ausencias justificadas por el tutor
         if (existente?.data.justificadoPor && existente.data.estado === "J")
           return;
 
@@ -738,7 +750,7 @@ export default function Calificaciones() {
     }
   };
 
-  // ✅ OPTIMIZADO: 1 sola lectura por actividad (antes: 1 por estudiante)
+  // ✅ Ahora guarda la nota como número con decimales (parseFloat + round2)
   const guardarCalificaciones = async () => {
     if (!selectedActividadId) {
       mostrarToast(
@@ -751,7 +763,6 @@ export default function Calificaciones() {
 
     setIsSaving(true);
     try {
-      // 1 consulta única: todas las calificaciones de la actividad
       const existentesSnap = await getDocs(
         query(
           collection(db, "calificaciones"),
@@ -775,15 +786,15 @@ export default function Calificaciones() {
 
         if (asistenciasDiaActividad[est.id] === "A") return;
 
-        const notaNum = parseInt(calificacion.nota);
-        if (isNaN(notaNum) || notaNum < 1 || notaNum > 10) return;
+        const notaNum = parseFloat(calificacion.nota);
+        if (isNaN(notaNum) || notaNum < 0 || notaNum > 10) return;
 
         const existente = existentesMap.get(est.id);
 
         const datos = {
           estudianteId: est.id,
           actividadId: selectedActividadId,
-          nota: Math.round(notaNum),
+          nota: round2(notaNum), // ✅ guardamos con 2 decimales
           observacion: calificacion.observacion || "",
           refuerzo: calificacion.refuerzo || null,
           updatedAt: serverTimestamp(),
@@ -832,6 +843,7 @@ export default function Calificaciones() {
     }
   };
 
+  // ✅ Ahora guarda también la estrategia elegida dentro del refuerzo
   const aplicarRefuerzo = async () => {
     if (!refuerzoEstudianteId || !selectedActividadId) return;
 
@@ -864,10 +876,11 @@ export default function Calificaciones() {
       }
 
       const refuerzoData: RefuerzoData = {
-        nota: refuerzoForm.nota,
+        nota: round2(refuerzoForm.nota),
         detalle: refuerzoForm.detalle.trim(),
         fecha: refuerzoForm.fecha,
         aplicadoPor: user?.uid || "",
+        estrategiaElegida: refuerzoForm.estrategia, // ✅ se persiste la estrategia elegida
       };
 
       await updateDoc(doc(db, "calificaciones", snap.docs[0].id), {
@@ -882,11 +895,6 @@ export default function Calificaciones() {
       );
       setShowRefuerzoModal(false);
       setRefuerzoEstudianteId(null);
-      setRefuerzoForm({
-        nota: 7,
-        detalle: "",
-        fecha: new Date().toISOString().split("T")[0],
-      });
       await cargarCalificaciones(selectedActividadId);
     } catch (error) {
       console.error("Error aplicando refuerzo:", error);
@@ -961,6 +969,7 @@ export default function Calificaciones() {
     }));
   };
 
+  // ✅ Permite decimales con hasta 2 dígitos (regex: 5, 5., 5.2, 5.25, 10.00)
   const actualizarCalificacion = (estudianteId: string, valor: string) => {
     if (asistenciasDiaActividad[estudianteId] === "A") return;
 
@@ -971,10 +980,19 @@ export default function Calificaciones() {
       }));
       return;
     }
-    if (!/^\d+$/.test(valor)) return;
-    if (valor.length > 2) return;
-    const num = parseInt(valor);
-    if (num > 10) return;
+
+    // Regex: entero o decimal con hasta 2 dígitos
+    const regex = /^\d*(\.\d{0,2})?$/;
+    if (!regex.test(valor)) return;
+
+    // Validación: no permitir > 10 cuando ya es un número completo
+    if (/^\d+(\.\d+)?$/.test(valor)) {
+      const num = parseFloat(valor);
+      if (num > 10) return;
+    }
+
+    // Longitud máxima: "10.00" = 5 caracteres
+    if (valor.length > 5) return;
 
     setCalificaciones((prev) => ({
       ...prev,
@@ -992,6 +1010,7 @@ export default function Calificaciones() {
     }));
   };
 
+  // ✅ Aplica nota (entero o decimal) a todos
   const aplicarNotaATodos = (nota: number) => {
     setCalificaciones((prev) => {
       const nuevas = { ...prev };
@@ -999,7 +1018,7 @@ export default function Calificaciones() {
         if (asistenciasDiaActividad[est.id] === "A") return;
         nuevas[est.id] = {
           ...nuevas[est.id],
-          nota: String(nota),
+          nota: String(round2(nota)),
           observacion: nuevas[est.id]?.observacion || "",
         };
       });
@@ -1007,7 +1026,6 @@ export default function Calificaciones() {
     });
   };
 
-  // ✅ Simplificado: solo enfocar y scrollear el input de nota del índice dado
   const enfocarNota = (index: number) => {
     setTimeout(() => {
       const el = notaInputRefs.current[index];
@@ -1019,7 +1037,6 @@ export default function Calificaciones() {
     }, 50);
   };
 
-  // ✅ Enter/Tab salta al siguiente input de nota (saltando observación)
   const handleNotaKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
     index: number,
@@ -1119,7 +1136,10 @@ export default function Calificaciones() {
         > = {};
         data.forEach((calificacion) => {
           calificacionesMap[calificacion.estudianteId] = {
-            nota: String(calificacion.nota),
+            nota:
+              typeof calificacion.nota === "number"
+                ? String(round2(calificacion.nota))
+                : String(calificacion.nota ?? ""),
             observacion: calificacion.observacion || "",
             refuerzo: calificacion.refuerzo || null,
             docenteId: calificacion.docenteId,
@@ -1309,6 +1329,10 @@ export default function Calificaciones() {
   );
   const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
+
+  // ✅ Estrategia efectiva para cálculo en tiempo real del modal de refuerzo
+  const estrategiaEfectivaRefuerzo =
+    refuerzoForm.estrategia || actividadSeleccionada?.estrategiaNota || "promediar";
 
   return (
     <Layout>
@@ -1816,7 +1840,7 @@ export default function Calificaciones() {
                                 {!esGradoInicialActual && (
                                   <>
                                     {" "}
-                                    | Estrategia:{" "}
+                                    | Estrategia por defecto:{" "}
                                     {
                                       ESTRATEGIAS_NOTA.find(
                                         (e) =>
@@ -1849,11 +1873,11 @@ export default function Calificaciones() {
                             <span className="text-xs text-slate-600 font-medium mr-1">
                               Aplicar a todos:
                             </span>
-                            {[7, 8, 9, 10].map((nota) => (
+                            {[7, 7.5, 8, 8.5, 9, 9.5, 10].map((nota) => (
                               <button
                                 key={nota}
                                 onClick={() => aplicarNotaATodos(nota)}
-                                className="w-9 h-9 rounded-lg bg-green-100 hover:bg-green-200 text-green-800 text-sm font-bold transition-all border border-green-300"
+                                className="h-9 px-2.5 rounded-lg bg-green-100 hover:bg-green-200 text-green-800 text-xs font-bold transition-all border border-green-300"
                                 title={`Aplicar nota ${nota} a todos los estudiantes presentes`}
                               >
                                 {nota}
@@ -1869,12 +1893,11 @@ export default function Calificaciones() {
                           </div>
                         </div>
 
-                        {/* ✅ LISTA COMPLETA (sin carrusel móvil) */}
                         <div className="space-y-2">
                           {estudiantes.map((est, index) => {
                             const calificacion = calificaciones[est.id];
                             const notaStr = calificacion?.nota || "";
-                            const notaNum = parseInt(notaStr);
+                            const notaNum = parseFloat(notaStr);
                             const notaOriginal = !isNaN(notaNum)
                               ? notaNum
                               : undefined;
@@ -1983,9 +2006,8 @@ export default function Calificaciones() {
                                             notaInputRefs.current[index] = el;
                                           }}
                                           type="text"
-                                          inputMode="numeric"
-                                          pattern="[0-9]*"
-                                          maxLength={2}
+                                          inputMode="decimal"
+                                          maxLength={5}
                                           value={notaStr}
                                           onChange={(e) =>
                                             actualizarCalificacion(
@@ -1999,8 +2021,8 @@ export default function Calificaciones() {
                                           onFocus={(e) => {
                                             e.target.select();
                                           }}
-                                          placeholder="1-10"
-                                          className={`w-16 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${
+                                          placeholder="0-10"
+                                          className={`w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${
                                             notaOriginal !== undefined
                                               ? notaOriginal >= 7
                                                 ? "border-green-500 text-green-700 bg-green-50"
@@ -2018,6 +2040,9 @@ export default function Calificaciones() {
                                                 fecha: new Date()
                                                   .toISOString()
                                                   .split("T")[0],
+                                                estrategia:
+                                                  actividadSeleccionada?.estrategiaNota ||
+                                                  "promediar",
                                               });
                                               setShowRefuerzoModal(true);
                                             }}
@@ -2036,14 +2061,30 @@ export default function Calificaciones() {
                                 </div>
                                 {calificacion?.refuerzo && !ausenteEseDia && (
                                   <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-xs">
-                                    <div className="font-semibold text-orange-800 mb-1">
-                                      Refuerzo aplicado (
-                                      {calificacion.refuerzo.fecha}):
+                                    <div className="font-semibold text-orange-800 mb-1 flex items-center gap-2 flex-wrap">
+                                      <span>
+                                        Refuerzo aplicado (
+                                        {calificacion.refuerzo.fecha}):
+                                      </span>
+                                      <span className="text-[10px] px-1.5 py-0.5 bg-orange-200 rounded text-orange-900 font-bold">
+                                        {ESTRATEGIAS_NOTA.find(
+                                          (e) =>
+                                            e.value ===
+                                            (calificacion.refuerzo
+                                              ?.estrategiaElegida ||
+                                              actividadSeleccionada
+                                                ?.estrategiaNota ||
+                                              "promediar"),
+                                        )?.label.split(" ")[0] || "Estrategia"}
+                                      </span>
                                     </div>
                                     <div className="text-orange-700">
-                                      Nota de refuerzo:{" "}
-                                      {calificacion.refuerzo.nota} | Nota final:{" "}
-                                      {notaFinal}
+                                      Nota refuerzo:{" "}
+                                      <strong>
+                                        {round2(calificacion.refuerzo.nota)}
+                                      </strong>{" "}
+                                      | Nota final:{" "}
+                                      <strong>{round2(notaFinal)}</strong>
                                     </div>
                                     <div className="text-orange-600 mt-1">
                                       {calificacion.refuerzo.detalle}
@@ -2061,7 +2102,6 @@ export default function Calificaciones() {
                                           e.target.value,
                                         )
                                       }
-                                      // ✅ tabIndex={-1}: Tab/Enter saltan este campo
                                       tabIndex={-1}
                                       placeholder="Observación (opcional)..."
                                       className="w-full border border-slate-300 rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500"
@@ -2360,17 +2400,14 @@ export default function Calificaciones() {
               {!esGradoInicialActual && (
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
-                    Estrategia de Cálculo con Refuerzo
+                    Estrategia por defecto con Refuerzo
                   </label>
                   <select
                     value={actividadForm.estrategiaNota}
                     onChange={(e) =>
                       setActividadForm({
                         ...actividadForm,
-                        estrategiaNota: e.target.value as
-                          | "reemplazar"
-                          | "promediar"
-                          | "maxima",
+                        estrategiaNota: e.target.value as EstrategiaNota,
                       })
                     }
                     className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
@@ -2381,6 +2418,9 @@ export default function Calificaciones() {
                       </option>
                     ))}
                   </select>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Esta es la estrategia por defecto. Al aplicar refuerzo podrás cambiarla por estudiante.
+                  </p>
                 </div>
               )}
             </div>
@@ -2410,7 +2450,7 @@ export default function Calificaciones() {
 
       {showRefuerzoModal && refuerzoEstudianteId && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-slate-900">
                 Aplicar Refuerzo
@@ -2438,29 +2478,71 @@ export default function Calificaciones() {
                 }
               </p>
               <p className="text-xs text-orange-700">
-                Nota original: {calificaciones[refuerzoEstudianteId]?.nota}
+                Nota original:{" "}
+                <strong>
+                  {calificaciones[refuerzoEstudianteId]?.nota || "—"}
+                </strong>
               </p>
             </div>
 
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Nota de Refuerzo *
+                  Nota de Refuerzo * <span className="text-xs text-slate-500 font-normal">(0 - 10, permite decimales)</span>
                 </label>
                 <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  step="1"
-                  value={refuerzoForm.nota}
+                  type="text"
+                  inputMode="decimal"
+                  maxLength={5}
+                  value={refuerzoForm.nota === 0 && refuerzoForm.nota === 0 ? String(refuerzoForm.nota) : String(refuerzoForm.nota)}
+                  onChange={(e) => {
+                    const valor = e.target.value;
+                    const regex = /^\d*(\.\d{0,2})?$/;
+                    if (valor === "" || regex.test(valor)) {
+                      if (valor === "") {
+                        setRefuerzoForm({ ...refuerzoForm, nota: 0 });
+                      } else if (/^\d+(\.\d+)?$/.test(valor)) {
+                        const num = parseFloat(valor);
+                        if (num <= 10) {
+                          setRefuerzoForm({ ...refuerzoForm, nota: num });
+                        }
+                      } else {
+                        // Valor parcial como "5."
+                        if (valor.length <= 5) {
+                          setRefuerzoForm({
+                            ...refuerzoForm,
+                            // @ts-expect-error guardamos string parcial, pero UI lo muestra
+                            notaDisplay: valor,
+                          });
+                        }
+                      }
+                    }
+                  }}
+                  placeholder="Ej: 8.5"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Estrategia de cálculo * <span className="text-xs text-slate-500 font-normal">(puedes cambiarla aquí)</span>
+                </label>
+                <select
+                  value={refuerzoForm.estrategia}
                   onChange={(e) =>
                     setRefuerzoForm({
                       ...refuerzoForm,
-                      nota: parseInt(e.target.value) || 1,
+                      estrategia: e.target.value as EstrategiaNota,
                     })
                   }
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
-                />
+                >
+                  {ESTRATEGIAS_NOTA.map((estrategia) => (
+                    <option key={estrategia.value} value={estrategia.value}>
+                      {estrategia.label}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -2497,28 +2579,39 @@ export default function Calificaciones() {
 
               {actividadSeleccionada && (
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
-                  <p className="font-semibold mb-1">Estrategia de cálculo:</p>
-                  <p>
+                  <p className="font-semibold mb-1">Estrategia aplicada:</p>
+                  <p className="mb-2">
                     {
                       ESTRATEGIAS_NOTA.find(
-                        (e) => e.value === actividadSeleccionada.estrategiaNota,
+                        (e) => e.value === estrategiaEfectivaRefuerzo,
                       )?.label
                     }
                   </p>
-                  <p className="mt-2">
+                  <p>
+                    Nota original:{" "}
+                    <strong>
+                      {calificaciones[refuerzoEstudianteId]?.nota || "0"}
+                    </strong>
+                    {" + "}
+                    Refuerzo: <strong>{refuerzoForm.nota}</strong>
+                  </p>
+                  <p className="mt-2 text-sm">
                     Nota final estimada:{" "}
-                    <span className="font-bold">
-                      {calcularNotaFinal(
-                        parseInt(
-                          calificaciones[refuerzoEstudianteId]?.nota || "0",
-                        ) || 0,
-                        {
-                          nota: refuerzoForm.nota,
-                          detalle: "",
-                          fecha: "",
-                          aplicadoPor: "",
-                        },
-                        actividadSeleccionada.estrategiaNota,
+                    <span className="font-bold text-base">
+                      {round2(
+                        calcularNotaFinal(
+                          parseFloat(
+                            calificaciones[refuerzoEstudianteId]?.nota || "0",
+                          ) || 0,
+                          {
+                            nota: refuerzoForm.nota || 0,
+                            detalle: "",
+                            fecha: "",
+                            aplicadoPor: "",
+                            estrategiaElegida: refuerzoForm.estrategia,
+                          },
+                          actividadSeleccionada.estrategiaNota,
+                        ),
                       )}
                     </span>
                   </p>
@@ -2529,7 +2622,7 @@ export default function Calificaciones() {
             <div className="flex gap-2 mt-6">
               <button
                 onClick={aplicarRefuerzo}
-                disabled={isSaving}
+                disabled={isSaving || refuerzoForm.nota <= 0 || refuerzoForm.nota > 10}
                 className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
                 {isSaving ? (
