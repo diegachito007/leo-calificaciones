@@ -526,6 +526,7 @@ export default function Calificaciones() {
     }
   }, []);
 
+  // ✅ OPTIMIZADO: 1 sola lectura para detectar existentes (antes: 1 por estudiante)
   const guardarAsistencia = async () => {
     if (!esGradoInicialActual && !materiaSeleccionadaEfectiva) {
       mostrarToast(
@@ -544,25 +545,30 @@ export default function Calificaciones() {
         ? "general"
         : materiaSeleccionadaEfectiva;
 
+      // 1 consulta única: todas las asistencias del grado+fecha+materia
+      const existentesSnap = await getDocs(
+        query(
+          collection(db, "asistencias"),
+          where("gradoId", "==", gradoEfectivoId),
+          where("fecha", "==", fechaAsistencia),
+          where("ambitoId", "==", ambitoIdParaGuardar),
+        ),
+      );
+      const existentesMap = new Map<string, { id: string; data: AsistenciaData }>();
+      existentesSnap.docs.forEach((d) => {
+        const data = d.data() as AsistenciaData;
+        existentesMap.set(data.estudianteId, { id: d.id, data });
+      });
+
       const batch = estudiantes.map(async (est) => {
         const asistencia = asistencias[est.id];
         if (!asistencia || !asistencia.estado) return;
 
-        const asistenciaOriginal = asistencias[est.id];
-        if (
-          asistenciaOriginal.justificadoPor &&
-          asistenciaOriginal.estado === "J"
-        ) {
-          return;
-        }
+        const existente = existentesMap.get(est.id);
 
-        const q = query(
-          collection(db, "asistencias"),
-          where("estudianteId", "==", est.id),
-          where("fecha", "==", fechaAsistencia),
-          where("ambitoId", "==", ambitoIdParaGuardar),
-        );
-        const snap = await getDocs(q);
+        // No sobrescribir ausencias justificadas por el tutor
+        if (existente?.data.justificadoPor && existente.data.estado === "J")
+          return;
 
         const datos = {
           estudianteId: est.id,
@@ -576,27 +582,24 @@ export default function Calificaciones() {
           updatedAt: serverTimestamp(),
         };
 
-        if (snap.empty) {
+        if (!existente) {
           await addDoc(collection(db, "asistencias"), {
             ...datos,
             registradoPor: user?.uid || "",
             createdAt: serverTimestamp(),
           });
         } else {
-          const existente = snap.docs[0].data() as AsistenciaData;
-          if (existente.justificadoPor && existente.estado === "J") return;
-
           const auditoria: Record<string, unknown> = {};
           if (
-            existente.registradoPor &&
-            existente.registradoPor !== user?.uid
+            existente.data.registradoPor &&
+            existente.data.registradoPor !== user?.uid
           ) {
             auditoria.editadoPor = user?.uid || "";
             auditoria.editadoEl = serverTimestamp();
-            if (!existente.estadoOriginal)
-              auditoria.estadoOriginal = existente.estado;
+            if (!existente.data.estadoOriginal)
+              auditoria.estadoOriginal = existente.data.estado;
           }
-          await updateDoc(doc(db, "asistencias", snap.docs[0].id), {
+          await updateDoc(doc(db, "asistencias", existente.id), {
             ...datos,
             ...auditoria,
           });
@@ -735,6 +738,7 @@ export default function Calificaciones() {
     }
   };
 
+  // ✅ OPTIMIZADO: 1 sola lectura por actividad (antes: 1 por estudiante)
   const guardarCalificaciones = async () => {
     if (!selectedActividadId) {
       mostrarToast(
@@ -747,6 +751,19 @@ export default function Calificaciones() {
 
     setIsSaving(true);
     try {
+      // 1 consulta única: todas las calificaciones de la actividad
+      const existentesSnap = await getDocs(
+        query(
+          collection(db, "calificaciones"),
+          where("actividadId", "==", selectedActividadId),
+        ),
+      );
+      const existentesMap = new Map<string, { id: string; data: CalificacionData }>();
+      existentesSnap.docs.forEach((d) => {
+        const data = d.data() as CalificacionData;
+        existentesMap.set(data.estudianteId, { id: d.id, data });
+      });
+
       const batch = estudiantes.map(async (est) => {
         const calificacion = calificaciones[est.id];
         if (
@@ -761,12 +778,7 @@ export default function Calificaciones() {
         const notaNum = parseInt(calificacion.nota);
         if (isNaN(notaNum) || notaNum < 1 || notaNum > 10) return;
 
-        const q = query(
-          collection(db, "calificaciones"),
-          where("estudianteId", "==", est.id),
-          where("actividadId", "==", selectedActividadId),
-        );
-        const snap = await getDocs(q);
+        const existente = existentesMap.get(est.id);
 
         const datos = {
           estudianteId: est.id,
@@ -777,22 +789,24 @@ export default function Calificaciones() {
           updatedAt: serverTimestamp(),
         };
 
-        if (snap.empty) {
+        if (!existente) {
           await addDoc(collection(db, "calificaciones"), {
             ...datos,
             docenteId: user?.uid || "",
             createdAt: serverTimestamp(),
           });
         } else {
-          const existente = snap.docs[0].data() as CalificacionData;
           const auditoria: Record<string, unknown> = {};
-          if (existente.docenteId && existente.docenteId !== user?.uid) {
+          if (
+            existente.data.docenteId &&
+            existente.data.docenteId !== user?.uid
+          ) {
             auditoria.editadoPor = user?.uid || "";
             auditoria.editadoEl = serverTimestamp();
-            if (existente.notaOriginal === undefined)
-              auditoria.notaOriginal = existente.nota;
+            if (existente.data.notaOriginal === undefined)
+              auditoria.notaOriginal = existente.data.nota;
           }
-          await updateDoc(doc(db, "calificaciones", snap.docs[0].id), {
+          await updateDoc(doc(db, "calificaciones", existente.id), {
             ...datos,
             ...auditoria,
           });
