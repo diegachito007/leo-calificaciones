@@ -101,12 +101,36 @@ export default function ReporteNotas() {
     return anioGrados.filter((g) => idsSet.has(g.id));
   }, [grados, anioActivo, asignaturasDocente, userData, esAdmin]);
 
-  // ✅ Materias únicas del docente (para el filtro)
+  // ✅ Materias disponibles RELACIONADAS con el grado filtrado
   const materiasDisponibles = useMemo(() => {
     if (esAdmin) return [];
+
+    // Grado específico: solo las materias de ese grado
+    if (filtroGrado !== "todos" && filtroGrado !== "tutor") {
+      const esTutorDelGrado = (userData?.tutorDe || []).includes(filtroGrado);
+      if (esTutorDelGrado) {
+        // Tutor del grado: todas las destrezas del grado
+        return destrezas.filter((d) => d.gradoId === filtroGrado);
+      }
+      // Docente: solo las materias que dicta en ese grado
+      const destrezaIds = new Set(
+        asignaturasDocente
+          .filter((a) => a.gradoId === filtroGrado)
+          .map((a) => a.destrezaId),
+      );
+      return destrezas.filter((d) => destrezaIds.has(d.id));
+    }
+
+    // "tutor": materias de todos los grados que tutora
+    if (filtroGrado === "tutor") {
+      const tutorGrados = new Set(userData?.tutorDe || []);
+      return destrezas.filter((d) => tutorGrados.has(d.gradoId));
+    }
+
+    // "todos": todas las materias que dicta
     const destrezaIds = new Set(asignaturasDocente.map((a) => a.destrezaId));
     return destrezas.filter((d) => destrezaIds.has(d.id));
-  }, [asignaturasDocente, destrezas, esAdmin]);
+  }, [asignaturasDocente, destrezas, esAdmin, filtroGrado, userData]);
 
   // ==================== CARGA DE DATOS (OPTIMIZADA) ====================
 
@@ -166,7 +190,10 @@ export default function ReporteNotas() {
               query(collection(db, "actividades"), where("gradoId", "in", lote)),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, { id: d.id, ...d.data() } as ActividadData),
+              actividadesMap.set(
+                d.id,
+                { id: d.id, ...d.data() } as ActividadData,
+              ),
             );
           }
         } else {
@@ -177,7 +204,10 @@ export default function ReporteNotas() {
               query(collection(db, "actividades"), where("gradoId", "in", lote)),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, { id: d.id, ...d.data() } as ActividadData),
+              actividadesMap.set(
+                d.id,
+                { id: d.id, ...d.data() } as ActividadData,
+              ),
             );
           }
           // b) Materias que dicta (en cualquier grado asignado)
@@ -213,7 +243,10 @@ export default function ReporteNotas() {
             ),
           );
           snap.docs.forEach((d) =>
-            calificacionesBatch.push({ id: d.id, ...d.data() } as CalificacionData),
+            calificacionesBatch.push({
+              id: d.id,
+              ...d.data(),
+            } as CalificacionData),
           );
         }
         setCalificacionesBajas(calificacionesBatch);
@@ -449,7 +482,7 @@ export default function ReporteNotas() {
 
   return (
     <Layout>
-      {/* ✅ Se eliminó el banner de año lectivo (ya está en el Context/Dashboard) */}
+      {/* ✅ Sin banner de año lectivo (vive en el Context/Dashboard) */}
 
       {/* Resumen en tarjetas */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -509,7 +542,10 @@ export default function ReporteNotas() {
             </label>
             <select
               value={filtroGrado}
-              onChange={(e) => setFiltroGrado(e.target.value)}
+              onChange={(e) => {
+                setFiltroGrado(e.target.value);
+                setFiltroMateria("todas"); // resetea materia para mantener coherencia
+              }}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500"
             >
               <option value="todos">Todos los grados visibles</option>
