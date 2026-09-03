@@ -10,8 +10,8 @@ import {
   getDocs,
   where,
   Timestamp,
-  deleteDoc,
   onSnapshot,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -549,13 +549,9 @@ export default function Calificaciones() {
     }
   }, []);
 
-  const guardarAsistencia = async () => {
+    const guardarAsistencia = async () => {
     if (!esGradoInicialActual && !materiaSeleccionadaEfectiva) {
-      mostrarToast(
-        "warning",
-        "Materia requerida",
-        "Debes seleccionar una materia/ámbito antes de guardar la asistencia.",
-      );
+      mostrarToast("warning", "Materia requerida", "Debes seleccionar una materia/ámbito antes de guardar la asistencia.");
       return;
     }
 
@@ -563,10 +559,9 @@ export default function Calificaciones() {
     try {
       const anioLectivoId = anioActivo?.id || "";
       const periodoId = periodoActual?.id || "";
-      const ambitoIdParaGuardar = esGradoInicialActual
-        ? "general"
-        : materiaSeleccionadaEfectiva;
+      const ambitoIdParaGuardar = esGradoInicialActual ? "general" : materiaSeleccionadaEfectiva;
 
+      // 1 consulta única para detectar existentes
       const existentesSnap = await getDocs(
         query(
           collection(db, "asistencias"),
@@ -577,18 +572,18 @@ export default function Calificaciones() {
       );
       const existentesMap = new Map<string, { id: string; data: AsistenciaData }>();
       existentesSnap.docs.forEach((d) => {
-        const data = d.data() as AsistenciaData;
-        existentesMap.set(data.estudianteId, { id: d.id, data });
+        existentesMap.set(d.data().estudianteId, { id: d.id, data: d.data() as AsistenciaData });
       });
 
-      const batch = estudiantes.map(async (est) => {
+      // ✅ writeBatch: 1 request, todo-o-nada
+      const batch = writeBatch(db);
+      let operaciones = 0;
+
+      estudiantes.forEach((est) => {
         const asistencia = asistencias[est.id];
         if (!asistencia || !asistencia.estado) return;
-
         const existente = existentesMap.get(est.id);
-
-        if (existente?.data.justificadoPor && existente.data.estado === "J")
-          return;
+        if (existente?.data.justificadoPor && existente.data.estado === "J") return;
 
         const datos = {
           estudianteId: est.id,
@@ -603,42 +598,25 @@ export default function Calificaciones() {
         };
 
         if (!existente) {
-          await addDoc(collection(db, "asistencias"), {
-            ...datos,
-            registradoPor: user?.uid || "",
-            createdAt: serverTimestamp(),
-          });
+          const nuevoRef = doc(collection(db, "asistencias"));
+          batch.set(nuevoRef, { ...datos, registradoPor: user?.uid || "", createdAt: serverTimestamp() });
         } else {
           const auditoria: Record<string, unknown> = {};
-          if (
-            existente.data.registradoPor &&
-            existente.data.registradoPor !== user?.uid
-          ) {
+          if (existente.data.registradoPor && existente.data.registradoPor !== user?.uid) {
             auditoria.editadoPor = user?.uid || "";
             auditoria.editadoEl = serverTimestamp();
-            if (!existente.data.estadoOriginal)
-              auditoria.estadoOriginal = existente.data.estado;
+            if (!existente.data.estadoOriginal) auditoria.estadoOriginal = existente.data.estado;
           }
-          await updateDoc(doc(db, "asistencias", existente.id), {
-            ...datos,
-            ...auditoria,
-          });
+          batch.update(doc(db, "asistencias", existente.id), { ...datos, ...auditoria });
         }
+        operaciones++;
       });
 
-      await Promise.all(batch);
-      mostrarToast(
-        "success",
-        "Asistencia guardada",
-        "La asistencia se registró correctamente.",
-      );
+      if (operaciones > 0) await batch.commit();
+      mostrarToast("success", "Asistencia guardada", "La asistencia se registró correctamente.");
     } catch (error) {
       console.error("Error guardando asistencia:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudo guardar la asistencia. Intenta nuevamente.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudo guardar la asistencia. Intenta nuevamente.");
     } finally {
       setIsSaving(false);
     }
@@ -728,12 +706,12 @@ export default function Calificaciones() {
         where("actividadId", "==", actividadId),
       );
       const snapCalificaciones = await getDocs(qCalificaciones);
-      const deleteCalificaciones = snapCalificaciones.docs.map((doc) =>
-        deleteDoc(doc.ref),
-      );
-      await Promise.all(deleteCalificaciones);
 
-      await deleteDoc(doc(db, "actividades", actividadId));
+      // ✅ writeBatch: borra todas las calificaciones + la actividad en 1 request
+      const batch = writeBatch(db);
+      snapCalificaciones.docs.forEach((d) => batch.delete(d.ref));
+      batch.delete(doc(db, "actividades", actividadId));
+      await batch.commit();
 
       mostrarToast(
         "success",
@@ -760,52 +738,37 @@ export default function Calificaciones() {
 
   // ✅ NUEVA LÓGICA: bloquea nota solo si el estudiante está ausente SIN justificar
   // Y la actividad es HOY. Si es ayer o antes → permite nota (lógica real docente).
-  const guardarCalificaciones = async () => {
+    const guardarCalificaciones = async () => {
     if (!selectedActividadId) {
-      mostrarToast(
-        "warning",
-        "Actividad requerida",
-        "Debes seleccionar una actividad antes de guardar calificaciones.",
-      );
+      mostrarToast("warning", "Actividad requerida", "Debes seleccionar una actividad antes de guardar calificaciones.");
       return;
     }
 
     setIsSaving(true);
     try {
       const existentesSnap = await getDocs(
-        query(
-          collection(db, "calificaciones"),
-          where("actividadId", "==", selectedActividadId),
-        ),
+        query(collection(db, "calificaciones"), where("actividadId", "==", selectedActividadId)),
       );
       const existentesMap = new Map<string, { id: string; data: CalificacionData }>();
       existentesSnap.docs.forEach((d) => {
-        const data = d.data() as CalificacionData;
-        existentesMap.set(data.estudianteId, { id: d.id, data });
+        existentesMap.set(d.data().estudianteId, { id: d.id, data: d.data() as CalificacionData });
       });
 
       const fechaActividad = actividadSeleccionada?.fecha || "";
       const actividadEsHoy = esFechaHoy(fechaActividad);
 
-      const batch = estudiantes.map(async (est) => {
-        const calificacion = calificaciones[est.id];
-        if (
-          !calificacion ||
-          !calificacion.nota ||
-          calificacion.nota.trim() === ""
-        )
-          return;
+      const batch = writeBatch(db);
+      let operaciones = 0;
 
-        // ✅ Solo bloquear nota si: ausente + actividad es HOY (mismo día)
-        // Si la actividad fue ayer o antes → permitir (recuperación/trabajo extra)
+      estudiantes.forEach((est) => {
+        const calificacion = calificaciones[est.id];
+        if (!calificacion || !calificacion.nota || calificacion.nota.trim() === "") return;
         const estadoEseDia = asistenciasDiaActividad[est.id];
         if (estadoEseDia === "A" && actividadEsHoy) return;
-
         const notaNum = parseFloat(calificacion.nota);
         if (isNaN(notaNum) || notaNum < 0 || notaNum > 10) return;
 
         const existente = existentesMap.get(est.id);
-
         const datos = {
           estudianteId: est.id,
           actividadId: selectedActividadId,
@@ -816,43 +779,26 @@ export default function Calificaciones() {
         };
 
         if (!existente) {
-          await addDoc(collection(db, "calificaciones"), {
-            ...datos,
-            docenteId: user?.uid || "",
-            createdAt: serverTimestamp(),
-          });
+          const nuevoRef = doc(collection(db, "calificaciones"));
+          batch.set(nuevoRef, { ...datos, docenteId: user?.uid || "", createdAt: serverTimestamp() });
         } else {
           const auditoria: Record<string, unknown> = {};
-          if (
-            existente.data.docenteId &&
-            existente.data.docenteId !== user?.uid
-          ) {
+          if (existente.data.docenteId && existente.data.docenteId !== user?.uid) {
             auditoria.editadoPor = user?.uid || "";
             auditoria.editadoEl = serverTimestamp();
-            if (existente.data.notaOriginal === undefined)
-              auditoria.notaOriginal = existente.data.nota;
+            if (existente.data.notaOriginal === undefined) auditoria.notaOriginal = existente.data.nota;
           }
-          await updateDoc(doc(db, "calificaciones", existente.id), {
-            ...datos,
-            ...auditoria,
-          });
+          batch.update(doc(db, "calificaciones", existente.id), { ...datos, ...auditoria });
         }
+        operaciones++;
       });
 
-      await Promise.all(batch);
-      mostrarToast(
-        "success",
-        "Calificaciones guardadas",
-        "Las calificaciones se guardaron correctamente.",
-      );
-      await cargarCalificaciones(selectedActividadId);
+      if (operaciones > 0) await batch.commit();
+      mostrarToast("success", "Calificaciones guardadas", "Las calificaciones se guardaron correctamente.");
+      // ✅ Fase 2: NO recargar (el estado local ya está actualizado) → ahorra 1 lectura
     } catch (error) {
       console.error("Error guardando calificaciones:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudieron guardar las calificaciones.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudieron guardar las calificaciones.");
     } finally {
       setIsSaving(false);
     }
