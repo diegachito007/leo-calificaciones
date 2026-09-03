@@ -37,8 +37,6 @@ import {
   FaChalkboardTeacher,
   FaArrowRight,
   FaUserEdit,
-  FaChevronLeft,
-  FaChevronRight,
   FaQuestionCircle,
   FaCheckCircle,
   FaTimesCircle,
@@ -296,7 +294,7 @@ export default function Calificaciones() {
     fecha: new Date().toISOString().split("T")[0],
   });
 
-  const [carruselIndex, setCarruselIndex] = useState(0);
+  // ✅ Refs para los inputs de nota (permite Tab/Enter saltando observación)
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -352,7 +350,6 @@ export default function Calificaciones() {
     return ambitos.filter((a) => ambitosIds.has(a.id));
   })();
 
-  // ✅ AUTO-SELECCIÓN memoizada (se recalcula cuando llegan los datos del Context)
   const autoSeleccion = useMemo(() => {
     if (!gradoEfectivoId) return null;
 
@@ -376,16 +373,15 @@ export default function Calificaciones() {
     return null;
   }, [gradoEfectivoId, asignaturasDocente, destrezas, gradoEfectivoNombre]);
 
-  // ✅ Valores efectivos (prioridad: selección manual > auto-selección)
   const primeraMateria = materiasDelGradoDocente[0];
-const materiaEfectivaId =
-  selectedMateriaId ||
-  autoSeleccion?.materiaId ||
-  (esGradoBachillerato ? primeraMateria?.id || "" : "");
-const ambitoEfectivoId =
-  selectedAmbitoId || autoSeleccion?.ambitoId || primeraMateria?.ambitoId || "";
-const destrezaEfectivaId =
-  selectedDestrezaId || autoSeleccion?.destrezaId || primeraMateria?.id || "";
+  const materiaEfectivaId =
+    selectedMateriaId ||
+    autoSeleccion?.materiaId ||
+    (esGradoBachillerato ? primeraMateria?.id || "" : "");
+  const ambitoEfectivoId =
+    selectedAmbitoId || autoSeleccion?.ambitoId || primeraMateria?.ambitoId || "";
+  const destrezaEfectivaId =
+    selectedDestrezaId || autoSeleccion?.destrezaId || primeraMateria?.id || "";
 
   const destrezasDisponibles = (() => {
     if (!ambitoEfectivoId) return [];
@@ -525,7 +521,6 @@ const destrezaEfectivaId =
       });
 
       setCalificaciones(calificacionesMap);
-      setCarruselIndex(0);
     } catch (error) {
       console.error("Error cargando calificaciones:", error);
     }
@@ -998,8 +993,8 @@ const destrezaEfectivaId =
     });
   };
 
-  const enfocarYCentrarInput = (index: number) => {
-    setCarruselIndex(index);
+  // ✅ Simplificado: solo enfocar y scrollear el input de nota del índice dado
+  const enfocarNota = (index: number) => {
     setTimeout(() => {
       const el = notaInputRefs.current[index];
       if (el) {
@@ -1007,13 +1002,10 @@ const destrezaEfectivaId =
         el.select();
         el.scrollIntoView({ block: "center", behavior: "smooth" });
       }
-    }, 80);
-    setTimeout(() => {
-      const el = notaInputRefs.current[index];
-      if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
-    }, 400);
+    }, 50);
   };
 
+  // ✅ Enter/Tab salta al siguiente input de nota (saltando observación)
   const handleNotaKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
     index: number,
@@ -1022,7 +1014,7 @@ const destrezaEfectivaId =
       e.preventDefault();
       const nextIndex = index + 1;
       if (nextIndex < estudiantes.length) {
-        enfocarYCentrarInput(nextIndex);
+        enfocarNota(nextIndex);
       }
     }
   };
@@ -1122,7 +1114,6 @@ const destrezaEfectivaId =
         });
 
         setCalificaciones(calificacionesMap);
-        setCarruselIndex(0);
       } catch (error) {
         console.error("Error cargando calificaciones:", error);
       }
@@ -1131,7 +1122,6 @@ const destrezaEfectivaId =
     fetchCalificaciones();
   }, [selectedActividadId]);
 
-  // ✅ Listener de asistencias del día (usa valores efectivos)
   useEffect(() => {
     if (!gradoEfectivoId || !fechaAsistencia || estudiantes.length === 0) {
       return;
@@ -1256,25 +1246,6 @@ const destrezaEfectivaId =
     esGradoBachillerato,
   ]);
 
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-
-    const reCentrar = () => {
-      const activo = document.activeElement as HTMLElement | null;
-      if (
-        activo &&
-        activo.tagName === "INPUT" &&
-        activo.getAttribute("inputmode") === "numeric"
-      ) {
-        activo.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-    };
-
-    vv.addEventListener("resize", reCentrar);
-    return () => vv.removeEventListener("resize", reCentrar);
-  }, []);
-
   const toastConfig = {
     success: {
       bg: "bg-green-50 border-green-400",
@@ -1308,11 +1279,7 @@ const destrezaEfectivaId =
 
   if (!ready) {
     return (
-      <Layout
-        title="Calificaciones"
-        subtitle="Toma de asistencia y registro de notas"
-        showBack
-      >
+      <Layout>
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
@@ -1330,11 +1297,7 @@ const destrezaEfectivaId =
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
   return (
-    <Layout
-      title="Calificaciones"
-      subtitle="Toma de asistencia y registro de notas"
-      showBack
-    >
+    <Layout>
       {docenteSinGrados && (
         <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl px-8 py-12 mb-6">
           <div className="flex items-start gap-4 max-w-3xl">
@@ -1380,15 +1343,9 @@ const destrezaEfectivaId =
                         setAsistencias({});
                         setAsistenciasDiaActividad({});
                         setActividades([]);
-                        // Limpiar selección anterior para evitar heredar materia de otro grado
                         setSelectedMateriaId("");
                         setSelectedAmbitoId("");
                         setSelectedDestrezaId("");
-                        setCarruselIndex(0);
-
-                        // La auto-selección de materia única se maneja mediante
-                        // autoSeleccion (useMemo). No se modifican estados aquí
-                        // para evitar renders en cascada y estados desfasados.
                       }}
                       className={`p-3 rounded-lg border-2 transition-all duration-200 text-left text-sm ${
                         isSelected
@@ -1898,42 +1855,7 @@ const destrezaEfectivaId =
                           </div>
                         </div>
 
-                        <div className="md:hidden mb-3 flex items-center justify-between gap-2 bg-indigo-50 border border-indigo-200 rounded-lg p-2">
-                          <button
-                            onClick={() =>
-                              enfocarYCentrarInput(
-                                Math.max(0, carruselIndex - 1),
-                              )
-                            }
-                            disabled={carruselIndex === 0}
-                            className="p-2 rounded-lg bg-white hover:bg-indigo-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                          >
-                            <FaChevronLeft className="text-indigo-600" />
-                          </button>
-                          <div className="flex-1 text-center">
-                            <div className="text-xs text-indigo-600 font-semibold">
-                              {carruselIndex + 1} / {estudiantes.length}
-                            </div>
-                            <div className="text-[10px] text-indigo-500">
-                              Desliza o usa Enter ↵
-                            </div>
-                          </div>
-                          <button
-                            onClick={() =>
-                              enfocarYCentrarInput(
-                                Math.min(
-                                  estudiantes.length - 1,
-                                  carruselIndex + 1,
-                                ),
-                              )
-                            }
-                            disabled={carruselIndex === estudiantes.length - 1}
-                            className="p-2 rounded-lg bg-white hover:bg-indigo-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                          >
-                            <FaChevronRight className="text-indigo-600" />
-                          </button>
-                        </div>
-
+                        {/* ✅ LISTA COMPLETA (sin carrusel móvil) */}
                         <div className="space-y-2">
                           {estudiantes.map((est, index) => {
                             const calificacion = calificaciones[est.id];
@@ -1965,19 +1887,10 @@ const destrezaEfectivaId =
                               calificacion?.docenteId &&
                               calificacion.docenteId !== user?.uid;
 
-                            const esMovil =
-                              typeof window !== "undefined" &&
-                              window.innerWidth < 768;
-                            if (esMovil && index !== carruselIndex) return null;
-
                             return (
                               <div
                                 key={est.id}
-                                className={`border rounded-lg p-3 transition-colors ${
-                                  index === carruselIndex
-                                    ? "border-indigo-400 bg-indigo-50/30 shadow-sm md:border-slate-200 md:bg-transparent md:shadow-none"
-                                    : "border-slate-200 hover:border-blue-300"
-                                }`}
+                                className="border border-slate-200 hover:border-blue-300 rounded-lg p-3 transition-colors"
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex-1 min-w-0">
@@ -2071,12 +1984,6 @@ const destrezaEfectivaId =
                                           }
                                           onFocus={(e) => {
                                             e.target.select();
-                                            setTimeout(() => {
-                                              e.target.scrollIntoView({
-                                                block: "center",
-                                                behavior: "smooth",
-                                              });
-                                            }, 300);
                                           }}
                                           placeholder="1-10"
                                           className={`w-16 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${
@@ -2140,6 +2047,8 @@ const destrezaEfectivaId =
                                           e.target.value,
                                         )
                                       }
+                                      // ✅ tabIndex={-1}: Tab/Enter saltan este campo
+                                      tabIndex={-1}
                                       placeholder="Observación (opcional)..."
                                       className="w-full border border-slate-300 rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500"
                                     />

@@ -21,7 +21,7 @@ import {
   FaUserGraduate,
   FaChalkboardTeacher,
   FaClipboardCheck,
-  FaExclamationTriangle, // ✅ NUEVO: Ícono para Reporte de Notas
+  FaExclamationTriangle,
 } from "react-icons/fa";
 
 interface InstitutionData {
@@ -46,7 +46,7 @@ export default function Dashboard() {
     ambitos: 0,
     calificaciones: 0,
     solicitudesPendientes: 0,
-    estudiantesEnRiesgo: 0, // ✅ NUEVO
+    estudiantesEnRiesgo: 0,
   });
   const [institutionData, setInstitutionData] = useState<InstitutionData | null>(null);
   const [loadingInstitution, setLoadingInstitution] = useState(true);
@@ -68,17 +68,14 @@ export default function Dashboard() {
     cargarConfiguracion();
   }, []);
 
-  // ✅ Cargar años lectivos y grados
   useEffect(() => {
     const cargarDatos = async () => {
       try {
-        // Cargar año lectivo activo
         const qAnios = query(collection(db, 'aniosLectivos'), where('activo', '==', true));
         const snapAnios = await getDocs(qAnios);
         const aniosData = snapAnios.docs.map(doc => ({ id: doc.id, ...doc.data() } as AnioLectivo));
         setAniosLectivos(aniosData);
 
-        // Cargar grados del año activo
         if (aniosData.length > 0) {
           const anioActivo = aniosData[0];
           let qGrados;
@@ -110,7 +107,6 @@ export default function Dashboard() {
     cargarDatos();
   }, [userData?.role, userData?.gradosAsignados]);
 
-  // ✅ CORRECCIÓN: Filtrar tutorDe solo para el año lectivo activo (igual que en Layout y Estudiantes)
   const tutorDeAnioActivo = useMemo(() => {
     if (!userData?.tutorDe) return [];
     return grados.filter(g => userData.tutorDe?.includes(g.id)).map(g => g.id);
@@ -157,7 +153,6 @@ export default function Dashboard() {
       }
       const calificacionesSnap = await getDocs(calificacionesQuery);
 
-      // ✅ NUEVO: contar estudiantes únicos con notas < 7 (en riesgo)
       const estudiantesEnRiesgoSet = new Set<string>();
       try {
         const idsEstudiantes = estudiantesSnap.docs.map(d => d.id);
@@ -172,7 +167,6 @@ export default function Dashboard() {
             estudiantesEnRiesgoSet.add(d.data().estudianteId);
           });
         } else if (idsEstudiantes.length > 30) {
-          // Dividir en lotes de 30 (límite de 'in' en Firestore)
           for (let i = 0; i < idsEstudiantes.length; i += 30) {
             const lote = idsEstudiantes.slice(i, i + 30);
             const loteQuery = query(
@@ -202,7 +196,7 @@ export default function Dashboard() {
           ambitos: ambitosSnap.size,
           calificaciones: calificacionesSnap.size,
           solicitudesPendientes: solicitudesSnap.size,
-          estudiantesEnRiesgo: estudiantesEnRiesgoSet.size, // ✅ NUEVO
+          estudiantesEnRiesgo: estudiantesEnRiesgoSet.size,
         });
       });
     } catch (error) {
@@ -275,7 +269,37 @@ export default function Dashboard() {
       badge: "ADMIN",
       roles: ["super_admin"],
     },
-    // === GRUPO 3: OPERACIÓN DIARIA ===
+    // === GRUPO 3: OPERACIÓN DIARIA (orden solicitado) ===
+    {
+      path: "/calificaciones",
+      name: "Registro Asistencia Notas",
+      icon: FaChartBar,
+      color: "from-orange-500 to-orange-600",
+      desc: "Registro de asistencia y notas",
+      stats: `${stats.calificaciones} registro${stats.calificaciones !== 1 ? "s" : ""}`,
+      badge: "NIVEL 4",
+      roles: ["super_admin", "docente"],
+    },
+    {
+      path: "/reporte-asistencias",
+      name: "Reporte Asistencias",
+      icon: FaClipboardCheck,
+      color: "from-rose-500 to-rose-600",
+      desc: "Control de asistencia por grado y materia",
+      stats: "Semanal",
+      badge: "TUTOR/DOCENTE",
+      roles: ["super_admin", "docente"],
+    },
+    {
+      path: "/reporte-notas",
+      name: "Reporte Notas",
+      icon: FaExclamationTriangle,
+      color: "from-amber-500 to-amber-600",
+      desc: "Estudiantes con notas menores a 7 en riesgo académico",
+      stats: `${stats.estudiantesEnRiesgo} en riesgo`,
+      badge: "TUTOR/DOCENTE",
+      roles: ["super_admin", "docente"],
+    },
     {
       path: "/mi-horario",
       name: "Mi Horario",
@@ -296,43 +320,11 @@ export default function Dashboard() {
       badge: "NIVEL 3",
       roles: ["super_admin", "docente"],
     },
-    {
-      path: "/calificaciones",
-      name: "Calificaciones",
-      icon: FaChartBar,
-      color: "from-orange-500 to-orange-600",
-      desc: "Registro de notas",
-      stats: `${stats.calificaciones} registro${stats.calificaciones !== 1 ? "s" : ""}`,
-      badge: "NIVEL 4",
-      roles: ["super_admin", "docente"],
-    },
-    {
-      path: "/reporte-asistencias",
-      name: "Reporte Asistencias",
-      icon: FaClipboardCheck,
-      color: "from-rose-500 to-rose-600",
-      desc: "Control semanal de asistencia por grado y materia",
-      stats: "Semanal",
-      badge: "TUTOR/DOCENTE",
-      roles: ["super_admin", "docente"],
-    },
-    // ✅ NUEVO: Reporte de Notas (estudiantes en riesgo académico)
-    {
-      path: "/reporte-notas",
-      name: "Reporte Notas",
-      icon: FaExclamationTriangle,
-      color: "from-amber-500 to-amber-600",
-      desc: "Estudiantes con notas menores a 7 en riesgo académico",
-      stats: `${stats.estudiantesEnRiesgo} en riesgo`,
-      badge: "TUTOR/DOCENTE",
-      roles: ["super_admin", "docente"],
-    },
   ];
 
   const userRole = userData?.role || "docente";
   const filteredModules = modules.filter((mod) => mod.roles.includes(userRole));
 
-  // ✅ CORRECCIÓN: Usar tutorDeAnioActivo en lugar de userData.tutorDe
   const esTutor = tutorDeAnioActivo.length > 0;
   const gradosTutor = tutorDeAnioActivo;
 
