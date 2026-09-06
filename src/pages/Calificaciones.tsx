@@ -254,7 +254,7 @@ export default function Calificaciones() {
   const [selectedGradoNombre, setSelectedGradoNombre] = useState("");
 
   // ✅ NUEVO: controla si el selector de grados está expandido o colapsado
-  const [gradosExpanded, setGradosExpanded] = useState(true);
+  const [gradosExpanded, setGradosExpanded] = useState(false);
 
   const [selectedMateriaId, setSelectedMateriaId] = useState("");
   const [selectedAmbitoId, setSelectedAmbitoId] = useState("");
@@ -1559,7 +1559,7 @@ export default function Calificaciones() {
                               setSelectedDestrezaId("");
                             }
                           }}
-                          className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
+                          className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
                         >
                           <option value="">Materia...</option>
                           {materiasDelGradoDocente.map((destreza) => (
@@ -1579,7 +1579,7 @@ export default function Calificaciones() {
                             setActividades([]);
                             setAsistencias({});
                           }}
-                          className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
+                          className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
                         >
                           <option value="">Ámbito...</option>
                           {ambitosDisponibles.map((ambito) => (
@@ -1596,7 +1596,7 @@ export default function Calificaciones() {
                           setFechaAsistencia(e.target.value);
                           setAsistencias({});
                         }}
-                        className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500"
+                        className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500"
                       />
                       {/* Botón Guardar ya NO está aquí, se movió a la barra sticky */}
                     </div>
@@ -1640,7 +1640,7 @@ export default function Calificaciones() {
                               setCalificaciones({});
                               setActividades([]);
                             }}
-                            className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
+                            className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
                           >
                             <option value="">Ámbito...</option>
                             {ambitosDisponibles.map((ambito) => (
@@ -1657,7 +1657,7 @@ export default function Calificaciones() {
                               setCalificaciones({});
                             }}
                             disabled={!ambitoEfectivoId}
-                            className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 truncate"
+                            className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 truncate"
                           >
                             <option value="">Destreza...</option>
                             {destrezasDisponibles.map((destreza) => (
