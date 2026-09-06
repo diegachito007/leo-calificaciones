@@ -34,7 +34,12 @@ interface CalificacionData {
   actividadId: string;
   nota: number;
   observacion?: string;
-  refuerzo?: { nota: number; detalle: string; fecha: string } | null;
+  refuerzo?: {
+    nota: number;
+    detalle: string;
+    fecha: string;
+    estrategiaElegida?: string;
+  } | null;
   docenteId?: string;
 }
 
@@ -68,7 +73,6 @@ interface RegistroEnRiesgo {
 
 export default function ReporteNotas() {
   const { user, userData } = useAuth();
-  // ✅ Datos maestros desde el Context (caché persistente, 0 lecturas extra)
   const { grados, ambitos, destrezas, anioActivo, ready } = useData();
 
   const [asignaturasDocente, setAsignaturasDocente] = useState<
@@ -79,14 +83,18 @@ export default function ReporteNotas() {
   const [calificacionesBajas, setCalificacionesBajas] = useState<
     CalificacionData[]
   >([]);
-  const [loading, setLoading] = useState(true);
+
+  // ✅ ÚNICO state de carga: guarda la "clave" de lo último cargado.
+  // Se actualiza SOLO dentro del callback async (permitido por ESLint).
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+
   const [filtroGrado, setFiltroGrado] = useState<string>("todos");
   const [filtroMateria, setFiltroMateria] = useState<string>("todas");
 
   const esAdmin = userData?.role === "super_admin";
   const esTutor = (userData?.tutorDe || []).length > 0;
 
-  // ✅ Grados disponibles según rol (desde el Context, sin lecturas)
+  // ✅ Grados disponibles según rol
   const gradosDisponibles = useMemo(() => {
     if (!anioActivo) return [];
     const anioGrados = grados.filter(
@@ -101,40 +109,58 @@ export default function ReporteNotas() {
     return anioGrados.filter((g) => idsSet.has(g.id));
   }, [grados, anioActivo, asignaturasDocente, userData, esAdmin]);
 
-  // ✅ Materias disponibles RELACIONADAS con el grado filtrado
-  const materiasDisponibles = useMemo(() => {
-    if (esAdmin) return [];
+  const shouldLoadData = ready && gradosDisponibles.length > 0;
 
-    // Grado específico: solo las materias de ese grado
+  // 🔑 Clave que identifica la combinación actual de datos a cargar
+  const loadKey = useMemo(
+    () =>
+      JSON.stringify({
+        admin: esAdmin,
+        grados: gradosDisponibles.map((g) => g.id),
+        materias: asignaturasDocente.map((a) => a.destrezaId),
+      }),
+    [esAdmin, gradosDisponibles, asignaturasDocente],
+  );
+
+  // ✅ LOADING DERIVADO (sin setState síncrono → sin error de ESLint):
+  // "cargando" = hay datos que cargar Y aún no se han cargado para esta clave
+  const loading = shouldLoadData && loadedKey !== loadKey;
+
+  // ✅ Materias disponibles según el rol y el filtro
+  const materiasDisponibles = useMemo(() => {
+    if (esAdmin) return destrezas;
+
+    const tutorGrados = new Set(userData?.tutorDe || []);
+    const destrezaIds = new Set(asignaturasDocente.map((a) => a.destrezaId));
+
+    // Grado específico seleccionado
     if (filtroGrado !== "todos" && filtroGrado !== "tutor") {
-      const esTutorDelGrado = (userData?.tutorDe || []).includes(filtroGrado);
+      const esTutorDelGrado = tutorGrados.has(filtroGrado);
       if (esTutorDelGrado) {
-        // Tutor del grado: todas las destrezas del grado
         return destrezas.filter((d) => d.gradoId === filtroGrado);
       }
-      // Docente: solo las materias que dicta en ese grado
-      const destrezaIds = new Set(
+      const destrezaIdsDelGrado = new Set(
         asignaturasDocente
           .filter((a) => a.gradoId === filtroGrado)
           .map((a) => a.destrezaId),
       );
-      return destrezas.filter((d) => destrezaIds.has(d.id));
+      return destrezas.filter((d) => destrezaIdsDelGrado.has(d.id));
     }
 
     // "tutor": materias de todos los grados que tutora
     if (filtroGrado === "tutor") {
-      const tutorGrados = new Set(userData?.tutorDe || []);
       return destrezas.filter((d) => tutorGrados.has(d.gradoId));
     }
 
-    // "todos": todas las materias que dicta
-    const destrezaIds = new Set(asignaturasDocente.map((a) => a.destrezaId));
-    return destrezas.filter((d) => destrezaIds.has(d.id));
+    // "todos": materias que dicta + materias de grados tutorados
+    return destrezas.filter(
+      (d) => destrezaIds.has(d.id) || tutorGrados.has(d.gradoId),
+    );
   }, [asignaturasDocente, destrezas, esAdmin, filtroGrado, userData]);
 
-  // ==================== CARGA DE DATOS (OPTIMIZADA) ====================
+  // ==================== CARGA DE DATOS ====================
 
-  // Cargar asignaturas del docente (única lectura fija)
+  // Cargar asignaturas del docente
   useEffect(() => {
     if (!user?.uid || esAdmin || !anioActivo?.id) return;
     const fetchAsignaturas = async () => {
@@ -158,19 +184,11 @@ export default function ReporteNotas() {
     fetchAsignaturas();
   }, [user?.uid, anioActivo?.id, esAdmin]);
 
-  // ✅ Carga optimizada: solo actividades del scope → solo calificaciones bajas
-  // de esas actividades → solo los estudiantes que aparecen en ellas.
+  // ✅ Cargar reporte: solo si hay datos pendientes para la clave actual
   useEffect(() => {
-    if (!ready || gradosDisponibles.length === 0) {
-      const terminar = async () => {
-        setLoading(false);
-      };
-      terminar();
-      return;
-    }
+    if (!shouldLoadData || loadedKey === loadKey) return;
 
     const cargarReporte = async () => {
-      setLoading(true);
       try {
         const gradoIds = gradosDisponibles.map((g) => g.id);
         const tutorIds = new Set(userData?.tutorDe || []);
@@ -179,38 +197,43 @@ export default function ReporteNotas() {
           new Set(asignaturasDocente.map((a) => a.destrezaId)),
         );
 
-        // 1. Actividades del scope (evita cargar actividades ajenas)
+        // 1. Actividades del scope según el rol
         const actividadesMap = new Map<string, ActividadData>();
 
         if (esAdmin) {
-          // Admin: todas las actividades de todos los grados
           for (let i = 0; i < gradoIds.length; i += 10) {
             const lote = gradoIds.slice(i, i + 10);
             const snap = await getDocs(
-              query(collection(db, "actividades"), where("gradoId", "in", lote)),
+              query(
+                collection(db, "actividades"),
+                where("gradoId", "in", lote),
+              ),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(
-                d.id,
-                { id: d.id, ...d.data() } as ActividadData,
-              ),
+              actividadesMap.set(d.id, {
+                id: d.id,
+                ...d.data(),
+              } as ActividadData),
             );
           }
         } else {
-          // a) Grados tutorados: todas sus actividades
+          // a) Como TUTOR: todas las actividades de grados tutorados
           for (let i = 0; i < gradosTutorIds.length; i += 10) {
             const lote = gradosTutorIds.slice(i, i + 10);
             const snap = await getDocs(
-              query(collection(db, "actividades"), where("gradoId", "in", lote)),
-            );
-            snap.docs.forEach((d) =>
-              actividadesMap.set(
-                d.id,
-                { id: d.id, ...d.data() } as ActividadData,
+              query(
+                collection(db, "actividades"),
+                where("gradoId", "in", lote),
               ),
             );
+            snap.docs.forEach((d) =>
+              actividadesMap.set(d.id, {
+                id: d.id,
+                ...d.data(),
+              } as ActividadData),
+            );
           }
-          // b) Materias que dicta (en cualquier grado asignado)
+          // b) Como DOCENTE: solo actividades de materias que dicta
           for (let i = 0; i < myDestrezaIds.length; i += 30) {
             const lote = myDestrezaIds.slice(i, i + 30);
             const snap = await getDocs(
@@ -221,8 +244,9 @@ export default function ReporteNotas() {
             );
             snap.docs.forEach((d) => {
               const act = { id: d.id, ...d.data() } as ActividadData;
-              if (gradoIds.includes(act.gradoId))
+              if (gradoIds.includes(act.gradoId)) {
                 actividadesMap.set(act.id, act);
+              }
             });
           }
         }
@@ -230,7 +254,7 @@ export default function ReporteNotas() {
         const actividadesBatch = Array.from(actividadesMap.values());
         setActividades(actividadesBatch);
 
-        // 2. Solo calificaciones bajas (nota <= 6) de esas actividades
+        // 2. Solo calificaciones bajas (nota <= 6)
         const actividadIds = actividadesBatch.map((a) => a.id);
         const calificacionesBatch: CalificacionData[] = [];
         for (let i = 0; i < actividadIds.length; i += 30) {
@@ -251,7 +275,7 @@ export default function ReporteNotas() {
         }
         setCalificacionesBajas(calificacionesBatch);
 
-        // 3. Solo los estudiantes que aparecen en calificaciones bajas
+        // 3. Solo los estudiantes en calificaciones bajas
         const estudianteIds = Array.from(
           new Set(calificacionesBatch.map((c) => c.estudianteId)),
         );
@@ -259,26 +283,37 @@ export default function ReporteNotas() {
         for (let i = 0; i < estudianteIds.length; i += 30) {
           const lote = estudianteIds.slice(i, i + 30);
           const snap = await getDocs(
-            query(collection(db, "estudiantes"), where("__name__", "in", lote)),
+            query(
+              collection(db, "estudiantes"),
+              where("__name__", "in", lote),
+            ),
           );
           snap.docs.forEach((d) =>
             estudiantesBatch.push({ id: d.id, ...d.data() } as Estudiante),
           );
         }
-        estudiantesBatch.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+        estudiantesBatch.sort((a, b) =>
+          a.apellidos.localeCompare(b.apellidos),
+        );
         setEstudiantes(estudiantesBatch);
       } catch (error) {
         console.error("Error cargando reporte:", error);
       } finally {
-        const terminar = async () => {
-          setLoading(false);
-        };
-        terminar();
+        // ✅ setState dentro de callback async → permitido por ESLint
+        setLoadedKey(loadKey);
       }
     };
 
     cargarReporte();
-  }, [ready, gradosDisponibles, asignaturasDocente, esAdmin, userData]);
+  }, [
+    shouldLoadData,
+    loadKey,
+    loadedKey,
+    gradosDisponibles,
+    asignaturasDocente,
+    esAdmin,
+    userData,
+  ]);
 
   // ==================== DATOS CONSOLIDADOS ====================
 
@@ -312,15 +347,32 @@ export default function ReporteNotas() {
         estudiante.gradoId,
       );
 
-      if (!esAdmin && !esTutorDelGrado) {
-        if (!destrezasDelDocente.has(actividad.destrezaId)) {
+      // 🔑 LÓGICA CLARA DE FILTRADO:
+      if (!esAdmin) {
+        // Si NO es tutor del grado, solo mostrar si es materia que dicta
+        if (!esTutorDelGrado && !destrezasDelDocente.has(actividad.destrezaId)) {
           return;
         }
+        // Si ES tutor: mostrar todas las materias del grado
       }
 
+      // Calcular nota final según estrategia del refuerzo
       let notaFinal = cal.nota;
       if (cal.refuerzo) {
-        notaFinal = Math.round((cal.nota + cal.refuerzo.nota) / 2);
+        const estrategia = cal.refuerzo.estrategiaElegida || "promediar";
+        switch (estrategia) {
+          case "reemplazar":
+            notaFinal = cal.refuerzo.nota;
+            break;
+          case "maxima":
+            notaFinal = Math.max(cal.nota, cal.refuerzo.nota);
+            break;
+          case "promediar":
+          default:
+            notaFinal =
+              Math.round(((cal.nota + cal.refuerzo.nota) / 2) * 100) / 100;
+            break;
+        }
       }
 
       registros.push({
@@ -363,12 +415,14 @@ export default function ReporteNotas() {
 
   const registrosFiltrados = useMemo(() => {
     return registrosEnRiesgo.filter((r) => {
+      const grado = grados.find(
+        (g) => g.nombre === r.gradoNombre && g.paralelo === r.gradoParalelo,
+      );
+
       if (filtroGrado !== "todos" && filtroGrado !== "tutor") {
-        const grado = grados.find((g) => g.nombre === r.gradoNombre);
         if (!grado || grado.id !== filtroGrado) return false;
       }
       if (filtroGrado === "tutor") {
-        const grado = grados.find((g) => g.nombre === r.gradoNombre);
         if (!grado || !(userData?.tutorDe || []).includes(grado.id))
           return false;
       }
@@ -482,8 +536,6 @@ export default function ReporteNotas() {
 
   return (
     <Layout>
-      {/* ✅ Sin banner de año lectivo (vive en el Context/Dashboard) */}
-
       {/* Resumen en tarjetas */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
@@ -544,7 +596,7 @@ export default function ReporteNotas() {
               value={filtroGrado}
               onChange={(e) => {
                 setFiltroGrado(e.target.value);
-                setFiltroMateria("todas"); // resetea materia para mantener coherencia
+                setFiltroMateria("todas");
               }}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500"
             >
@@ -560,7 +612,7 @@ export default function ReporteNotas() {
             </select>
           </div>
 
-          {!esAdmin && materiasDisponibles.length > 0 && (
+          {materiasDisponibles.length > 0 && (
             <div className="flex-1">
               <label className="text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
                 <FaBook className="text-purple-600" /> Filtrar por Materia
@@ -570,7 +622,7 @@ export default function ReporteNotas() {
                 onChange={(e) => setFiltroMateria(e.target.value)}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500"
               >
-                <option value="todas">Todas mis materias</option>
+                <option value="todas">Todas las materias</option>
                 {materiasDisponibles.map((m) => (
                   <option key={m.id} value={m.nombre}>
                     {m.nombre}
@@ -602,15 +654,14 @@ export default function ReporteNotas() {
             </>
           ) : esTutor ? (
             <>
-              Como <strong>tutor</strong> ves todas las materias de tus grados
-              tutorados. Como <strong>docente</strong> solo ves tus materias en
-              todos tus grados asignados.
+              Como <strong>tutor</strong> ves todas las materias de tus
+              estudiantes en grados tutorados. Como <strong>docente</strong>{" "}
+              solo ves las calificaciones de las materias que dictas.
             </>
           ) : (
             <>
               Como <strong>docente</strong> solo ves calificaciones menores a 7
-              de <strong>las materias que dictas</strong> en todos los grados
-              que tienes asignados.
+              de las materias que dictas en todos los grados asignados.
             </>
           )}
         </p>
