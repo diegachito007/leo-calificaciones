@@ -252,8 +252,6 @@ export default function Calificaciones() {
   );
   const [selectedGradoId, setSelectedGradoId] = useState("");
   const [selectedGradoNombre, setSelectedGradoNombre] = useState("");
-
-  // ✅ NUEVO: controla si el selector de grados está expandido o colapsado
   const [gradosExpanded, setGradosExpanded] = useState(false);
 
   const [selectedMateriaId, setSelectedMateriaId] = useState("");
@@ -419,15 +417,37 @@ export default function Calificaciones() {
     ? materiaEfectivaId
     : ambitoEfectivoId;
 
+  // ✅ CORREGIDO: declarada ANTES de usarse en handlers (guardarCalificaciones, aplicarNotaATodos, etc.)
+  const actividadSeleccionada = actividades.find(
+    (a) => a.id === selectedActividadId,
+  );
+
   const todosConAsistencia =
     estudiantes.length > 0 &&
     (esGradoInicialActual || materiaSeleccionadaEfectiva !== "") &&
     estudiantes.every((est) => asistencias[est.id]?.estado);
 
-  // ✅ Contador de asistencias registradas (para la barra sticky)
   const asistenciasRegistradas = Object.keys(asistencias).filter(
     (key) => asistencias[key].estado,
   ).length;
+
+  const calificacionesRegistradas = estudiantes.filter((est) => {
+    const cal = calificaciones[est.id];
+    return cal && cal.nota && cal.nota.trim() !== "";
+  }).length;
+
+  const mostrarBarraSticky =
+    activeTab === "asistencia" &&
+    gradoEfectivoId &&
+    estudiantes.length > 0 &&
+    (esGradoInicialActual || materiaSeleccionadaEfectiva !== "");
+
+  const mostrarBarraStickyCalificaciones =
+    activeTab === "calificaciones" &&
+    gradoEfectivoId &&
+    estudiantes.length > 0 &&
+    !!destrezaEfectivaId &&
+    !!actividadSeleccionada;
 
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
@@ -629,11 +649,7 @@ export default function Calificaciones() {
 
   const guardarActividad = async () => {
     if (!actividadForm.detalle.trim()) {
-      mostrarToast(
-        "warning",
-        "Detalle obligatorio",
-        "El detalle de la actividad es obligatorio.",
-      );
+      mostrarToast("warning", "Detalle obligatorio", "El detalle de la actividad es obligatorio.");
       return;
     }
 
@@ -681,11 +697,7 @@ export default function Calificaciones() {
       await cargarActividades(destrezaEfectivaId);
     } catch (error) {
       console.error("Error guardando actividad:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudo guardar la actividad.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudo guardar la actividad.");
     } finally {
       setIsSaving(false);
     }
@@ -717,11 +729,7 @@ export default function Calificaciones() {
       batch.delete(doc(db, "actividades", actividadId));
       await batch.commit();
 
-      mostrarToast(
-        "success",
-        "Actividad eliminada",
-        "La actividad y sus calificaciones fueron eliminadas.",
-      );
+      mostrarToast("success", "Actividad eliminada", "La actividad y sus calificaciones fueron eliminadas.");
       await cargarActividades(destrezaEfectivaId);
 
       if (selectedActividadId === actividadId) {
@@ -730,11 +738,7 @@ export default function Calificaciones() {
       }
     } catch (error) {
       console.error("Error eliminando actividad:", error);
-      mostrarToast(
-        "error",
-        "Error al eliminar",
-        "No se pudo eliminar la actividad.",
-      );
+      mostrarToast("error", "Error al eliminar", "No se pudo eliminar la actividad.");
     } finally {
       setIsSaving(false);
     }
@@ -809,11 +813,7 @@ export default function Calificaciones() {
     if (!refuerzoEstudianteId || !selectedActividadId) return;
 
     if (!refuerzoForm.detalle.trim()) {
-      mostrarToast(
-        "warning",
-        "Detalle obligatorio",
-        "El detalle del refuerzo es obligatorio.",
-      );
+      mostrarToast("warning", "Detalle obligatorio", "El detalle del refuerzo es obligatorio.");
       return;
     }
 
@@ -827,11 +827,7 @@ export default function Calificaciones() {
       const snap = await getDocs(q);
 
       if (snap.empty) {
-        mostrarToast(
-          "error",
-          "Calificación no encontrada",
-          "No se encontró la calificación original.",
-        );
+        mostrarToast("error", "Calificación no encontrada", "No se encontró la calificación original.");
         setIsSaving(false);
         return;
       }
@@ -849,21 +845,13 @@ export default function Calificaciones() {
         updatedAt: serverTimestamp(),
       });
 
-      mostrarToast(
-        "success",
-        "Refuerzo aplicado",
-        "El refuerzo se aplicó correctamente.",
-      );
+      mostrarToast("success", "Refuerzo aplicado", "El refuerzo se aplicó correctamente.");
       setShowRefuerzoModal(false);
       setRefuerzoEstudianteId(null);
       await cargarCalificaciones(selectedActividadId);
     } catch (error) {
       console.error("Error aplicando refuerzo:", error);
-      mostrarToast(
-        "error",
-        "Error al aplicar",
-        "No se pudo aplicar el refuerzo.",
-      );
+      mostrarToast("error", "Error al aplicar", "No se pudo aplicar el refuerzo.");
     } finally {
       setIsSaving(false);
     }
@@ -1227,10 +1215,7 @@ export default function Calificaciones() {
         setAsistenciasDiaActividad(mapa);
       },
       (error) => {
-        console.error(
-          "Error escuchando asistencias del día de la actividad:",
-          error,
-        );
+        console.error("Error escuchando asistencias del día de la actividad:", error);
       },
     );
 
@@ -1287,9 +1272,7 @@ export default function Calificaciones() {
     );
   }
 
-  const actividadSeleccionada = actividades.find(
-    (a) => a.id === selectedActividadId,
-  );
+  // ✅ REMOVIDO: ya no se declara aquí (está arriba, línea ~415)
   const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
@@ -1299,13 +1282,6 @@ export default function Calificaciones() {
 
   const estrategiaEfectivaRefuerzo =
     refuerzoForm.estrategia || actividadSeleccionada?.estrategiaNota || "promediar";
-
-  // ✅ Determinar si mostrar la barra sticky de asistencia
-  const mostrarBarraSticky =
-    activeTab === "asistencia" &&
-    gradoEfectivoId &&
-    estudiantes.length > 0 &&
-    (esGradoInicialActual || materiaSeleccionadaEfectiva !== "");
 
   return (
     <Layout>
@@ -1330,11 +1306,9 @@ export default function Calificaciones() {
 
       {!docenteSinGrados && (
         <>
-          {/* ✅ SELECTOR DE GRADOS COLAPSABLE */}
           {gradosFiltrados.length > 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-4 p-4">
               {gradoEfectivoId && !gradosExpanded ? (
-                // 📱 VISTA COLAPSADA: solo el grado activo + botón Cambiar
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-3 flex-1 min-w-0">
                     <div className="w-11 h-11 rounded-lg flex items-center justify-center text-white font-bold text-base bg-linear-to-br from-blue-500 to-purple-600 shrink-0 shadow-sm">
@@ -1369,7 +1343,6 @@ export default function Calificaciones() {
                   </button>
                 </div>
               ) : (
-                // 📱 VISTA EXPANDIDA: grilla completa de grados
                 <>
                   <h3 className="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
                     <FaGraduationCap className="text-blue-600" />
@@ -1396,7 +1369,7 @@ export default function Calificaciones() {
                             setSelectedMateriaId("");
                             setSelectedAmbitoId("");
                             setSelectedDestrezaId("");
-                            setGradosExpanded(false); // ✅ colapsar tras elegir
+                            setGradosExpanded(false);
                           }}
                           className={`p-3 rounded-lg border-2 transition-all duration-200 text-left text-sm ${
                             isSelected
@@ -1504,7 +1477,6 @@ export default function Calificaciones() {
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="border-b border-slate-200 p-3">
                 <div className="flex flex-col gap-3">
-                  {/* Tabs siempre visibles */}
                   <div className="flex gap-2 w-full">
                     <button
                       onClick={() => setActiveTab("asistencia")}
@@ -1530,7 +1502,6 @@ export default function Calificaciones() {
                     </button>
                   </div>
 
-                  {/* ✅ MATERIA + FECHA en grid de 2 columnas (móvil) */}
                   {activeTab === "asistencia" ? (
                     <div className="grid grid-cols-2 gap-2">
                       {esGradoInicialActual ? (
@@ -1598,38 +1569,10 @@ export default function Calificaciones() {
                         }}
                         className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500"
                       />
-                      {/* Botón Guardar ya NO está aquí, se movió a la barra sticky */}
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-2">
-                      {esGradoBachillerato ? (
-                        <>
-                          <select
-                            value={ambitoEfectivoId}
-                            disabled
-                            className="col-span-1 border border-slate-200 rounded-lg px-2 py-2 text-xs bg-slate-50 text-slate-500 truncate"
-                          >
-                            <option value="">Ámbito (auto)</option>
-                            {ambitos.map((ambito) => (
-                              <option key={ambito.id} value={ambito.id}>
-                                {ambito.nombre}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            value={destrezaEfectivaId}
-                            disabled
-                            className="col-span-1 border border-slate-200 rounded-lg px-2 py-2 text-xs bg-slate-50 text-slate-500 truncate"
-                          >
-                            <option value="">Destreza (auto)</option>
-                            {destrezas.map((destreza) => (
-                              <option key={destreza.id} value={destreza.id}>
-                                {destreza.nombre}
-                              </option>
-                            ))}
-                          </select>
-                        </>
-                      ) : (
+                      {esGradoInicialActual ? (
                         <>
                           <select
                             value={ambitoEfectivoId}
@@ -1667,13 +1610,79 @@ export default function Calificaciones() {
                             ))}
                           </select>
                         </>
+                      ) : (
+                        <>
+                          <select
+                            value={ambitoEfectivoId}
+                            disabled
+                            className="hidden"
+                            aria-hidden="true"
+                            tabIndex={-1}
+                          >
+                            <option value={ambitoEfectivoId}>
+                              {ambitos.find((a) => a.id === ambitoEfectivoId)?.nombre || ""}
+                            </option>
+                          </select>
+                          <select
+                            value={destrezaEfectivaId}
+                            disabled
+                            className="hidden"
+                            aria-hidden="true"
+                            tabIndex={-1}
+                          >
+                            <option value={destrezaEfectivaId}>
+                              {destrezas.find((d) => d.id === destrezaEfectivaId)?.nombre || ""}
+                            </option>
+                          </select>
+
+                          <div className="col-span-2 flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                            <FaBook className="text-purple-600 text-sm shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap text-xs">
+                                <span className="font-semibold text-slate-700">
+                                  {ambitos.find((a) => a.id === ambitoEfectivoId)?.nombre || "—"}
+                                </span>
+                                <span className="text-slate-400">·</span>
+                                {esGradoBachillerato ? (
+                                  <span className="text-slate-600 truncate">
+                                    {destrezas.find((d) => d.id === destrezaEfectivaId)?.nombre || "—"}
+                                  </span>
+                                ) : (
+                                  <select
+                                    value={destrezaEfectivaId}
+                                    onChange={(e) => {
+                                      const destrezaId = e.target.value;
+                                      const destreza = materiasDelGradoDocente.find(
+                                        (d) => d.id === destrezaId,
+                                      );
+                                      setSelectedDestrezaId(destrezaId);
+                                      if (destreza) setSelectedAmbitoId(destreza.ambitoId);
+                                      setSelectedActividadId("");
+                                      setCalificaciones({});
+                                    }}
+                                    className="text-xs text-slate-600 bg-transparent border-none focus:ring-0 p-0 truncate max-w-[45%]"
+                                  >
+                                    {materiasDelGradoDocente.map((destreza) => (
+                                      <option key={destreza.id} value={destreza.id}>
+                                        {destreza.nombre}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                Área · Asignatura
+                              </div>
+                            </div>
+                          </div>
+                        </>
                       )}
                     </div>
                   )}
                 </div>
               </div>
 
-              <div className={`p-4 ${mostrarBarraSticky ? "pb-24" : ""}`}>
+              <div className={`p-4 ${(mostrarBarraSticky || mostrarBarraStickyCalificaciones) ? "pb-28" : ""}`}>
                 {activeTab === "asistencia" &&
                   !todosConAsistencia &&
                   estudiantes.length > 0 &&
@@ -1837,43 +1846,6 @@ export default function Calificaciones() {
 
                     {selectedActividadId && actividadSeleccionada && (
                       <>
-                        <div className="mb-4 bg-purple-50 border border-purple-200 rounded-lg p-3">
-                          <div className="flex items-start gap-2">
-                            <FaTasks className="text-purple-600 mt-0.5 shrink-0" />
-                            <div className="min-w-0 flex-1">
-                              <h4 className="font-semibold text-purple-900 text-sm mb-0.5">
-                                {actividadSeleccionada.tipo}:{" "}
-                                {actividadSeleccionada.detalle}
-                              </h4>
-                              <p className="text-purple-700 text-xs flex items-center gap-2 flex-wrap">
-                                <span>Fecha: {actividadSeleccionada.fecha}</span>
-                                {actividadEsHoy && (
-                                  <span className="px-1.5 py-0.5 bg-blue-200 text-blue-900 rounded text-[10px] font-bold">
-                                    HOY
-                                  </span>
-                                )}
-                                {actividadEsAntigua && (
-                                  <span className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded text-[10px] font-bold">
-                                    ACTIVIDAD ANTIGUA
-                                  </span>
-                                )}
-                                {!esGradoInicialActual && (
-                                  <span>
-                                    | Estrategia por defecto:{" "}
-                                    {
-                                      ESTRATEGIAS_NOTA.find(
-                                        (e) =>
-                                          e.value ===
-                                          actividadSeleccionada.estrategiaNota,
-                                      )?.label
-                                    }
-                                  </span>
-                                )}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
                         {actividadSeleccionada && (
                           <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
                             <div className="flex items-start gap-2">
@@ -1897,44 +1869,6 @@ export default function Calificaciones() {
                             </div>
                           </div>
                         )}
-
-                        <div className="mb-4 flex flex-wrap gap-2 items-center justify-between bg-slate-50 border border-slate-200 rounded-lg p-3">
-                          <button
-                            onClick={guardarCalificaciones}
-                            disabled={isSaving}
-                            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all disabled:opacity-70 disabled:cursor-not-allowed"
-                          >
-                            {isSaving ? (
-                              <FaSpinner className="animate-spin" />
-                            ) : (
-                              <FaSave />
-                            )}
-                            Guardar
-                          </button>
-
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="text-xs text-slate-600 font-medium mr-1">
-                              Aplicar a todos:
-                            </span>
-                            {[7, 7.5, 8, 8.5, 9, 9.5, 10].map((nota) => (
-                              <button
-                                key={nota}
-                                onClick={() => aplicarNotaATodos(nota)}
-                                className="h-9 px-2.5 rounded-lg bg-green-100 hover:bg-green-200 text-green-800 text-xs font-bold transition-all border border-green-300"
-                                title={`Aplicar nota ${nota} a todos los estudiantes presentes`}
-                              >
-                                {nota}
-                              </button>
-                            ))}
-                            <button
-                              onClick={() => aplicarNotaATodos(0)}
-                              className="h-9 px-3 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold transition-all"
-                              title="Borrar todas las notas"
-                            >
-                              Limpiar
-                            </button>
-                          </div>
-                        </div>
 
                         <div className="space-y-2">
                           {estudiantes.map((est, index) => {
@@ -2378,7 +2312,7 @@ export default function Calificaciones() {
         </>
       )}
 
-      {/* ✅ BARRA INFERIOR STICKY: contador + botón Guardar (solo en asistencia) */}
+      {/* ✅ BARRA STICKY ASISTENCIA */}
       {mostrarBarraSticky && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] p-3 z-40">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
@@ -2426,6 +2360,86 @@ export default function Calificaciones() {
                 </>
               )}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ BARRA STICKY CALIFICACIONES */}
+      {mostrarBarraStickyCalificaciones && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-40">
+          <div className="border-b border-slate-100 px-3 py-2">
+            <div className="max-w-7xl mx-auto flex items-center gap-1.5 overflow-x-auto">
+              <span className="text-xs text-slate-600 font-medium shrink-0 mr-1">
+                Aplicar a todos:
+              </span>
+              {[7, 7.5, 8, 8.5, 9, 9.5, 10].map((nota) => (
+                <button
+                  key={nota}
+                  onClick={() => aplicarNotaATodos(nota)}
+                  className="shrink-0 h-8 px-2.5 rounded-lg bg-green-100 hover:bg-green-200 text-green-800 text-xs font-bold transition-all border border-green-300"
+                  title={`Aplicar nota ${nota} a todos los estudiantes presentes`}
+                >
+                  {nota}
+                </button>
+              ))}
+              <button
+                onClick={() => aplicarNotaATodos(0)}
+                className="shrink-0 h-8 px-2.5 rounded-lg bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-semibold transition-all"
+                title="Borrar todas las notas"
+              >
+                Limpiar
+              </button>
+            </div>
+          </div>
+          <div className="px-3 py-2.5">
+            <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-slate-800">
+                  <span className={calificacionesRegistradas === estudiantes.length ? "text-green-600" : "text-slate-800"}>
+                    {calificacionesRegistradas}
+                  </span>
+                  <span className="text-slate-500 font-normal"> / {estudiantes.length}</span>
+                  <span className="text-slate-500 font-normal ml-1.5 hidden sm:inline">
+                    con nota
+                  </span>
+                </div>
+                {calificacionesRegistradas === 0 ? (
+                  <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
+                    <FaInfoCircle className="text-[10px]" />
+                    <span className="truncate">Ninguna nota asignada aún</span>
+                  </div>
+                ) : calificacionesRegistradas < estudiantes.length ? (
+                  <div className="text-xs text-amber-600 flex items-center gap-1 mt-0.5">
+                    <FaExclamationTriangle className="text-[10px]" />
+                    <span className="truncate">
+                      Faltan {estudiantes.length - calificacionesRegistradas} por calificar
+                    </span>
+                  </div>
+                ) : (
+                  <div className="text-xs text-green-600 flex items-center gap-1 mt-0.5">
+                    <FaCheckCircle className="text-[10px]" />
+                    <span>Todos calificados · Listo para guardar</span>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={guardarCalificaciones}
+                disabled={isSaving || calificacionesRegistradas === 0}
+                className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
+              >
+                {isSaving ? (
+                  <>
+                    <FaSpinner className="animate-spin" />
+                    <span className="hidden sm:inline">Guardando...</span>
+                  </>
+                ) : (
+                  <>
+                    <FaSave />
+                    Guardar
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
