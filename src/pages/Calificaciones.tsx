@@ -42,6 +42,7 @@ import {
   FaTimesCircle,
   FaInfoCircle,
   FaUserTimes,
+  FaChevronDown,
 } from "react-icons/fa";
 
 // ==================== INTERFACES ====================
@@ -213,14 +214,12 @@ const esGradoInicial = (gradoNombre: string): boolean => {
   );
 };
 
-// ✅ NUEVO: compara si una fecha (YYYY-MM-DD) es hoy
 const esFechaHoy = (fecha: string): boolean => {
   if (!fecha) return false;
   const hoy = new Date().toISOString().split("T")[0];
   return fecha === hoy;
 };
 
-// ✅ NUEVO: compara si una fecha es anterior a hoy (ayer o antes)
 const esFechaAnteriorAHoy = (fecha: string): boolean => {
   if (!fecha) return false;
   const hoy = new Date().toISOString().split("T")[0];
@@ -253,6 +252,9 @@ export default function Calificaciones() {
   );
   const [selectedGradoId, setSelectedGradoId] = useState("");
   const [selectedGradoNombre, setSelectedGradoNombre] = useState("");
+
+  // ✅ NUEVO: controla si el selector de grados está expandido o colapsado
+  const [gradosExpanded, setGradosExpanded] = useState(true);
 
   const [selectedMateriaId, setSelectedMateriaId] = useState("");
   const [selectedAmbitoId, setSelectedAmbitoId] = useState("");
@@ -422,6 +424,11 @@ export default function Calificaciones() {
     (esGradoInicialActual || materiaSeleccionadaEfectiva !== "") &&
     estudiantes.every((est) => asistencias[est.id]?.estado);
 
+  // ✅ Contador de asistencias registradas (para la barra sticky)
+  const asistenciasRegistradas = Object.keys(asistencias).filter(
+    (key) => asistencias[key].estado,
+  ).length;
+
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -549,7 +556,7 @@ export default function Calificaciones() {
     }
   }, []);
 
-    const guardarAsistencia = async () => {
+  const guardarAsistencia = async () => {
     if (!esGradoInicialActual && !materiaSeleccionadaEfectiva) {
       mostrarToast("warning", "Materia requerida", "Debes seleccionar una materia/ámbito antes de guardar la asistencia.");
       return;
@@ -561,7 +568,6 @@ export default function Calificaciones() {
       const periodoId = periodoActual?.id || "";
       const ambitoIdParaGuardar = esGradoInicialActual ? "general" : materiaSeleccionadaEfectiva;
 
-      // 1 consulta única para detectar existentes
       const existentesSnap = await getDocs(
         query(
           collection(db, "asistencias"),
@@ -575,7 +581,6 @@ export default function Calificaciones() {
         existentesMap.set(d.data().estudianteId, { id: d.id, data: d.data() as AsistenciaData });
       });
 
-      // ✅ writeBatch: 1 request, todo-o-nada
       const batch = writeBatch(db);
       let operaciones = 0;
 
@@ -707,7 +712,6 @@ export default function Calificaciones() {
       );
       const snapCalificaciones = await getDocs(qCalificaciones);
 
-      // ✅ writeBatch: borra todas las calificaciones + la actividad en 1 request
       const batch = writeBatch(db);
       snapCalificaciones.docs.forEach((d) => batch.delete(d.ref));
       batch.delete(doc(db, "actividades", actividadId));
@@ -736,9 +740,7 @@ export default function Calificaciones() {
     }
   };
 
-  // ✅ NUEVA LÓGICA: bloquea nota solo si el estudiante está ausente SIN justificar
-  // Y la actividad es HOY. Si es ayer o antes → permite nota (lógica real docente).
-    const guardarCalificaciones = async () => {
+  const guardarCalificaciones = async () => {
     if (!selectedActividadId) {
       mostrarToast("warning", "Actividad requerida", "Debes seleccionar una actividad antes de guardar calificaciones.");
       return;
@@ -795,7 +797,6 @@ export default function Calificaciones() {
 
       if (operaciones > 0) await batch.commit();
       mostrarToast("success", "Calificaciones guardadas", "Las calificaciones se guardaron correctamente.");
-      // ✅ Fase 2: NO recargar (el estado local ya está actualizado) → ahorra 1 lectura
     } catch (error) {
       console.error("Error guardando calificaciones:", error);
       mostrarToast("error", "Error al guardar", "No se pudieron guardar las calificaciones.");
@@ -930,7 +931,6 @@ export default function Calificaciones() {
   };
 
   const actualizarCalificacion = (estudianteId: string, valor: string) => {
-    // ✅ Bloquear edición solo si ausente + actividad HOY
     const estadoEseDia = asistenciasDiaActividad[estudianteId];
     const actividadEsHoy = esFechaHoy(actividadSeleccionada?.fecha || "");
     if (estadoEseDia === "A" && actividadEsHoy) return;
@@ -976,7 +976,6 @@ export default function Calificaciones() {
     setCalificaciones((prev) => {
       const nuevas = { ...prev };
       estudiantes.forEach((est) => {
-        // ✅ No aplicar a ausentes de HOY (pero sí a ausentes de ayer o antes)
         const estadoEseDia = asistenciasDiaActividad[est.id];
         if (estadoEseDia === "A" && actividadEsHoy) return;
 
@@ -1294,13 +1293,19 @@ export default function Calificaciones() {
   const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  // ✅ Fecha de la actividad: ¿es hoy o es antigua?
   const fechaActividad = actividadSeleccionada?.fecha || "";
   const actividadEsHoy = esFechaHoy(fechaActividad);
   const actividadEsAntigua = esFechaAnteriorAHoy(fechaActividad);
 
   const estrategiaEfectivaRefuerzo =
     refuerzoForm.estrategia || actividadSeleccionada?.estrategiaNota || "promediar";
+
+  // ✅ Determinar si mostrar la barra sticky de asistencia
+  const mostrarBarraSticky =
+    activeTab === "asistencia" &&
+    gradoEfectivoId &&
+    estudiantes.length > 0 &&
+    (esGradoInicialActual || materiaSeleccionadaEfectiva !== "");
 
   return (
     <Layout>
@@ -1325,80 +1330,130 @@ export default function Calificaciones() {
 
       {!docenteSinGrados && (
         <>
+          {/* ✅ SELECTOR DE GRADOS COLAPSABLE */}
           {gradosFiltrados.length > 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-4 p-4">
-              <h3 className="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
-                <FaGraduationCap className="text-blue-600" />
-                Selecciona un Grado
-              </h3>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
-                {gradosFiltrados.map((grado) => {
-                  const isSelected = gradoEfectivoId === grado.id;
-                  const materiasCount = asignaturasDocente.filter(
-                    (a) => a.gradoId === grado.id,
-                  ).length;
-                  const esInicial = esGradoInicial(grado.nombre);
-                  return (
-                    <button
-                      key={grado.id}
-                      onClick={() => {
-                        setSelectedGradoId(grado.id);
-                        setSelectedGradoNombre(grado.nombre);
-                        setSelectedActividadId("");
-                        setCalificaciones({});
-                        setAsistencias({});
-                        setAsistenciasDiaActividad({});
-                        setActividades([]);
-                        setSelectedMateriaId("");
-                        setSelectedAmbitoId("");
-                        setSelectedDestrezaId("");
-                      }}
-                      className={`p-3 rounded-lg border-2 transition-all duration-200 text-left text-sm ${
-                        isSelected
-                          ? "border-blue-500 bg-blue-50 shadow-sm"
-                          : "border-slate-200 hover:border-blue-300 hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="flex items-center gap-2">
-                        <div
-                          className={`w-8 h-8 rounded flex items-center justify-center text-white font-bold text-xs ${
-                            isSelected
-                              ? "bg-linear-to-br from-blue-500 to-purple-600"
-                              : "bg-linear-to-br from-slate-400 to-slate-500"
-                          }`}
-                        >
-                          {grado.paralelo}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-slate-900 truncate">
-                            {grado.nombre}
-                          </div>
-                          <div className="text-slate-500 text-xs flex items-center gap-1 flex-wrap">
-                            {esInicial && (
-                              <span className="text-purple-600 font-bold">
-                                Inicial
-                              </span>
-                            )}
-                            {materiasCount > 0 ? (
-                              <span className="text-green-600 font-medium">
-                                {materiasCount} materia
-                                {materiasCount !== 1 ? "s" : ""}
-                              </span>
-                            ) : (
-                              <span className="text-orange-600 font-medium">
-                                Sin configurar
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {isSelected && (
-                          <FaUserCheck className="text-blue-600 text-xs shrink-0" />
+              {gradoEfectivoId && !gradosExpanded ? (
+                // 📱 VISTA COLAPSADA: solo el grado activo + botón Cambiar
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="w-11 h-11 rounded-lg flex items-center justify-center text-white font-bold text-base bg-linear-to-br from-blue-500 to-purple-600 shrink-0 shadow-sm">
+                      {gradoActual?.paralelo || "?"}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
+                        Grado activo
+                      </div>
+                      <div className="font-bold text-slate-900 truncate text-sm">
+                        {gradoEfectivoNombre}
+                        {gradoActual?.paralelo && (
+                          <span className="text-slate-500 font-normal"> - {gradoActual.paralelo}</span>
                         )}
                       </div>
+                      <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+                        {esGradoInicialActual && (
+                          <span className="text-purple-600 font-semibold">Inicial</span>
+                        )}
+                        <span className="text-green-600 font-medium">
+                          {materiasDelGradoDocente.length} materia{materiasDelGradoDocente.length !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setGradosExpanded(true)}
+                    className="shrink-0 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                  >
+                    <FaChevronDown className="text-[10px] -rotate-90" />
+                    Cambiar
+                  </button>
+                </div>
+              ) : (
+                // 📱 VISTA EXPANDIDA: grilla completa de grados
+                <>
+                  <h3 className="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
+                    <FaGraduationCap className="text-blue-600" />
+                    Selecciona un Grado
+                  </h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2">
+                    {gradosFiltrados.map((grado) => {
+                      const isSelected = gradoEfectivoId === grado.id;
+                      const materiasCount = asignaturasDocente.filter(
+                        (a) => a.gradoId === grado.id,
+                      ).length;
+                      const esInicial = esGradoInicial(grado.nombre);
+                      return (
+                        <button
+                          key={grado.id}
+                          onClick={() => {
+                            setSelectedGradoId(grado.id);
+                            setSelectedGradoNombre(grado.nombre);
+                            setSelectedActividadId("");
+                            setCalificaciones({});
+                            setAsistencias({});
+                            setAsistenciasDiaActividad({});
+                            setActividades([]);
+                            setSelectedMateriaId("");
+                            setSelectedAmbitoId("");
+                            setSelectedDestrezaId("");
+                            setGradosExpanded(false); // ✅ colapsar tras elegir
+                          }}
+                          className={`p-3 rounded-lg border-2 transition-all duration-200 text-left text-sm ${
+                            isSelected
+                              ? "border-blue-500 bg-blue-50 shadow-sm"
+                              : "border-slate-200 hover:border-blue-300 hover:bg-slate-50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`w-8 h-8 rounded flex items-center justify-center text-white font-bold text-xs ${
+                                isSelected
+                                  ? "bg-linear-to-br from-blue-500 to-purple-600"
+                                  : "bg-linear-to-br from-slate-400 to-slate-500"
+                              }`}
+                            >
+                              {grado.paralelo}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-slate-900 truncate">
+                                {grado.nombre}
+                              </div>
+                              <div className="text-slate-500 text-xs flex items-center gap-1 flex-wrap">
+                                {esInicial && (
+                                  <span className="text-purple-600 font-bold">
+                                    Inicial
+                                  </span>
+                                )}
+                                {materiasCount > 0 ? (
+                                  <span className="text-green-600 font-medium">
+                                    {materiasCount} materia
+                                    {materiasCount !== 1 ? "s" : ""}
+                                  </span>
+                                ) : (
+                                  <span className="text-orange-600 font-medium">
+                                    Sin configurar
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {isSelected && (
+                              <FaUserCheck className="text-blue-600 text-xs shrink-0" />
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {gradoEfectivoId && (
+                    <button
+                      onClick={() => setGradosExpanded(false)}
+                      className="mt-3 w-full text-xs text-slate-500 hover:text-slate-700 font-medium py-1.5 transition-colors"
+                    >
+                      ▲ Colapsar selector
                     </button>
-                  );
-                })}
-              </div>
+                  )}
+                </>
+              )}
             </div>
           ) : (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-4 p-12 text-center">
@@ -1448,11 +1503,12 @@ export default function Calificaciones() {
           {gradoEfectivoId && (gradoTieneMateriasConfiguradas || esGradoInicialActual) && (
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
               <div className="border-b border-slate-200 p-3">
-                <div className="flex flex-col lg:flex-row gap-3 items-start lg:items-center justify-between">
-                  <div className="flex gap-2 w-full lg:w-auto">
+                <div className="flex flex-col gap-3">
+                  {/* Tabs siempre visibles */}
+                  <div className="flex gap-2 w-full">
                     <button
                       onClick={() => setActiveTab("asistencia")}
-                      className={`flex-1 lg:flex-none px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+                      className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                         activeTab === "asistencia"
                           ? "bg-blue-600 text-white shadow"
                           : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -1463,7 +1519,7 @@ export default function Calificaciones() {
                     </button>
                     <button
                       onClick={() => setActiveTab("calificaciones")}
-                      className={`flex-1 lg:flex-none px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+                      className={`flex-1 px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
                         activeTab === "calificaciones"
                           ? "bg-blue-600 text-white shadow"
                           : "bg-slate-100 text-slate-700 hover:bg-slate-200"
@@ -1474,47 +1530,107 @@ export default function Calificaciones() {
                     </button>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-2 w-full lg:w-auto lg:justify-end items-stretch sm:items-center">
-                    {activeTab === "asistencia" ? (
-                      <>
-                        {esGradoInicialActual ? (
-                          <div className="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 text-xs text-purple-800 flex items-center gap-2">
-                            <FaUserCheck className="text-sm" />
-                            <span className="font-semibold">
-                              Asistencia General
-                            </span>
-                          </div>
-                        ) : esGradoBachillerato ? (
-                          <select
-                            value={materiaEfectivaId}
-                            onChange={(e) => {
-                              const materiaId = e.target.value;
-                              setSelectedMateriaId(materiaId);
-                              setAsistencias({});
+                  {/* ✅ MATERIA + FECHA en grid de 2 columnas (móvil) */}
+                  {activeTab === "asistencia" ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      {esGradoInicialActual ? (
+                        <div className="col-span-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 text-xs text-purple-800 flex items-center gap-2">
+                          <FaUserCheck className="text-sm shrink-0" />
+                          <span className="font-semibold">Asistencia General</span>
+                        </div>
+                      ) : esGradoBachillerato ? (
+                        <select
+                          value={materiaEfectivaId}
+                          onChange={(e) => {
+                            const materiaId = e.target.value;
+                            setSelectedMateriaId(materiaId);
+                            setAsistencias({});
 
-                              if (materiaId) {
-                                const materia = materiasDelGradoDocente.find(
-                                  (d) => d.id === materiaId,
-                                );
-                                if (materia) {
-                                  setSelectedAmbitoId(materia.ambitoId);
-                                  setSelectedDestrezaId(materia.id);
-                                }
-                              } else {
-                                setSelectedAmbitoId("");
-                                setSelectedDestrezaId("");
+                            if (materiaId) {
+                              const materia = materiasDelGradoDocente.find(
+                                (d) => d.id === materiaId,
+                              );
+                              if (materia) {
+                                setSelectedAmbitoId(materia.ambitoId);
+                                setSelectedDestrezaId(materia.id);
                               }
-                            }}
-                            className="w-full sm:w-48 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 truncate"
+                            } else {
+                              setSelectedAmbitoId("");
+                              setSelectedDestrezaId("");
+                            }
+                          }}
+                          className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
+                        >
+                          <option value="">Materia...</option>
+                          {materiasDelGradoDocente.map((destreza) => (
+                            <option key={destreza.id} value={destreza.id}>
+                              {destreza.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <select
+                          value={ambitoEfectivoId}
+                          onChange={(e) => {
+                            setSelectedAmbitoId(e.target.value);
+                            setSelectedDestrezaId("");
+                            setSelectedActividadId("");
+                            setCalificaciones({});
+                            setActividades([]);
+                            setAsistencias({});
+                          }}
+                          className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
+                        >
+                          <option value="">Ámbito...</option>
+                          {ambitosDisponibles.map((ambito) => (
+                            <option key={ambito.id} value={ambito.id}>
+                              {ambito.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <input
+                        type="date"
+                        value={fechaAsistencia}
+                        onChange={(e) => {
+                          setFechaAsistencia(e.target.value);
+                          setAsistencias({});
+                        }}
+                        className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500"
+                      />
+                      {/* Botón Guardar ya NO está aquí, se movió a la barra sticky */}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {esGradoBachillerato ? (
+                        <>
+                          <select
+                            value={ambitoEfectivoId}
+                            disabled
+                            className="col-span-1 border border-slate-200 rounded-lg px-2 py-2 text-xs bg-slate-50 text-slate-500 truncate"
                           >
-                            <option value="">Seleccionar Materia...</option>
-                            {materiasDelGradoDocente.map((destreza) => (
+                            <option value="">Ámbito (auto)</option>
+                            {ambitos.map((ambito) => (
+                              <option key={ambito.id} value={ambito.id}>
+                                {ambito.nombre}
+                              </option>
+                            ))}
+                          </select>
+                          <select
+                            value={destrezaEfectivaId}
+                            disabled
+                            className="col-span-1 border border-slate-200 rounded-lg px-2 py-2 text-xs bg-slate-50 text-slate-500 truncate"
+                          >
+                            <option value="">Destreza (auto)</option>
+                            {destrezas.map((destreza) => (
                               <option key={destreza.id} value={destreza.id}>
                                 {destreza.nombre}
                               </option>
                             ))}
                           </select>
-                        ) : (
+                        </>
+                      ) : (
+                        <>
                           <select
                             value={ambitoEfectivoId}
                             onChange={(e) => {
@@ -1523,115 +1639,41 @@ export default function Calificaciones() {
                               setSelectedActividadId("");
                               setCalificaciones({});
                               setActividades([]);
-                              setAsistencias({});
                             }}
-                            className="w-full sm:w-48 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 truncate"
+                            className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
                           >
-                            <option value="">Seleccionar Ámbito...</option>
+                            <option value="">Ámbito...</option>
                             {ambitosDisponibles.map((ambito) => (
                               <option key={ambito.id} value={ambito.id}>
                                 {ambito.nombre}
                               </option>
                             ))}
                           </select>
-                        )}
-                        <input
-                          type="date"
-                          value={fechaAsistencia}
-                          onChange={(e) => {
-                            setFechaAsistencia(e.target.value);
-                            setAsistencias({});
-                          }}
-                          className="w-full sm:w-auto border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
-                        />
-                        <button
-                          onClick={guardarAsistencia}
-                          disabled={isSaving || !todosConAsistencia}
-                          className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed shrink-0"
-                        >
-                          {isSaving ? (
-                            <FaSpinner className="animate-spin" />
-                          ) : (
-                            <FaSave />
-                          )}
-                          Guardar
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        {esGradoBachillerato ? (
-                          <>
-                            <select
-                              value={ambitoEfectivoId}
-                              disabled
-                              className="w-full sm:w-48 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-500 truncate"
-                            >
-                              <option value="">Ámbito (auto)</option>
-                              {ambitos.map((ambito) => (
-                                <option key={ambito.id} value={ambito.id}>
-                                  {ambito.nombre}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={destrezaEfectivaId}
-                              disabled
-                              className="w-full sm:w-48 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-500 truncate"
-                            >
-                              <option value="">Destreza (auto)</option>
-                              {destrezas.map((destreza) => (
-                                <option key={destreza.id} value={destreza.id}>
-                                  {destreza.nombre}
-                                </option>
-                              ))}
-                            </select>
-                          </>
-                        ) : (
-                          <>
-                            <select
-                              value={ambitoEfectivoId}
-                              onChange={(e) => {
-                                setSelectedAmbitoId(e.target.value);
-                                setSelectedDestrezaId("");
-                                setSelectedActividadId("");
-                                setCalificaciones({});
-                                setActividades([]);
-                              }}
-                              className="w-full sm:w-48 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 truncate"
-                            >
-                              <option value="">Ámbito...</option>
-                              {ambitosDisponibles.map((ambito) => (
-                                <option key={ambito.id} value={ambito.id}>
-                                  {ambito.nombre}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={destrezaEfectivaId}
-                              onChange={(e) => {
-                                setSelectedDestrezaId(e.target.value);
-                                setSelectedActividadId("");
-                                setCalificaciones({});
-                              }}
-                              disabled={!ambitoEfectivoId}
-                              className="w-full sm:w-48 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 truncate"
-                            >
-                              <option value="">Destreza...</option>
-                              {destrezasDisponibles.map((destreza) => (
-                                <option key={destreza.id} value={destreza.id}>
-                                  {destreza.nombre}
-                                </option>
-                              ))}
-                            </select>
-                          </>
-                        )}
-                      </>
-                    )}
-                  </div>
+                          <select
+                            value={destrezaEfectivaId}
+                            onChange={(e) => {
+                              setSelectedDestrezaId(e.target.value);
+                              setSelectedActividadId("");
+                              setCalificaciones({});
+                            }}
+                            disabled={!ambitoEfectivoId}
+                            className="col-span-1 border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100 truncate"
+                          >
+                            <option value="">Destreza...</option>
+                            {destrezasDisponibles.map((destreza) => (
+                              <option key={destreza.id} value={destreza.id}>
+                                {destreza.nombre}
+                              </option>
+                            ))}
+                          </select>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="p-4">
+              <div className={`p-4 ${mostrarBarraSticky ? "pb-24" : ""}`}>
                 {activeTab === "asistencia" &&
                   !todosConAsistencia &&
                   estudiantes.length > 0 &&
@@ -1832,7 +1874,6 @@ export default function Calificaciones() {
                           </div>
                         </div>
 
-                        {/* ✅ NUEVO: Info de reglas según fecha de la actividad */}
                         {actividadSeleccionada && (
                           <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
                             <div className="flex items-start gap-2">
@@ -1916,11 +1957,9 @@ export default function Calificaciones() {
                             const estadoAsistencia =
                               asistenciasDiaActividad[est.id];
 
-                            // ✅ NUEVA LÓGICA: ausente bloqueado SOLO si es el mismo día
                             const esAusente = estadoAsistencia === "A";
                             const bloqueadoPorAusenciaHoy =
                               esAusente && actividadEsHoy;
-                            // Ausente antiguo: sí se puede poner nota (recuperación, etc.)
                             const ausenteAntiguo =
                               esAusente && actividadEsAntigua;
 
@@ -2333,26 +2372,62 @@ export default function Calificaciones() {
                     })}
                   </div>
                 )}
-
-                {activeTab === "asistencia" &&
-                  estudiantes.length > 0 &&
-                  (esGradoInicialActual || materiaSeleccionadaEfectiva) && (
-                    <div className="mt-4 pt-3 border-t border-slate-200">
-                      <div className="text-xs text-slate-600">
-                        {
-                          Object.keys(asistencias).filter(
-                            (key) => asistencias[key].estado,
-                          ).length
-                        }{" "}
-                        de {estudiantes.length} estudiantes con asistencia
-                        registrada
-                      </div>
-                    </div>
-                  )}
               </div>
             </div>
           )}
         </>
+      )}
+
+      {/* ✅ BARRA INFERIOR STICKY: contador + botón Guardar (solo en asistencia) */}
+      {mostrarBarraSticky && (
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] p-3 z-40">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-slate-800">
+                <span className={todosConAsistencia ? "text-green-600" : "text-slate-800"}>
+                  {asistenciasRegistradas}
+                </span>
+                <span className="text-slate-500 font-normal"> / {estudiantes.length}</span>
+                <span className="text-slate-500 font-normal ml-1.5 hidden sm:inline">
+                  estudiantes registrados
+                </span>
+                <span className="text-slate-500 font-normal ml-1.5 sm:hidden">
+                  registrados
+                </span>
+              </div>
+              {!todosConAsistencia ? (
+                <div className="text-xs text-amber-600 flex items-center gap-1 mt-0.5">
+                  <FaExclamationTriangle className="text-[10px]" />
+                  <span className="truncate">
+                    Faltan {estudiantes.length - asistenciasRegistradas} por registrar
+                  </span>
+                </div>
+              ) : (
+                <div className="text-xs text-green-600 flex items-center gap-1 mt-0.5">
+                  <FaCheckCircle className="text-[10px]" />
+                  <span>Todos registrados · Listo para guardar</span>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={guardarAsistencia}
+              disabled={isSaving || !todosConAsistencia}
+              className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
+            >
+              {isSaving ? (
+                <>
+                  <FaSpinner className="animate-spin" />
+                  <span className="hidden sm:inline">Guardando...</span>
+                </>
+              ) : (
+                <>
+                  <FaSave />
+                  Guardar
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       )}
 
       {showActividadModal && (
