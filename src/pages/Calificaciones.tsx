@@ -966,6 +966,8 @@ export default function Calificaciones() {
       estudiantes.forEach((est) => {
         const estadoEseDia = asistenciasDiaActividad[est.id];
         if (estadoEseDia === "A" && actividadEsHoy) return;
+        // ✅ No sobrescribir notas que ya tienen refuerzo aplicado
+        if (calificaciones[est.id]?.refuerzo) return;
 
         nuevas[est.id] = {
           ...nuevas[est.id],
@@ -1888,6 +1890,14 @@ export default function Calificaciones() {
                               notaOriginal !== undefined
                                 ? notaALetra(notaFinal)
                                 : "";
+                            // ✅ Si hay refuerzo, la caja muestra la NOTA FINAL
+                            const tieneRefuerzo = !!calificacion?.refuerzo;
+                            const notaMostrada = tieneRefuerzo
+                              ? String(round2(notaFinal))
+                              : notaStr;
+                            const notaParaColor = tieneRefuerzo
+                              ? notaFinal
+                              : notaOriginal;
                             const estadoAsistencia =
                               asistenciasDiaActividad[est.id];
 
@@ -1995,14 +2005,15 @@ export default function Calificaciones() {
                                             {letra}
                                           </div>
                                         )}
-                                        <input
+                                                                                <input
                                           ref={(el) => {
                                             notaInputRefs.current[index] = el;
                                           }}
                                           type="text"
                                           inputMode="decimal"
                                           maxLength={5}
-                                          value={notaStr}
+                                          value={notaMostrada}
+                                          readOnly={tieneRefuerzo}
                                           onChange={(e) =>
                                             actualizarCalificacion(
                                               est.id,
@@ -2013,18 +2024,23 @@ export default function Calificaciones() {
                                             handleNotaKeyDown(e, index)
                                           }
                                           onFocus={(e) => {
-                                            e.target.select();
+                                            if (!tieneRefuerzo) e.target.select();
                                           }}
                                           placeholder="0-10"
+                                          title={
+                                            tieneRefuerzo
+                                              ? "Nota final después del refuerzo (solo lectura)"
+                                              : undefined
+                                          }
                                           className={`w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${
-                                            notaOriginal !== undefined
-                                              ? notaOriginal >= 7
+                                            notaParaColor !== undefined
+                                              ? notaParaColor >= 7
                                                 ? "border-green-500 text-green-700 bg-green-50"
                                                 : "border-red-500 text-red-700 bg-red-50"
                                               : ausenteAntiguo
                                                 ? "border-amber-400 bg-amber-50"
                                                 : "border-slate-300 bg-white"
-                                          }`}
+                                          } ${tieneRefuerzo ? "cursor-not-allowed" : ""}`}
                                         />
                                         {necesitaRefuerzo && (
                                           <button
@@ -2075,11 +2091,13 @@ export default function Calificaciones() {
                                       </span>
                                     </div>
                                     <div className="text-orange-700">
-                                      Nota refuerzo:{" "}
+                                      Original:{" "}
+                                      <strong>{round2(notaOriginal ?? 0)}</strong>
+                                      {" → Refuerzo: "}
                                       <strong>
                                         {round2(calificacion.refuerzo.nota)}
-                                      </strong>{" "}
-                                      | Nota final:{" "}
+                                      </strong>
+                                      {" = Final: "}
                                       <strong>{round2(notaFinal)}</strong>
                                     </div>
                                     <div className="text-orange-600 mt-1">
