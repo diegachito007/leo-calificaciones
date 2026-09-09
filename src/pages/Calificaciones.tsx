@@ -1873,7 +1873,7 @@ export default function Calificaciones() {
                   ) : activeTab === "calificaciones" && destrezaEfectivaId ? (
                     <>
                       {/* ✅ BARRA STICKY DE ACTIVIDAD (Opción A) */}
-                      <div className="sticky top-88 z-30 -mx-4 px-4 py-2 bg-white/95 backdrop-blur border-b border-slate-200 mb-3">
+                      <div className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-white/95 backdrop-blur border-b border-slate-200 mb-3">
                         <div className="flex items-center gap-2">
                           <select
                             value={selectedActividadId}
