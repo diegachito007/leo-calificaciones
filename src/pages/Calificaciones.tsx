@@ -43,7 +43,17 @@ import {
   FaInfoCircle,
   FaUserTimes,
   FaChevronDown,
+  FaLock,
 } from "react-icons/fa";
+import {
+  type EstadoAsistencia,
+  ESTADOS_ASISTENCIA,
+  normalizarEstado,
+  estadoBloqueaNota,
+  estadoEsAusencia,
+  estadoEsTutorOnly,
+  estadoConfig,
+} from "../utils/asistencia";
 
 // ==================== INTERFACES ====================
 
@@ -54,7 +64,8 @@ interface AsistenciaData {
   periodoId: string;
   fecha: string;
   ambitoId?: string;
-  estado: "P" | "T" | "A" | "J";
+  estado: string;
+  v2?: boolean;
   observacion?: string;
   registradoPor?: string;
   editadoPor?: string;
@@ -267,11 +278,12 @@ export default function Calificaciones() {
     Record<
       string,
       {
-        estado: "P" | "T" | "A" | "J";
+        estado: EstadoAsistencia | undefined;
         observacion: string;
         registradoPor?: string;
         editadoPor?: string;
         justificadoPor?: string;
+        esTutorOnly?: boolean;
       }
     >
   >({});
@@ -290,7 +302,7 @@ export default function Calificaciones() {
   >({});
 
   const [asistenciasDiaActividad, setAsistenciasDiaActividad] = useState<
-    Record<string, "P" | "T" | "A" | "J">
+    Record<string, EstadoAsistencia | undefined>
   >({});
 
   const [showActividadModal, setShowActividadModal] = useState(false);
@@ -316,6 +328,9 @@ export default function Calificaciones() {
   });
 
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  // ✅ OPTIMIZACIÓN: Caché de estudiantes por grado en memoria
+  const estudiantesCache = useRef<Map<string, Estudiante[]>>(new Map());
 
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -352,6 +367,12 @@ export default function Calificaciones() {
 
   const esGradoBachillerato = esBachillerato(gradoEfectivoNombre);
   const esGradoInicialActual = esGradoInicial(gradoEfectivoNombre);
+
+  const esTutorDelGradoActual = gradoEfectivoId
+    ? (userData?.tutorDe || []).includes(gradoEfectivoId)
+    : false;
+
+  const estadosVisibles = useMemo(() => ESTADOS_ASISTENCIA, []);
 
   const nombreDocente = (uid?: string) =>
     uid ? nombresDocentes[uid] || "Docente" : "";
@@ -509,6 +530,7 @@ export default function Calificaciones() {
     [],
   );
 
+  // ✅ OPTIMIZACIÓN: asignaturasDocente como getDocs (una sola carga)
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
 
@@ -519,14 +541,21 @@ export default function Calificaciones() {
       where("activo", "==", true),
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const data = snapshot.docs.map(
-        (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
-      );
-      setAsignaturasDocente(data);
-    });
+    const cargarAsignaturas = async () => {
+      try {
+        const snapshot = await getDocs(q);
 
-    return () => unsubscribe();
+        const data = snapshot.docs.map(
+          (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
+        );
+
+        setAsignaturasDocente(data);
+      } catch (error) {
+        console.error("Error cargando asignaturas del docente:", error);
+      }
+    };
+
+    cargarAsignaturas();
   }, [user?.uid, anioActivo?.id]);
 
   const cargarActividades = useCallback(async (destrezaId: string) => {
@@ -629,8 +658,15 @@ export default function Calificaciones() {
       estudiantes.forEach((est) => {
         const asistencia = asistencias[est.id];
         if (!asistencia || !asistencia.estado) return;
+        if (asistencia.esTutorOnly && !esTutorDelGradoActual) return;
+
         const existente = existentesMap.get(est.id);
-        if (existente?.data.justificadoPor && existente.data.estado === "J")
+        const estadoExistenteNormalizado = normalizarEstado(
+          existente?.data.estado,
+          existente?.data.v2,
+        );
+        const configExistente = estadoConfig(estadoExistenteNormalizado);
+        if (configExistente?.quien === "tutor" && !esTutorDelGradoActual)
           return;
 
         const datos = {
@@ -641,6 +677,7 @@ export default function Calificaciones() {
           fecha: fechaAsistencia,
           ambitoId: ambitoIdParaGuardar,
           estado: asistencia.estado,
+          v2: true,
           observacion: asistencia.observacion || "",
           updatedAt: serverTimestamp(),
         };
@@ -846,7 +883,7 @@ export default function Calificaciones() {
         )
           return;
         const estadoEseDia = asistenciasDiaActividad[est.id];
-        if (estadoEseDia === "A" && actividadEsHoy) return;
+        if (estadoBloqueaNota(estadoEseDia) && actividadEsHoy) return;
         const notaNum = parseFloat(calificacion.nota);
         if (isNaN(notaNum) || notaNum < 0 || notaNum > 10) return;
 
@@ -970,10 +1007,12 @@ export default function Calificaciones() {
 
   const actualizarAsistencia = (
     estudianteId: string,
-    estado: "P" | "T" | "A" | "J",
+    estado: EstadoAsistencia,
   ) => {
     const actual = asistencias[estudianteId];
-    if (actual?.justificadoPor && actual.estado === "J") return;
+    if (actual?.esTutorOnly && !esTutorDelGradoActual) return;
+    const config = estadoConfig(estado);
+    if (config?.quien === "tutor" && !esTutorDelGradoActual) return;
 
     setAsistencias((prev) => ({
       ...prev,
@@ -981,24 +1020,27 @@ export default function Calificaciones() {
         ...prev[estudianteId],
         estado,
         observacion: prev[estudianteId]?.observacion || "",
+        esTutorOnly: config?.quien === "tutor",
       },
     }));
   };
 
-  const marcarTodosAsistencia = (estado: "P" | "T" | "A" | "J") => {
-    if (estado === "J") return;
+  const marcarTodosAsistencia = (estado: EstadoAsistencia) => {
+    const config = estadoConfig(estado);
+    if (config?.quien === "tutor") return;
 
     setAsistencias((prev) => {
       const nuevas: typeof prev = {};
       estudiantes.forEach((est) => {
         const actual = prev[est.id];
-        if (actual?.justificadoPor && actual.estado === "J") {
+        if (actual?.esTutorOnly) {
           nuevas[est.id] = actual;
         } else {
           nuevas[est.id] = {
             ...actual,
             estado,
             observacion: actual?.observacion || "",
+            esTutorOnly: false,
           };
         }
       });
@@ -1011,7 +1053,7 @@ export default function Calificaciones() {
       const nuevas: typeof prev = {};
       estudiantes.forEach((est) => {
         const actual = prev[est.id];
-        if (actual?.justificadoPor && actual.estado === "J") {
+        if (actual?.esTutorOnly) {
           nuevas[est.id] = actual;
         }
       });
@@ -1032,7 +1074,7 @@ export default function Calificaciones() {
   const actualizarCalificacion = (estudianteId: string, valor: string) => {
     const estadoEseDia = asistenciasDiaActividad[estudianteId];
     const actividadEsHoy = esFechaHoy(actividadSeleccionada?.fecha || "");
-    if (estadoEseDia === "A" && actividadEsHoy) return;
+    if (estadoBloqueaNota(estadoEseDia) && actividadEsHoy) return;
 
     if (valor === "") {
       setCalificaciones((prev) => ({
@@ -1076,8 +1118,7 @@ export default function Calificaciones() {
       const nuevas = { ...prev };
       estudiantes.forEach((est) => {
         const estadoEseDia = asistenciasDiaActividad[est.id];
-        if (estadoEseDia === "A" && actividadEsHoy) return;
-        // ✅ No sobrescribir notas que ya tienen refuerzo aplicado
+        if (estadoBloqueaNota(estadoEseDia) && actividadEsHoy) return;
         if (calificaciones[est.id]?.refuerzo) return;
 
         nuevas[est.id] = {
@@ -1116,8 +1157,17 @@ export default function Calificaciones() {
 
   // ==================== EFFECTS ====================
 
+  // ✅ OPTIMIZACIÓN: Caché de estudiantes por grado
   useEffect(() => {
     if (!gradoEfectivoId) return;
+
+    // ¿Ya los tengo en caché?
+    const cached = estudiantesCache.current.get(gradoEfectivoId);
+    if (cached && cached.length > 0) {
+      setEstudiantes(cached);
+      setActiveTab("asistencia");
+      return;
+    }
 
     const fetchEstudiantes = async () => {
       try {
@@ -1132,8 +1182,9 @@ export default function Calificaciones() {
           (doc) => ({ id: doc.id, ...doc.data() }) as Estudiante,
         );
 
+        // Guardar en caché
+        estudiantesCache.current.set(gradoEfectivoId, data);
         setEstudiantes(data);
-        setAsistencias({});
         setActiveTab("asistencia");
       } catch (error) {
         console.error("Error cargando estudiantes:", error);
@@ -1220,15 +1271,21 @@ export default function Calificaciones() {
     fetchCalificaciones();
   }, [selectedActividadId]);
 
+  // ✅ Listener de asistencias - SOLO en tab asistencia
   useEffect(() => {
-    if (!gradoEfectivoId || !fechaAsistencia || estudiantes.length === 0) {
+    if (activeTab !== "asistencia") return;
+
+    if (!gradoEfectivoId || !fechaAsistencia) {
       return;
     }
 
+    const gradoInicialActual = esGradoInicial(gradoEfectivoNombre);
+    const gradoBachilleratoActual = esBachillerato(gradoEfectivoNombre);
+
     let ambitoIdParaBuscar: string;
-    if (esGradoInicialActual) {
+    if (gradoInicialActual) {
       ambitoIdParaBuscar = "general";
-    } else if (esGradoBachillerato) {
+    } else if (gradoBachilleratoActual) {
       if (!materiaEfectivaId) return;
       ambitoIdParaBuscar = materiaEfectivaId;
     } else {
@@ -1249,21 +1306,25 @@ export default function Calificaciones() {
         const asistenciasMap: Record<
           string,
           {
-            estado: "P" | "T" | "A" | "J";
+            estado: EstadoAsistencia | undefined;
             observacion: string;
             registradoPor?: string;
             editadoPor?: string;
             justificadoPor?: string;
+            esTutorOnly?: boolean;
           }
         > = {};
         snapshot.docs.forEach((docSnap) => {
           const data = docSnap.data() as AsistenciaData;
+          const estadoNormalizado = normalizarEstado(data.estado, data.v2);
+          const config = estadoConfig(estadoNormalizado);
           asistenciasMap[data.estudianteId] = {
-            estado: data.estado,
+            estado: estadoNormalizado,
             observacion: data.observacion || "",
             registradoPor: data.registradoPor,
             editadoPor: data.editadoPor,
             justificadoPor: data.justificadoPor,
+            esTutorOnly: config?.quien === "tutor",
           };
         });
         setAsistencias(asistenciasMap);
@@ -1280,13 +1341,14 @@ export default function Calificaciones() {
     fechaAsistencia,
     materiaEfectivaId,
     ambitoEfectivoId,
-    esGradoBachillerato,
-    esGradoInicialActual,
-    destrezaEfectivaId,
-    estudiantes.length,
+    gradoEfectivoNombre,
   ]);
 
+  // ✅ Listener de asistencias del día de la actividad - SOLO en tab calificaciones
   useEffect(() => {
+
+    if (activeTab !== "calificaciones") return;
+
     const actividad = actividades.find((a) => a.id === selectedActividadId);
     if (!actividad || !gradoEfectivoId || !selectedActividadId) {
       const limpiar = async () => {
@@ -1320,10 +1382,10 @@ export default function Calificaciones() {
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const mapa: Record<string, "P" | "T" | "A" | "J"> = {};
+        const mapa: Record<string, EstadoAsistencia | undefined> = {};
         snapshot.docs.forEach((docSnap) => {
           const data = docSnap.data() as AsistenciaData;
-          mapa[data.estudianteId] = data.estado;
+          mapa[data.estudianteId] = normalizarEstado(data.estado, data.v2);
         });
         setAsistenciasDiaActividad(mapa);
       },
@@ -1337,11 +1399,13 @@ export default function Calificaciones() {
 
     return () => unsubscribe();
   }, [
+    activeTab,
     selectedActividadId,
     actividades,
     gradoEfectivoId,
-    esGradoInicialActual,
+    gradoEfectivoNombre,
     esGradoBachillerato,
+    esGradoInicialActual,
   ]);
 
   const toastConfig = {
@@ -1454,6 +1518,11 @@ export default function Calificaciones() {
                           {materiasDelGradoDocente.length} materia
                           {materiasDelGradoDocente.length !== 1 ? "s" : ""}
                         </span>
+                        {esTutorDelGradoActual && (
+                          <span className="text-blue-600 font-semibold">
+                            · Tutor
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1478,6 +1547,9 @@ export default function Calificaciones() {
                         (a) => a.gradoId === grado.id,
                       ).length;
                       const esInicial = esGradoInicial(grado.nombre);
+                      const esTutorGrado = (userData?.tutorDe || []).includes(
+                        grado.id,
+                      );
                       return (
                         <button
                           key={grado.id}
@@ -1518,6 +1590,11 @@ export default function Calificaciones() {
                                 {esInicial && (
                                   <span className="text-purple-600 font-bold">
                                     Inicial
+                                  </span>
+                                )}
+                                {esTutorGrado && (
+                                  <span className="text-blue-600 font-bold">
+                                    Tutor
                                   </span>
                                 )}
                                 {materiasCount > 0 ? (
@@ -1643,7 +1720,6 @@ export default function Calificaciones() {
                             onChange={(e) => {
                               const materiaId = e.target.value;
                               setSelectedMateriaId(materiaId);
-                              setAsistencias({});
 
                               if (materiaId) {
                                 const materia = materiasDelGradoDocente.find(
@@ -1676,7 +1752,6 @@ export default function Calificaciones() {
                               setSelectedActividadId("");
                               setCalificaciones({});
                               setActividades([]);
-                              setAsistencias({});
                             }}
                             className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500 truncate"
                           >
@@ -1693,7 +1768,6 @@ export default function Calificaciones() {
                           value={fechaAsistencia}
                           onChange={(e) => {
                             setFechaAsistencia(e.target.value);
-                            setAsistencias({});
                           }}
                           className="col-span-1 w-full border border-slate-300 rounded-lg px-2 py-2 text-xs focus:ring-2 focus:ring-blue-500"
                         />
@@ -1872,7 +1946,6 @@ export default function Calificaciones() {
                     </div>
                   ) : activeTab === "calificaciones" && destrezaEfectivaId ? (
                     <>
-                      {/* ✅ BARRA STICKY DE ACTIVIDAD (Opción A) */}
                       <div className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-white/95 backdrop-blur border-b border-slate-200 mb-3">
                         <div className="flex items-center gap-2">
                           <select
@@ -1983,8 +2056,8 @@ export default function Calificaciones() {
                                   {actividadEsHoy ? (
                                     <>
                                       La actividad es <strong>de hoy</strong>.
-                                      Los estudiantes que estén ausentes sin
-                                      justificar{" "}
+                                      Los estudiantes con inasistencia
+                                      injustificada o fuga{" "}
                                       <strong>NO podrán recibir nota</strong>{" "}
                                       hasta que el tutor justifique su falta.
                                     </>
@@ -1994,8 +2067,8 @@ export default function Calificaciones() {
                                       <strong>de un día anterior</strong>.
                                       Puedes asignar notas{" "}
                                       <strong>
-                                        aunque el estudiante esté ausente sin
-                                        justificar
+                                        aunque el estudiante haya estado
+                                        ausente
                                       </strong>{" "}
                                       (recuperaciones, trabajos extra, etc.).
                                     </>
@@ -2028,7 +2101,6 @@ export default function Calificaciones() {
                                 notaOriginal !== undefined
                                   ? notaALetra(notaFinal)
                                   : "";
-                              // ✅ Si hay refuerzo, la caja muestra la NOTA FINAL
                               const tieneRefuerzo = !!calificacion?.refuerzo;
                               const notaMostrada = tieneRefuerzo
                                 ? String(round2(notaFinal))
@@ -2039,11 +2111,13 @@ export default function Calificaciones() {
                               const estadoAsistencia =
                                 asistenciasDiaActividad[est.id];
 
-                              const esAusente = estadoAsistencia === "A";
+                              const ausenciaQueBloquea =
+                                estadoBloqueaNota(estadoAsistencia);
                               const bloqueadoPorAusenciaHoy =
-                                esAusente && actividadEsHoy;
+                                ausenciaQueBloquea && actividadEsHoy;
                               const ausenteAntiguo =
-                                esAusente && actividadEsAntigua;
+                                estadoEsAusencia(estadoAsistencia) &&
+                                actividadEsAntigua;
 
                               const necesitaRefuerzo =
                                 !esGradoInicialActual &&
@@ -2054,6 +2128,9 @@ export default function Calificaciones() {
                               const esDeOtroDocente =
                                 calificacion?.docenteId &&
                                 calificacion.docenteId !== user?.uid;
+
+                              const configEstadoAsistencia =
+                                estadoConfig(estadoAsistencia);
 
                               return (
                                 <div
@@ -2079,23 +2156,24 @@ export default function Calificaciones() {
                                       {bloqueadoPorAusenciaHoy && (
                                         <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-red-100 border border-red-300 text-red-700 rounded text-[10px] font-bold">
                                           <FaUserTimes className="text-[9px]" />
-                                          Ausente hoy — sin nota hasta
-                                          justificar
+                                          {configEstadoAsistencia?.label} — sin
+                                          nota hasta justificar
                                         </div>
                                       )}
                                       {ausenteAntiguo && (
                                         <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 border border-amber-300 text-amber-800 rounded text-[10px] font-bold">
                                           <FaUserTimes className="text-[9px]" />
-                                          Ausente el día de la actividad (
-                                          {actividadSeleccionada.fecha}) —
+                                          {configEstadoAsistencia?.label} el{" "}
+                                          {actividadSeleccionada.fecha} —
                                           permite nota
                                         </div>
                                       )}
-                                      {!esAusente &&
-                                        estadoAsistencia === "J" && (
-                                          <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-blue-100 border border-blue-300 text-blue-700 rounded text-[10px] font-bold">
+                                      {estadoAsistencia &&
+                                        estadoEsTutorOnly(estadoAsistencia) &&
+                                        !bloqueadoPorAusenciaHoy && (
+                                          <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
                                             <FaUserCheck className="text-[9px]" />
-                                            Justificado por tutor
+                                            {configEstadoAsistencia?.label}
                                           </div>
                                         )}
                                       {(esDeOtroDocente ||
@@ -2129,7 +2207,7 @@ export default function Calificaciones() {
                                       {bloqueadoPorAusenciaHoy ? (
                                         <span
                                           className="px-3 py-1.5 rounded text-xs font-bold bg-red-100 border-2 border-red-300 text-red-700"
-                                          title="Estudiante ausente hoy: no puede recibir nota hasta que el tutor justifique"
+                                          title="Estudiante con inasistencia/fuga hoy: no puede recibir nota hasta que el tutor justifique"
                                         >
                                           Sin nota
                                         </span>
@@ -2297,16 +2375,9 @@ export default function Calificaciones() {
                             <FaCheck /> Todos Presentes
                           </button>
                           <button
-                            onClick={() => marcarTodosAsistencia("A")}
-                            className="px-3 py-1.5 bg-red-100 text-red-700 hover:bg-red-200 rounded-md text-xs font-bold transition-colors flex items-center gap-1.5"
-                            title="Marcar a todos los estudiantes como Ausentes"
-                          >
-                            <FaTimes /> Todos Ausentes
-                          </button>
-                          <button
                             onClick={limpiarAsistencias}
                             className="px-3 py-1.5 bg-slate-200 text-slate-700 hover:bg-slate-300 rounded-md text-xs font-bold transition-colors flex items-center gap-1.5 ml-auto"
-                            title="Limpiar todas las asistencias registradas (respeta justificaciones del tutor)"
+                            title="Limpiar asistencias (respeta J del tutor)"
                           >
                             <FaUndo /> Limpiar
                           </button>
@@ -2315,18 +2386,20 @@ export default function Calificaciones() {
 
                       {estudiantes.map((est) => {
                         const asistencia = asistencias[est.id];
-                        const estado = asistencia?.estado || "";
+                        const estado = asistencia?.estado;
                         const esDeOtroDocente =
                           asistencia?.registradoPor &&
                           asistencia.registradoPor !== user?.uid;
-                        const justificadoPorTutor =
-                          !!asistencia?.justificadoPor && estado === "J";
+                        const esTutorOnly =
+                          !!asistencia?.esTutorOnly ||
+                          (estado ? estadoEsTutorOnly(estado) : false);
+                        const configEstado = estadoConfig(estado);
 
                         return (
                           <div
                             key={est.id}
                             className={`border rounded-lg p-3 transition-colors ${
-                              justificadoPorTutor
+                              esTutorOnly
                                 ? "border-blue-300 bg-blue-50/50"
                                 : "border-slate-200 hover:border-blue-300"
                             }`}
@@ -2341,15 +2414,19 @@ export default function Calificaciones() {
                                     CI: {est.cedula}
                                   </div>
                                 )}
-                                {justificadoPorTutor && (
-                                  <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-blue-100 border border-blue-300 text-blue-700 rounded text-[10px] font-bold">
-                                    <FaUserCheck className="text-[9px]" />
-                                    Justificado por tutor:{" "}
-                                    {nombreDocente(asistencia.justificadoPor)}
+                                {esTutorOnly && (
+                                  <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
+                                    <FaLock className="text-[9px]" />
+                                    {configEstado?.label}
+                                    {!esTutorDelGradoActual && (
+                                      <span className="ml-1 opacity-75">
+                                        — solo tutor
+                                      </span>
+                                    )}
                                   </div>
                                 )}
                                 {estado &&
-                                  !justificadoPorTutor &&
+                                  !esTutorOnly &&
                                   (esDeOtroDocente ||
                                     asistencia?.editadoPor) && (
                                     <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
@@ -2376,78 +2453,95 @@ export default function Calificaciones() {
                                     </div>
                                   )}
                               </div>
-                              <div className="flex gap-1.5 shrink-0">
-                                {(["P", "T", "A", "J"] as const).map(
-                                  (estadoBtn) => {
-                                    if (justificadoPorTutor) {
-                                      const esJ = estadoBtn === "J";
-                                      return (
-                                        <button
-                                          key={estadoBtn}
-                                          disabled
-                                          className={`w-9 h-9 rounded-lg text-xs font-bold transition-all ${
-                                            esJ
-                                              ? "bg-blue-600 text-white shadow-md ring-2 ring-blue-300 cursor-not-allowed"
-                                              : "bg-slate-100 text-slate-300 cursor-not-allowed opacity-50"
-                                          }`}
-                                          title={
-                                            esJ
-                                              ? "Justificado por tutor (bloqueado)"
-                                              : "No disponible: estudiante justificado por tutor"
-                                          }
-                                        >
-                                          {estadoBtn}
-                                        </button>
-                                      );
-                                    }
+                              <div className="flex gap-1 shrink-0 flex-wrap justify-end">
+                                {estadosVisibles.map((estadoConf) => {
+                                  const estaSeleccionado =
+                                    estado === estadoConf.value;
+                                  const esEstadoTutor =
+                                    estadoConf.quien === "tutor";
+                                  const bloqueadoPorTutoria =
+                                    esTutorOnly && !esTutorDelGradoActual;
+                                  const disabled =
+                                    esEstadoTutor || bloqueadoPorTutoria;
 
-                                    const estaSeleccionado =
-                                      estado === estadoBtn;
-                                    const esJ = estadoBtn === "J";
-
-                                    return (
-                                      <button
-                                        key={estadoBtn}
-                                        onClick={() =>
-                                          !esJ &&
-                                          actualizarAsistencia(
-                                            est.id,
-                                            estadoBtn,
-                                          )
-                                        }
-                                        disabled={esJ}
-                                        className={`w-9 h-9 rounded-lg text-xs font-bold transition-all ${
-                                          estaSeleccionado
-                                            ? estadoBtn === "P"
-                                              ? "bg-green-600 text-white shadow-md"
-                                              : estadoBtn === "T"
-                                                ? "bg-yellow-600 text-white shadow-md"
-                                                : estadoBtn === "A"
-                                                  ? "bg-red-600 text-white shadow-md"
-                                                  : "bg-blue-600 text-white shadow-md"
-                                            : esJ
-                                              ? "bg-slate-100 text-slate-400 cursor-not-allowed opacity-60"
-                                              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                                        }`}
-                                        title={
-                                          estadoBtn === "P"
-                                            ? "Presente"
-                                            : estadoBtn === "T"
-                                              ? "Tardanza"
-                                              : estadoBtn === "A"
-                                                ? "Ausente"
-                                                : "Solo el tutor puede justificar desde ReporteAsistencias"
-                                        }
-                                      >
-                                        {estadoBtn}
-                                      </button>
-                                    );
-                                  },
-                                )}
+                                  return (
+                                    <button
+                                      key={estadoConf.value}
+                                      onClick={() =>
+                                        !disabled &&
+                                        actualizarAsistencia(
+                                          est.id,
+                                          estadoConf.value,
+                                        )
+                                      }
+                                      disabled={disabled}
+                                      title={
+                                        esEstadoTutor
+                                          ? `${estadoConf.label} — solo el tutor en Reporte de Asistencias`
+                                          : bloqueadoPorTutoria
+                                            ? "Estado definido por el tutor (bloqueado)"
+                                            : estadoConf.label
+                                      }
+                                      className={`h-9 min-w-9 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${
+                                        estaSeleccionado
+                                          ? `${estadoConf.colorSel} ${
+                                              disabled
+                                                ? "opacity-70 cursor-not-allowed ring-1 ring-slate-300"
+                                                : ""
+                                            }`
+                                          : disabled
+                                            ? "bg-slate-100 text-slate-400 cursor-not-allowed opacity-60"
+                                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                      }`}
+                                    >
+                                      {estadoConf.value}
+                                      {esEstadoTutor && (
+                                        <FaLock className="text-[8px] opacity-70" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
                               </div>
                             </div>
                             {estado && (
-                              <div className="mt-2">
+                              <div className="mt-2 space-y-1.5">
+                                {(estado === "P" || estado === "A") &&
+                                  !esTutorOnly && (
+                                    <div className="flex gap-1.5 flex-wrap">
+                                      <span className="text-[10px] text-slate-500 self-center mr-1">
+                                        Marcar:
+                                      </span>
+                                      {[
+                                        { value: "", label: "Sin observación" },
+                                        {
+                                          value: "Permiso de inspección",
+                                          label: "📋 Permiso de inspección",
+                                        },
+                                        {
+                                          value: "Llamado por dirección",
+                                          label: "🏢 Llamado por dirección",
+                                        },
+                                      ].map((opt) => (
+                                        <button
+                                          key={opt.value}
+                                          onClick={() =>
+                                            actualizarObservacionAsistencia(
+                                              est.id,
+                                              opt.value,
+                                            )
+                                          }
+                                          className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
+                                            (asistencia?.observacion || "") ===
+                                            opt.value
+                                              ? "bg-blue-100 text-blue-700 border border-blue-300"
+                                              : "bg-slate-100 text-slate-600 hover:bg-slate-200 border border-transparent"
+                                          }`}
+                                        >
+                                          {opt.label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
                                 <input
                                   type="text"
                                   value={asistencia?.observacion || ""}
@@ -2458,13 +2552,15 @@ export default function Calificaciones() {
                                     )
                                   }
                                   placeholder={
-                                    justificadoPorTutor
+                                    esTutorOnly && !esTutorDelGradoActual
                                       ? "Observación del tutor (no editable)"
-                                      : "Observación (opcional)..."
+                                      : "Observación libre (opcional)..."
                                   }
-                                  disabled={justificadoPorTutor}
+                                  disabled={
+                                    esTutorOnly && !esTutorDelGradoActual
+                                  }
                                   className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
-                                    justificadoPorTutor
+                                    esTutorOnly && !esTutorDelGradoActual
                                       ? "border-blue-200 bg-blue-50 text-blue-700 cursor-not-allowed"
                                       : "border-slate-300"
                                   }`}
@@ -2482,7 +2578,6 @@ export default function Calificaciones() {
         </>
       )}
 
-      {/* ✅ BARRA STICKY ASISTENCIA */}
       {mostrarBarraSticky && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] p-3 z-40">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
@@ -2542,7 +2637,6 @@ export default function Calificaciones() {
         </div>
       )}
 
-      {/* ✅ BARRA STICKY CALIFICACIONES */}
       {mostrarBarraStickyCalificaciones && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-40">
           <div className="border-b border-slate-100 px-3 py-2">
@@ -2931,7 +3025,7 @@ export default function Calificaciones() {
                 disabled={
                   isSaving || refuerzoForm.nota <= 0 || refuerzoForm.nota > 10
                 }
-                className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
                 {isSaving ? (
                   <FaSpinner className="animate-spin" />
@@ -2945,7 +3039,7 @@ export default function Calificaciones() {
                   setShowRefuerzoModal(false);
                   setRefuerzoEstudianteId(null);
                 }}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all"
               >
                 Cancelar
               </button>

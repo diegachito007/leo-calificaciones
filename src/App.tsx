@@ -1,6 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from './lib/firebase';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { DataProvider } from './context/DataContext'; // ✅ NUEVO
+import { DataProvider } from './context/DataContext';
 import type { ReactNode } from 'react';
 
 // Componentes de páginas
@@ -18,8 +21,10 @@ import Configuracion from './pages/Configuracion';
 import PendingApproval from './pages/PendingApproval';
 import MiHorario from './pages/MiHorario';
 import ReporteAsistencias from './pages/ReporteAsistencias';
-import ReporteNotas from './pages/ReporteNotas'; // ✅ NUEVO
+import ReporteNotas from './pages/ReporteNotas';
 import ArchivedAccount from './pages/ArchivedAccount';
+import MigracionAsistencia from './pages/MigracionAsistencia';
+import EnMantenimiento from './pages/EnMantenimiento'; // ✅ NUEVO
 
 // Formulario público y Panel de administración
 import Matricula from './pages/Matricula';
@@ -28,6 +33,33 @@ import Matriculas from './pages/Matriculas';
 // ✅ RUTA PRIVADA CORREGIDA (Fail-Closed)
 function PrivateRoute({ children }: { children: ReactNode }) {
   const { user, userData, loading } = useAuth();
+
+  // ✅ Flag de mantenimiento leído en tiempo real desde Firestore
+  const [mantenimiento, setMantenimiento] = useState(false);
+  const [datosMantenimiento, setDatosMantenimiento] = useState<{
+    titulo?: string;
+    mensaje?: string;
+  }>({});
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, 'configuracion', 'sistema'),
+      (snap) => {
+        const data = snap.data();
+        setMantenimiento(data?.mantenimiento === true);
+        setDatosMantenimiento({
+          titulo: data?.tituloMantenimiento || '',
+          mensaje: data?.mensajeMantenimiento || '',
+        });
+      },
+      (error) => {
+        // Si el documento no existe aún, no hay mantenimiento
+        console.warn('No se pudo leer configuración de sistema:', error.message);
+        setMantenimiento(false);
+      },
+    );
+    return () => unsub();
+  }, []);
 
   if (loading) {
     return (
@@ -66,6 +98,17 @@ function PrivateRoute({ children }: { children: ReactNode }) {
 
   if (userData.status === 'deleted') {
     return <ArchivedAccount />;
+  }
+
+  // ✅ MODO MANTENIMIENTO: bloquea a todos EXCEPTO super_admin
+  // Así el admin puede entrar a ejecutar la migración mientras el sistema está "cerrado"
+  if (mantenimiento && userData.role !== 'super_admin') {
+    return (
+      <EnMantenimiento
+        titulo={datosMantenimiento.titulo || undefined}
+        mensaje={datosMantenimiento.mensaje || undefined}
+      />
+    );
   }
 
   if (userData.status === 'active') {
@@ -114,7 +157,7 @@ function AppRoutes() {
       <Route path="/mi-horario" element={<PrivateRoute><MiHorario /></PrivateRoute>} />
       <Route path="/calificaciones" element={<PrivateRoute><Calificaciones /></PrivateRoute>} />
       <Route path="/reporte-asistencias" element={<PrivateRoute><ReporteAsistencias /></PrivateRoute>} />
-      <Route path="/reporte-notas" element={<PrivateRoute><ReporteNotas /></PrivateRoute>} /> {/* ✅ NUEVO */}
+      <Route path="/reporte-notas" element={<PrivateRoute><ReporteNotas /></PrivateRoute>} />
       <Route path="/reportes" element={<PrivateRoute><Reportes /></PrivateRoute>} />
 
       {/* Perfil personal */}
@@ -144,6 +187,16 @@ function AppRoutes() {
         element={
           <PrivateRoute>
             <AdminRoute><GestionUsuarios /></AdminRoute>
+          </PrivateRoute>
+        }
+      />
+
+      {/* ✅ RUTA ADMIN: Migración de nomenclatura de asistencia (Solo super_admin) */}
+      <Route
+        path="/migracion-asistencia"
+        element={
+          <PrivateRoute>
+            <AdminRoute><MigracionAsistencia /></AdminRoute>
           </PrivateRoute>
         }
       />
