@@ -36,6 +36,7 @@ import {
   FaTimesCircle,
   FaSignOutAlt,
   FaClipboardList,
+  FaLock,
 } from "react-icons/fa";
 import {
   type EstadoAsistencia,
@@ -58,6 +59,7 @@ interface AsistenciaData {
   representanteNota?: string;
   representantePor?: string;
   representanteEl?: Timestamp | Date;
+  actaNumero?: string;
 }
 
 type TipoReporte = "semanal" | "mensual" | "trimestral";
@@ -68,6 +70,29 @@ interface Toast {
   title: string;
   message?: string;
 }
+
+type RegistroFuga = {
+  fecha: string;
+  materiaNombre: string;
+  asistenciaId: string;
+  representanteAsistio: boolean;
+  representanteNota?: string;
+  actaNumero?: string;
+  representantePor?: string;
+  representanteEl?: Timestamp | Date;
+};
+
+// ==================== MOTIVOS PREESTABLECIDOS ====================
+
+const MOTIVOS_JUSTIFICACION = [
+  { label: "Enfermedad", icon: "🤒" },
+  { label: "Cita médica", icon: "🏥" },
+  { label: "Problemas familiares", icon: "👨‍👩‍👧" },
+  { label: "Calamidad doméstica", icon: "🏠" },
+  { label: "Fallecimiento familiar", icon: "🕯️" },
+  { label: "Trámite personal", icon: "📋" },
+  { label: "Emergencia", icon: "🚨" },
+];
 
 // ==================== HELPERS ====================
 
@@ -123,6 +148,16 @@ const formatFechaCompleta = (fecha: Date): string => {
   });
 };
 
+const formatFechaRegistro = (t?: Timestamp | Date): string => {
+  if (!t) return "";
+  const d = t instanceof Date ? t : (t as Timestamp).toDate();
+  return d.toLocaleDateString("es-EC", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
+
 const getDiasDelMes = (year: number, month: number): Date[] => {
   const dias: Date[] = [];
   const primerDia = new Date(year, month, 1);
@@ -157,8 +192,18 @@ const getDiasDelPeriodo = (fechaInicio: string, fechaFin: string): Date[] => {
 
 const NOMBRES_DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie"];
 const NOMBRES_MESES = [
-  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+  "Enero",
+  "Febrero",
+  "Marzo",
+  "Abril",
+  "Mayo",
+  "Junio",
+  "Julio",
+  "Agosto",
+  "Septiembre",
+  "Octubre",
+  "Noviembre",
+  "Diciembre",
 ];
 
 const ESTADO_CONFIG: Record<
@@ -213,13 +258,7 @@ const ESTADO_CONFIG: Record<
 export default function ReporteAsistencias() {
   const { user, userData } = useAuth();
 
-  const {
-    grados,
-    ambitos,
-    destrezas,
-    periodos,
-    ready,
-  } = useData();
+  const { grados, ambitos, destrezas, periodos, ready } = useData();
 
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [asistencias, setAsistencias] = useState<AsistenciaData[]>([]);
@@ -247,14 +286,13 @@ export default function ReporteAsistencias() {
   const [motivoJustificacion, setMotivoJustificacion] = useState("");
   const [isJustificando, setIsJustificando] = useState(false);
 
-  // ✅ Modal de acta de compromiso (fugas)
+  // ✅ Modal de acta de compromiso (fugas) - agrupado por día
   const [showActaModal, setShowActaModal] = useState(false);
   const [estudianteActaId, setEstudianteActaId] = useState<string | null>(null);
-  const [fugasSeleccionadas, setFugasSeleccionadas] = useState<Set<string>>(
+  const [diasSeleccionados, setDiasSeleccionados] = useState<Set<string>>(
     new Set(),
   );
-  // ✅ Una observación por cada fuga (no global)
-  const [notasPorFuga, setNotasPorFuga] = useState<Record<string, string>>({});
+  const [notasPorDia, setNotasPorDia] = useState<Record<string, string>>({});
   const [isGuardandoActa, setIsGuardandoActa] = useState(false);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -331,19 +369,17 @@ export default function ReporteAsistencias() {
     }
   }, [periodos]);
 
-  const mostrarToast = useCallback((
-    type: Toast["type"],
-    title: string,
-    message?: string,
-    duration = 4000,
-  ) => {
-    const id = `toast-${Date.now()}-${Math.random()}`;
-    const toast: Toast = { id, type, title, message };
-    setToasts((prev) => [...prev, toast]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, duration);
-  }, []);
+  const mostrarToast = useCallback(
+    (type: Toast["type"], title: string, message?: string, duration = 4000) => {
+      const id = `toast-${Date.now()}-${Math.random()}`;
+      const toast: Toast = { id, type, title, message };
+      setToasts((prev) => [...prev, toast]);
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, duration);
+    },
+    [],
+  );
 
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -519,6 +555,9 @@ export default function ReporteAsistencias() {
             asistenciaId: string;
             representanteAsistio?: boolean;
             representanteNota?: string;
+            actaNumero?: string;
+            representantePor?: string;
+            representanteEl?: Timestamp | Date;
           }
         >
       >
@@ -537,12 +576,14 @@ export default function ReporteAsistencias() {
           asistenciaId: a.id,
           representanteAsistio: a.representanteAsistio,
           representanteNota: a.representanteNota,
+          actaNumero: a.actaNumero,
+          representantePor: a.representantePor,
+          representanteEl: a.representanteEl,
         };
       });
     return mapa;
   }, [asistencias, gradoTutorEfectivo]);
 
-  // ✅ Solo inasistencias injustificadas (I) — las que SÍ se justifican
   const ausenciasPorEstudiante = useMemo(() => {
     const conteo: Record<string, number> = {};
     Object.entries(matrizTutor).forEach(([estId, fechas]) => {
@@ -572,7 +613,6 @@ export default function ReporteAsistencias() {
     return conteo;
   }, [matrizTutor]);
 
-  // ✅ Fugas (F) — NO se justifican, se deja constancia del acta
   const fugasPorEstudiante = useMemo(() => {
     const conteo: Record<string, number> = {};
     Object.entries(matrizTutor).forEach(([estId, fechas]) => {
@@ -600,6 +640,36 @@ export default function ReporteAsistencias() {
     });
     return conteo;
   }, [matrizTutor]);
+
+  const siguienteNumeroActa = (estudianteId: string): number => {
+    let max = 0;
+    let sinNumero = 0;
+    Object.values(matrizTutor[estudianteId] || {}).forEach((materias) => {
+      Object.values(materias).forEach((reg) => {
+        if (reg.estado === "F" && reg.representanteAsistio) {
+          const n = parseInt(reg.actaNumero || "", 10);
+          if (!isNaN(n)) max = Math.max(max, n);
+          else sinNumero++;
+        }
+      });
+    });
+    return Math.max(max, sinNumero) + 1;
+  };
+
+  const formatoNumeroActa = (num: number): string => {
+    return String(num).padStart(3, "0");
+  };
+
+  const nombreDocente = useCallback(
+    (uid?: string): string => {
+      if (!uid) return "tutor";
+      if (uid === user?.uid) {
+        return userData?.nombreDocumento || user.displayName || "tutor";
+      }
+      return "tutor";
+    },
+    [user, userData],
+  );
 
   const asistenciasDocente = useMemo(() => {
     return asistencias.filter(
@@ -711,10 +781,32 @@ export default function ReporteAsistencias() {
     );
   };
 
-  // ✅ Solo justifica inasistencias (I). Las fugas NO se justifican.
+  const agregarMotivo = (texto: string) => {
+    setMotivoJustificacion((prev) => {
+      const actual = prev.trim();
+      if (actual === "") return texto;
+      if (actual.endsWith(".")) return actual + " " + texto;
+      return actual + ". " + texto;
+    });
+  };
+
+  // ✅ Agrega texto al textarea de un DÍA específico
+  const agregarTextoDia = (fecha: string, texto: string) => {
+    setNotasPorDia((prev) => {
+      const actual = (prev[fecha] || "").trim();
+      if (actual === "") return { ...prev, [fecha]: texto };
+      if (actual.endsWith(".")) return { ...prev, [fecha]: actual + " " + texto };
+      return { ...prev, [fecha]: actual + ". " + texto };
+    });
+  };
+
   async function justificarDiasSeleccionados() {
     if (!estudianteJustificarId || diasJustificar.size === 0) {
-      mostrarToast("warning", "Selección requerida", "Debes seleccionar al menos un día para justificar.");
+      mostrarToast(
+        "warning",
+        "Selección requerida",
+        "Debes seleccionar al menos un día para justificar.",
+      );
       return;
     }
 
@@ -733,7 +825,11 @@ export default function ReporteAsistencias() {
       });
 
       if (asistenciasAActualizar.length === 0) {
-        mostrarToast("info", "Sin inasistencias injustificadas", "No hay inasistencias (i) para justificar en los días seleccionados. Recuerda: las fugas (f) no se justifican.");
+        mostrarToast(
+          "info",
+          "Sin inasistencias injustificadas",
+          "No hay inasistencias (i) para justificar en los días seleccionados. Recuerda: las fugas (f) no se justifican.",
+        );
         setIsJustificando(false);
         return;
       }
@@ -766,24 +862,22 @@ export default function ReporteAsistencias() {
       setMotivoJustificacion("");
     } catch (error) {
       console.error("Error justificando asistencias:", error);
-      mostrarToast("error", "Error al justificar", "No se pudieron justificar las asistencias.");
+      mostrarToast(
+        "error",
+        "Error al justificar",
+        "No se pudieron justificar las asistencias.",
+      );
     } finally {
       setIsJustificando(false);
     }
   }
 
-  // ==================== ACTA DE COMPROMISO (FUGAS) ====================
+  // ==================== ACTA DE COMPROMISO (FUGAS) — AGRUPADA POR DÍA ====================
 
   const registrosFugas = useMemo(() => {
-    if (!estudianteActaId) return [];
+    if (!estudianteActaId) return [] as RegistroFuga[];
     const regs = matrizTutor[estudianteActaId] || {};
-    const lista: {
-      fecha: string;
-      materiaNombre: string;
-      asistenciaId: string;
-      representanteAsistio: boolean;
-      representanteNota?: string;
-    }[] = [];
+    const lista: RegistroFuga[] = [];
     Object.entries(regs).forEach(([fecha, materias]) => {
       Object.entries(materias).forEach(([materiaId, reg]) => {
         if (reg.estado === "F") {
@@ -795,6 +889,9 @@ export default function ReporteAsistencias() {
             asistenciaId: reg.asistenciaId,
             representanteAsistio: !!reg.representanteAsistio,
             representanteNota: reg.representanteNota,
+            actaNumero: reg.actaNumero,
+            representantePor: reg.representantePor,
+            representanteEl: reg.representanteEl,
           });
         }
       });
@@ -802,111 +899,110 @@ export default function ReporteAsistencias() {
     return lista.sort((a, b) => a.fecha.localeCompare(b.fecha));
   }, [estudianteActaId, matrizTutor, materiasGradoTutor]);
 
+  // ✅ Agrupa las fugas PENDIENTES por DÍA: cada día = una sola caja = una sola acta
+  const gruposPendientes = useMemo(() => {
+    const map = new Map<
+      string,
+      { fecha: string; materias: string[]; asistenciaIds: string[] }
+    >();
+    registrosFugas
+      .filter((f) => !f.representanteAsistio)
+      .forEach((f) => {
+        const g = map.get(f.fecha) || {
+          fecha: f.fecha,
+          materias: [],
+          asistenciaIds: [],
+        };
+        g.materias.push(f.materiaNombre);
+        g.asistenciaIds.push(f.asistenciaId);
+        map.set(f.fecha, g);
+      });
+    return Array.from(map.values()).sort((a, b) =>
+      a.fecha.localeCompare(b.fecha),
+    );
+  }, [registrosFugas]);
+
+  // ✅ Número de acta por día: base + índice del día entre los pendientes
+  const numeroParaDia = (fecha: string): number => {
+    const idx = gruposPendientes.findIndex((g) => g.fecha === fecha);
+    return siguienteNumeroActa(estudianteActaId || "") + (idx === -1 ? 0 : idx);
+  };
+
   const abrirModalActa = (estudianteId: string) => {
     setEstudianteActaId(estudianteId);
     const regs = matrizTutor[estudianteId] || {};
-    const preseleccion = new Set<string>();
-    const notasIniciales: Record<string, string> = {};
-    Object.values(regs).forEach((materias) => {
-      Object.values(materias).forEach((reg) => {
-        if (reg.estado === "F") {
-          notasIniciales[reg.asistenciaId] = reg.representanteNota || "";
-          if (!reg.representanteAsistio) {
-            preseleccion.add(reg.asistenciaId);
-          }
-        }
-      });
+    const dias = new Set<string>();
+    Object.entries(regs).forEach(([fecha, materias]) => {
+      const tienePendiente = Object.values(materias).some(
+        (reg) => reg.estado === "F" && !reg.representanteAsistio,
+      );
+      if (tienePendiente) dias.add(fecha);
     });
-    setFugasSeleccionadas(preseleccion);
-    setNotasPorFuga(notasIniciales);
+    setDiasSeleccionados(dias);
+    setNotasPorDia({});
     setShowActaModal(true);
   };
 
-  const toggleFugaSeleccion = (asistenciaId: string) => {
-    setFugasSeleccionadas((prev) => {
+  const toggleDiaSeleccionado = (fecha: string) => {
+    setDiasSeleccionados((prev) => {
       const nuevo = new Set(prev);
-      if (nuevo.has(asistenciaId)) {
-        nuevo.delete(asistenciaId);
-      } else {
-        nuevo.add(asistenciaId);
-      }
+      if (nuevo.has(fecha)) nuevo.delete(fecha);
+      else nuevo.add(fecha);
       return nuevo;
     });
   };
 
-  // ✅ Guarda acta de compromiso individual por cada fuga
+  // ✅ Guarda UNA acta por día seleccionado, cubriendo todas sus fugas
   async function guardarActaCompromiso() {
     if (!estudianteActaId) return;
 
     setIsGuardandoActa(true);
     try {
-      const marcar = registrosFugas
-        .filter(
-          (f) => fugasSeleccionadas.has(f.asistenciaId) && !f.representanteAsistio,
-        )
-        .map((f) => {
-          const nota = (notasPorFuga[f.asistenciaId] || "").trim() ||
-            "Acta de compromiso firmada con el representante";
-          return updateDoc(doc(db, "asistencias", f.asistenciaId), {
-            representanteAsistio: true,
-            representanteNota: nota,
-            representantePor: user?.uid || "",
-            representanteEl: serverTimestamp(),
-          });
-        });
+      const gruposAGuardar = gruposPendientes.filter((g) =>
+        diasSeleccionados.has(g.fecha),
+      );
 
-      const desmarcar = registrosFugas
-        .filter(
-          (f) => !fugasSeleccionadas.has(f.asistenciaId) && f.representanteAsistio,
-        )
-        .map((f) =>
-          updateDoc(doc(db, "asistencias", f.asistenciaId), {
-            representanteAsistio: false,
-            representanteNota: "",
-            representantePor: null,
-            representanteEl: null,
-          }),
-        );
-
-      const actualizarNota = registrosFugas
-        .filter(
-          (f) =>
-            fugasSeleccionadas.has(f.asistenciaId) &&
-            f.representanteAsistio &&
-            (notasPorFuga[f.asistenciaId] || "") !== (f.representanteNota || ""),
-        )
-        .map((f) => {
-          const nota = (notasPorFuga[f.asistenciaId] || "").trim() ||
-            "Acta de compromiso firmada con el representante";
-          return updateDoc(doc(db, "asistencias", f.asistenciaId), {
-            representanteNota: nota,
-            representantePor: user?.uid || "",
-            representanteEl: serverTimestamp(),
-          });
-        });
-
-      const totalOps = marcar.length + desmarcar.length + actualizarNota.length;
-      if (totalOps === 0) {
-        mostrarToast("info", "Sin cambios", "No hay cambios que guardar.");
+      if (gruposAGuardar.length === 0) {
+        mostrarToast("info", "Sin cambios", "No hay días nuevos para registrar.");
         setIsGuardandoActa(false);
         return;
       }
 
-      await Promise.all([...marcar, ...desmarcar, ...actualizarNota]);
+      const ops = gruposAGuardar.flatMap((g) => {
+        const num = formatoNumeroActa(numeroParaDia(g.fecha));
+        const nota =
+          (notasPorDia[g.fecha] || "").trim() ||
+          `Acta de compromiso N° ${num} firmada con el representante`;
+        return g.asistenciaIds.map((id) =>
+          updateDoc(doc(db, "asistencias", id), {
+            representanteAsistio: true,
+            representanteNota: nota,
+            actaNumero: num,
+            representantePor: user?.uid || "",
+            representanteEl: serverTimestamp(),
+          }),
+        );
+      });
+
+      await Promise.all(ops);
 
       mostrarToast(
         "success",
         "Acta(s) registrada(s)",
-        `Se actualizaron ${totalOps} registro(s) de acta de compromiso.`,
+        `Se registraron ${gruposAGuardar.length} acta(s) que cubren ${ops.length} fuga(s).`,
         5000,
       );
       setShowActaModal(false);
       setEstudianteActaId(null);
-      setFugasSeleccionadas(new Set());
-      setNotasPorFuga({});
+      setDiasSeleccionados(new Set());
+      setNotasPorDia({});
     } catch (error) {
       console.error("Error guardando acta de compromiso:", error);
-      mostrarToast("error", "Error al guardar", "No se pudo registrar el acta de compromiso.");
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo registrar el acta de compromiso.",
+      );
     } finally {
       setIsGuardandoActa(false);
     }
@@ -999,7 +1095,12 @@ export default function ReporteAsistencias() {
       } else {
         const filas = estudiantesGradoTutor
           .map((est, idx) => {
-            let P = 0, A = 0, I = 0, F = 0, J = 0, actas = 0;
+            let P = 0,
+              A = 0,
+              I = 0,
+              F = 0,
+              J = 0,
+              actas = 0;
             Object.values(matrizTutor[est.id] || {}).forEach((mats) =>
               Object.values(mats).forEach((r) => {
                 if (r.estado === "P") P++;
@@ -1084,7 +1185,12 @@ export default function ReporteAsistencias() {
       } else {
         const filas = materiasDocenteGrado
           .map((m) => {
-            let P = 0, A = 0, I = 0, F = 0, J = 0, sesiones = 0;
+            let P = 0,
+              A = 0,
+              I = 0,
+              F = 0,
+              J = 0,
+              sesiones = 0;
             Object.values(matrizDocente[m.id] || {}).forEach((d) => {
               P += d.P;
               A += d.A;
@@ -1222,7 +1328,6 @@ export default function ReporteAsistencias() {
     win.focus();
   };
 
-  // ✅ Genera un listado LINEAL detallado (una fila por evento) con la MATERIA visible
   const generarHTMLDetalle = (): string => {
     const esVistaTutor = vistaEfectiva === "tutor" && esTutor;
     const grado = esVistaTutor ? gradoTutorActual : gradoDocenteActual;
@@ -1249,7 +1354,6 @@ export default function ReporteAsistencias() {
       minute: "2-digit",
     });
 
-    // ---- Construir lista de registros que NO son Presente ----
     type FilaDetalle = {
       estudiante: string;
       fecha: string;
@@ -1257,6 +1361,7 @@ export default function ReporteAsistencias() {
       estado: EstadoAsistencia;
       observacion?: string;
       acta?: boolean;
+      actaNumero?: string;
     };
     const filas: FilaDetalle[] = [];
 
@@ -1276,6 +1381,7 @@ export default function ReporteAsistencias() {
               estado: reg.estado,
               observacion: reg.observacion,
               acta: reg.representanteAsistio,
+              actaNumero: reg.actaNumero,
             });
           });
         });
@@ -1293,6 +1399,7 @@ export default function ReporteAsistencias() {
           estado: a.estado as EstadoAsistencia,
           observacion: a.observacion,
           acta: a.representanteAsistio,
+          actaNumero: a.actaNumero,
         });
       });
     }
@@ -1303,12 +1410,15 @@ export default function ReporteAsistencias() {
         a.estudiante.localeCompare(b.estudiante),
     );
 
-    // ---- Resumen por estudiante (solo vista tutor) ----
     let tablaResumen = "";
     if (esVistaTutor) {
       const filasResumen = estudiantesGradoTutor
         .map((est, idx) => {
-          let P = 0, A = 0, I = 0, F = 0, J = 0;
+          let P = 0,
+            A = 0,
+            I = 0,
+            F = 0,
+            J = 0;
           Object.values(matrizTutor[est.id] || {}).forEach((mats) =>
             Object.values(mats).forEach((r) => {
               if (r.estado === "P") P++;
@@ -1351,7 +1461,6 @@ export default function ReporteAsistencias() {
         </table>`;
     }
 
-    // ---- Detalle lineal ----
     const estadoLabel = (e: EstadoAsistencia) =>
       e === "I"
         ? "Inasistencia"
@@ -1371,7 +1480,7 @@ export default function ReporteAsistencias() {
               const actaTxt =
                 f.estado === "F"
                   ? f.acta
-                    ? " • Acta firmada"
+                    ? ` • Acta N° ${f.actaNumero || "s/n"}`
                     : " • Sin acta"
                   : "";
               const obs = f.observacion ? ` • ${f.observacion}` : "";
@@ -1509,9 +1618,13 @@ export default function ReporteAsistencias() {
   const estudianteJustificar = estudiantes.find(
     (e) => e.id === estudianteJustificarId,
   );
-  const estudianteActa = estudiantes.find(
-    (e) => e.id === estudianteActaId,
-  );
+  const estudianteActa = estudiantes.find((e) => e.id === estudianteActaId);
+
+  const proximoNumeroActaSugerido = estudianteActaId
+    ? siguienteNumeroActa(estudianteActaId)
+    : 1;
+
+  const fugasRegistradas = registrosFugas.filter((f) => f.representanteAsistio);
 
   return (
     <Layout>
@@ -1699,7 +1812,7 @@ export default function ReporteAsistencias() {
           <FaInfoCircle className="text-[10px]" />
           Las fugas (f) <strong>no se justifican</strong>: se levanta acta de
           compromiso física firmada con el representante. Celda con borde verde
-          = acta firmada.
+          = acta firmada (inmutable).
         </div>
       </div>
 
@@ -1908,7 +2021,7 @@ export default function ReporteAsistencias() {
                                             }`}
                                             title={`${materiaNombre || "Materia"}: ${config.label}${reg.observacion ? ` • ${reg.observacion}` : ""}${
                                               reg.representanteAsistio
-                                                ? " • ✔ Acta de compromiso firmada"
+                                                ? ` • ✔ Acta N° ${reg.actaNumero || "s/n"}`
                                                 : ""
                                             }`}
                                           >
@@ -1971,7 +2084,7 @@ export default function ReporteAsistencias() {
                                 <button
                                   onClick={() => abrirModalActa(est.id)}
                                   className="inline-flex items-center gap-1 px-2 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-all shadow-sm"
-                                  title="Registrar acta de compromiso firmada con el representante"
+                                  title="Ver actas registradas / registrar nuevas actas"
                                 >
                                   <FaFileSignature className="text-[10px]" />
                                   Acta
@@ -2202,7 +2315,7 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
-      {/* ==================== MODAL JUSTIFICAR (solo I) ==================== */}
+      {/* ==================== MODAL JUSTIFICAR (solo I) CON CHIPS ==================== */}
       {showJustificarModal && estudianteJustificar && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -2307,7 +2420,8 @@ export default function ReporteAsistencias() {
                       {tieneAusencias ? (
                         <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold">
                           <FaUserTimes className="text-[9px]" />
-                          {ausenciasDia} inasistencia{ausenciasDia !== 1 ? "s" : ""}
+                          {ausenciasDia} inasistencia
+                          {ausenciasDia !== 1 ? "s" : ""}
                         </span>
                       ) : (
                         <span className="text-xs text-slate-400 italic">
@@ -2320,15 +2434,40 @@ export default function ReporteAsistencias() {
               </div>
             </div>
 
+            <div className="mb-3">
+              <label className="block text-sm font-semibold text-slate-700 mb-2">
+                Motivos comunes{" "}
+                <span className="text-slate-400 font-normal">
+                  (clic para agregar)
+                </span>
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {MOTIVOS_JUSTIFICACION.map((motivo) => (
+                  <button
+                    key={motivo.label}
+                    type="button"
+                    onClick={() => agregarMotivo(motivo.label)}
+                    disabled={isJustificando}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-400 text-blue-800 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
+                  >
+                    <span>{motivo.icon}</span>
+                    <span>{motivo.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mb-5">
               <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Motivo de la justificación{" "}
-                <span className="text-slate-400 font-normal">(opcional)</span>
+                Detalle del motivo{" "}
+                <span className="text-slate-400 font-normal">
+                  (opcional — puedes personalizar)
+                </span>
               </label>
               <textarea
                 value={motivoJustificacion}
                 onChange={(e) => setMotivoJustificacion(e.target.value)}
-                placeholder="Ej: Enfermedad, cita médica, problemas familiares..."
+                placeholder="Ej: Enfermedad. Cita médica programada en el IESS a las 10:00..."
                 rows={3}
                 disabled={isJustificando}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
@@ -2379,7 +2518,7 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
-      {/* ==================== MODAL ACTA DE COMPROMISO (FUGAS) ==================== */}
+      {/* ==================== MODAL ACTA: AGRUPADA POR DÍA ==================== */}
       {showActaModal && estudianteActa && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -2393,7 +2532,7 @@ export default function ReporteAsistencias() {
                     Acta de Compromiso
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Registro de fugas — se levanta acta física firmada
+                    Las actas registradas son inmutables (solo lectura)
                   </p>
                 </div>
               </div>
@@ -2413,13 +2552,22 @@ export default function ReporteAsistencias() {
               <p className="text-sm text-purple-800 font-semibold">
                 {estudianteActa.apellidos} {estudianteActa.nombres}
               </p>
-              <p className="text-xs text-purple-600 mt-1">
-                Fugas en el período: <strong>{registrosFugas.length}</strong> •
-                Con acta registrada:{" "}
-                <strong>
-                  {registrosFugas.filter((f) => f.representanteAsistio).length}
-                </strong>
-              </p>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-purple-600 mt-1">
+                <span>
+                  Fugas: <strong>{registrosFugas.length}</strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Con acta: <strong>{fugasRegistradas.length}</strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Próximo N°:{" "}
+                  <strong className="text-purple-900">
+                    {formatoNumeroActa(proximoNumeroActaSugerido)}
+                  </strong>
+                </span>
+              </div>
             </div>
 
             {registrosFugas.length === 0 ? (
@@ -2428,90 +2576,235 @@ export default function ReporteAsistencias() {
                 actual.
               </div>
             ) : (
-              <div className="mb-4 space-y-3">
-                <label className="block text-sm font-semibold text-slate-700">
-                  Para cada fuga, marca si se levantó acta y agrega la
-                  observación
-                </label>
-                {registrosFugas.map((fuga) => {
-                  const seleccionado = fugasSeleccionadas.has(
-                    fuga.asistenciaId,
-                  );
-                  return (
-                    <div
-                      key={fuga.asistenciaId}
-                      className={`p-3 rounded-lg border-2 transition-all ${
-                        seleccionado
-                          ? "bg-purple-50 border-purple-400"
-                          : "bg-white border-slate-200"
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3 mb-2">
-                        <label className="flex items-start gap-2 flex-1 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={seleccionado}
-                            onChange={() =>
-                              toggleFugaSeleccion(fuga.asistenciaId)
-                            }
-                            className="w-4 h-4 mt-0.5 text-purple-600 rounded focus:ring-purple-500"
-                          />
-                          <div className="flex-1">
-                            <div className="font-semibold text-slate-900 text-sm capitalize">
-                              {formatFechaCompleta(parseFechaLocal(fuga.fecha))}
-                            </div>
-                            <div className="text-xs text-slate-500">
-                              {fuga.materiaNombre}
-                            </div>
-                          </div>
-                        </label>
-                        {fuga.representanteAsistio ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold shrink-0">
-                            <FaUserCheck className="text-[9px]" />
-                            Acta firmada
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold shrink-0">
-                            <FaSignOutAlt className="text-[9px]" />
-                            Sin acta
-                          </span>
-                        )}
-                      </div>
-                      {seleccionado && (
-                        <textarea
-                          value={notasPorFuga[fuga.asistenciaId] || ""}
-                          onChange={(e) =>
-                            setNotasPorFuga((prev) => ({
-                              ...prev,
-                              [fuga.asistenciaId]: e.target.value,
-                            }))
-                          }
-                          placeholder="Ej: Se levantó acta de compromiso firmada por el representante. Se acordó..."
-                          rows={2}
-                          disabled={isGuardandoActa}
-                          className="w-full border border-purple-200 rounded-md px-2 py-1.5 text-xs focus:ring-2 focus:ring-purple-400 focus:border-purple-400 disabled:bg-slate-100"
-                        />
-                      )}
+              <>
+                {/* ✅ ACTAS YA REGISTRADAS: SOLO LECTURA (una caja por día) */}
+                {fugasRegistradas.length > 0 && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">
+                      <FaLock className="inline text-[10px] mr-1 text-green-700" />
+                      Actas registradas (solo lectura)
+                    </label>
+                    <div className="space-y-2">
+                      {(() => {
+                        // Agrupar por día para mostrar una sola caja por día
+                        const map = new Map<string, RegistroFuga[]>();
+                        fugasRegistradas.forEach((f) => {
+                          const arr = map.get(f.fecha) || [];
+                          arr.push(f);
+                          map.set(f.fecha, arr);
+                        });
+                        return Array.from(map.entries())
+                          .sort((a, b) => a[0].localeCompare(b[0]))
+                          .map(([fecha, fugasDelDia]) => {
+                            const primera = fugasDelDia[0];
+                            return (
+                              <div
+                                key={fecha}
+                                className="p-3 rounded-lg border-2 border-green-200 bg-green-50/60"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-semibold text-slate-900 text-sm capitalize">
+                                      {formatFechaCompleta(parseFechaLocal(fecha))}
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      {fugasDelDia.length} materia(s):{" "}
+                                      <span className="font-medium text-slate-700">
+                                        {fugasDelDia
+                                          .map((f) => f.materiaNombre)
+                                          .join(", ")}
+                                      </span>
+                                    </div>
+                                    {primera.representanteNota && (
+                                      <div className="mt-1.5 text-xs text-slate-700 bg-white/80 border border-green-200 rounded px-2 py-1.5">
+                                        {primera.representanteNota}
+                                      </div>
+                                    )}
+                                    {(primera.representantePor ||
+                                      primera.representanteEl) && (
+                                      <div className="mt-1 text-[10px] text-slate-400">
+                                        Registrado por{" "}
+                                        {nombreDocente(primera.representantePor) ||
+                                          "tutor"}
+                                        {primera.representanteEl
+                                          ? ` el ${formatFechaRegistro(primera.representanteEl)}`
+                                          : ""}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold shrink-0">
+                                    <FaLock className="text-[9px]" />
+                                    Acta{" "}
+                                    {primera.actaNumero
+                                      ? `N° ${primera.actaNumero}`
+                                      : "firmada"}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          });
+                      })()}
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                )}
+
+                {/* ✅ UNA CAJA POR DÍA PENDIENTE: todas las materias del día en una sola acta */}
+                {gruposPendientes.length > 0 ? (
+                  <div className="mb-4 space-y-3">
+                    <label className="block text-sm font-semibold text-slate-700">
+                      Fugas sin acta — las del mismo día comparten una sola acta
+                    </label>
+                    {gruposPendientes.map((grupo) => {
+                      const seleccionado = diasSeleccionados.has(grupo.fecha);
+                      const num = numeroParaDia(grupo.fecha);
+                      return (
+                        <div
+                          key={grupo.fecha}
+                          className={`p-3 rounded-lg border-2 transition-all ${
+                            seleccionado
+                              ? "bg-purple-50 border-purple-400"
+                              : "bg-white border-slate-200"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3 mb-2">
+                            <label className="flex items-start gap-2 flex-1 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={seleccionado}
+                                onChange={() =>
+                                  toggleDiaSeleccionado(grupo.fecha)
+                                }
+                                className="w-4 h-4 mt-0.5 text-purple-600 rounded focus:ring-purple-500"
+                              />
+                              <div className="flex-1">
+                                <div className="font-semibold text-slate-900 text-sm capitalize">
+                                  {formatFechaCompleta(
+                                    parseFechaLocal(grupo.fecha),
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  {grupo.materias.length} materia(s):{" "}
+                                  <span className="font-medium text-slate-700">
+                                    {grupo.materias.join(", ")}
+                                  </span>
+                                </div>
+                              </div>
+                            </label>
+                            {seleccionado ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-200 text-purple-900 rounded-full text-xs font-bold shrink-0">
+                                N° {formatoNumeroActa(num)}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold shrink-0">
+                                <FaSignOutAlt className="text-[9px]" />
+                                Sin acta
+                              </span>
+                            )}
+                          </div>
+                          {seleccionado && (
+                            <>
+                              <div className="mb-2">
+                                <div className="text-[11px] font-semibold text-purple-700 mb-1">
+                                  Plantillas de acta (clic para agregar):
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      agregarTextoDia(
+                                        grupo.fecha,
+                                        `Acta de compromiso N° ${formatoNumeroActa(num)} firmada con el representante`,
+                                      )
+                                    }
+                                    disabled={isGuardandoActa}
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 hover:bg-purple-200 border border-purple-300 hover:border-purple-500 text-purple-800 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
+                                  >
+                                    📄 Acta N° {formatoNumeroActa(num)}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      agregarTextoDia(
+                                        grupo.fecha,
+                                        "Se establece compromiso de mejorar la asistencia y comportamiento",
+                                      )
+                                    }
+                                    disabled={isGuardandoActa}
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
+                                  >
+                                    ✍️ Compromiso
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      agregarTextoDia(
+                                        grupo.fecha,
+                                        "El representante se compromete a dar seguimiento",
+                                      )
+                                    }
+                                    disabled={isGuardandoActa}
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
+                                  >
+                                    👨‍👩‍👧 Seguimiento
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      agregarTextoDia(
+                                        grupo.fecha,
+                                        "Se notifica a Dirección Distrital por reincidencia",
+                                      )
+                                    }
+                                    disabled={isGuardandoActa}
+                                    className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
+                                  >
+                                    ⚠️ Notificación DD
+                                  </button>
+                                </div>
+                              </div>
+                              <textarea
+                                value={notasPorDia[grupo.fecha] || ""}
+                                onChange={(e) =>
+                                  setNotasPorDia((prev) => ({
+                                    ...prev,
+                                    [grupo.fecha]: e.target.value,
+                                  }))
+                                }
+                                placeholder="Ej: Acta de compromiso N° 001 firmada con el representante. Se establece..."
+                                rows={2}
+                                disabled={isGuardandoActa}
+                                className="w-full border border-purple-200 rounded-md px-2 py-1.5 text-xs focus:ring-2 focus:ring-purple-400 focus:border-purple-400 disabled:bg-slate-100"
+                              />
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg text-center text-sm text-green-700">
+                    ✅ Todas las fugas de este estudiante ya tienen acta
+                    registrada (solo lectura).
+                  </div>
+                )}
+              </>
             )}
 
             {registrosFugas.length > 0 && (
               <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800">
                 <FaInfoCircle className="inline mr-1" />
-                El estado <strong>F (fuga)</strong> NO cambia: sigue contando
-                como fuga. Este registro es <strong>constancia documental</strong>{" "}
-                del acta física firmada con el representante (
-                {fugasSeleccionadas.size} acta(s) marcada(s)).
+                El estado <strong>F (fuga)</strong> NO cambia. Las fugas del{" "}
+                <strong>mismo día</strong> se agrupan en{" "}
+                <strong>una sola acta</strong>; cada día nuevo genera el
+                siguiente número. Una vez registrada, el acta queda{" "}
+                <strong>bloqueada</strong> (solo lectura).
               </div>
             )}
 
             <div className="flex gap-2">
               <button
                 onClick={guardarActaCompromiso}
-                disabled={isGuardandoActa || registrosFugas.length === 0}
+                disabled={isGuardandoActa || diasSeleccionados.size === 0}
                 className="flex-1 inline-flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isGuardandoActa ? (
@@ -2550,13 +2843,21 @@ export default function ReporteAsistencias() {
               key={toast.id}
               className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
             >
-              <div className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}>
+              <div
+                className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
+              >
                 <Icon className="text-white text-sm" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>{toast.title}</p>
+                <p className={`font-semibold text-sm ${config.titleColor}`}>
+                  {toast.title}
+                </p>
                 {toast.message && (
-                  <p className={`text-xs ${config.msgColor} mt-0.5 whitespace-pre-line`}>{toast.message}</p>
+                  <p
+                    className={`text-xs ${config.msgColor} mt-0.5 whitespace-pre-line`}
+                  >
+                    {toast.message}
+                  </p>
                 )}
               </div>
               <button
