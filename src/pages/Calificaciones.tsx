@@ -1943,11 +1943,11 @@ export default function Calificaciones() {
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => setShowActividadesModal(true)}
-                            className="flex-1 min-w-0 border border-slate-300 rounded-lg px-2 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500 bg-white text-left flex items-center gap-2 hover:border-blue-400 transition-all"
+                            className="flex-1 min-w-0 border border-slate-300 rounded-lg px-3 py-2.5 text-xs font-medium focus:ring-2 focus:ring-blue-500 bg-white text-left flex items-center gap-2 hover:border-blue-400 transition-all"
                           >
                             <FaTasks className="text-blue-600 shrink-0" />
                             {actividadSeleccionada ? (
-                              <span className="truncate text-slate-900">
+                              <span className="truncate text-slate-900 font-semibold">
                                 {actividadSeleccionada.tipo} ·{" "}
                                 {actividadSeleccionada.detalle} ·{" "}
                                 {actividadSeleccionada.fecha}
@@ -1955,78 +1955,21 @@ export default function Calificaciones() {
                             ) : (
                               <span className="truncate text-slate-500">
                                 {actividades.length === 0
-                                  ? "Sin actividades — crea una con ＋"
-                                  : "Seleccionar actividad..."}
+                                  ? "Sin actividades — crea la primera"
+                                  : "Ninguna actividad seleccionada"}
                               </span>
                             )}
-                            <FaChevronDown className="text-[10px] text-slate-400 shrink-0 ml-auto" />
                           </button>
-
-                          {actividadSeleccionada && (
-                            <span className="shrink-0 text-[10px] font-bold px-2 py-1 rounded bg-blue-100 text-blue-700 whitespace-nowrap">
-                              {calificacionesRegistradas}/{estudiantes.length}
-                            </span>
-                          )}
 
                           <button
-                            onClick={() => {
-                              setShowActividadModal(true);
-                              setEditingActividadId(null);
-                              setActividadForm({
-                                tipo: "Tarea",
-                                detalle: "",
-                                fecha: new Date().toISOString().split("T")[0],
-                                estrategiaNota: "promediar",
-                              });
-                            }}
-                            title="Nueva actividad"
-                            className="shrink-0 p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-all"
+                            onClick={() => setShowActividadesModal(true)}
+                            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all"
                           >
-                            <FaPlus className="text-xs" />
+                            <FaSyncAlt className="text-[10px]" />
+                            {actividadSeleccionada
+                              ? "Cambiar actividad"
+                              : "Seleccionar actividad"}
                           </button>
-
-                          {actividadSeleccionada && (
-                            <>
-                              <button
-                                onClick={() => {
-                                  setEditingActividadId(
-                                    actividadSeleccionada.id || null,
-                                  );
-                                  setActividadForm({
-                                    tipo: actividadSeleccionada.tipo,
-                                    detalle: actividadSeleccionada.detalle,
-                                    fecha: actividadSeleccionada.fecha,
-                                    estrategiaNota:
-                                      actividadSeleccionada.estrategiaNota,
-                                  });
-                                  setShowActividadModal(true);
-                                }}
-                                title="Editar actividad"
-                                className="shrink-0 p-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg transition-all"
-                              >
-                                <FaEdit className="text-xs" />
-                              </button>
-                              <button
-                                onClick={() =>
-                                  eliminarActividad(selectedActividadId)
-                                }
-                                title="Eliminar actividad"
-                                className="shrink-0 p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg transition-all"
-                              >
-                                <FaTrash className="text-xs" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setSelectedActividadId("");
-                                  setCalificaciones({});
-                                }}
-                                title="Cerrar actividad"
-                                className="shrink-0 p-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition-all"
-                              >
-                                <FaTimes className="text-xs" />
-                              </button>
-                            </>
-                          )}
                         </div>
                       </div>
 
@@ -2061,8 +2004,7 @@ export default function Calificaciones() {
                                       <strong>de un día anterior</strong>.
                                       Puedes asignar notas{" "}
                                       <strong>
-                                        aunque el estudiante haya estado
-                                        ausente
+                                        aunque el estudiante haya estado ausente
                                       </strong>{" "}
                                       (recuperaciones, trabajos extra, etc.).
                                     </>
@@ -2157,8 +2099,9 @@ export default function Calificaciones() {
                                       {ausenteAntiguo && (
                                         <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 border border-amber-300 text-amber-800 rounded text-[10px] font-bold">
                                           <FaUserTimes className="text-[9px]" />
-                                          {configEstadoAsistencia?.label} el{" "}
-                                          {actividadSeleccionada.fecha} —
+                                          {
+                                            configEstadoAsistencia?.label
+                                          } el {actividadSeleccionada.fecha} —
                                           permite nota
                                         </div>
                                       )}
@@ -2730,7 +2673,9 @@ export default function Calificaciones() {
                   <FaTasks className="text-blue-600 text-xl" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Actividades</h3>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Actividades
+                  </h3>
                   <p className="text-xs text-slate-500">
                     {actividades.length} actividad(es) · ordenadas por fecha
                   </p>
