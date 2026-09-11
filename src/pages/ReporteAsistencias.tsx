@@ -35,6 +35,7 @@ import {
   FaPrint,
   FaTimesCircle,
   FaSignOutAlt,
+  FaClipboardList,
 } from "react-icons/fa";
 import {
   type EstadoAsistencia,
@@ -1221,6 +1222,245 @@ export default function ReporteAsistencias() {
     win.focus();
   };
 
+  // ✅ Genera un listado LINEAL detallado (una fila por evento) con la MATERIA visible
+  const generarHTMLDetalle = (): string => {
+    const esVistaTutor = vistaEfectiva === "tutor" && esTutor;
+    const grado = esVistaTutor ? gradoTutorActual : gradoDocenteActual;
+    const nombreResponsable =
+      userData?.nombreDocumento || user?.displayName || "";
+
+    let rangoLabel: string;
+    if (tipoReporte === "semanal") {
+      rangoLabel = `Semana del ${formatFechaLarga(diasSemana[0])} al ${formatFechaLarga(diasSemana[4])}`;
+    } else if (tipoReporte === "mensual") {
+      rangoLabel = `${NOMBRES_MESES[mesActual]} de ${anioActual}`;
+    } else {
+      const periodo = periodos.find((p) => p.id === periodoSeleccionado);
+      rangoLabel = periodo
+        ? `Del ${formatFechaLarga(parseFechaLocal(periodo.fechaInicio))} al ${formatFechaLarga(parseFechaLocal(periodo.fechaFin))}`
+        : "";
+    }
+
+    const fechaGeneracion = new Date().toLocaleDateString("es-EC", {
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    // ---- Construir lista de registros que NO son Presente ----
+    type FilaDetalle = {
+      estudiante: string;
+      fecha: string;
+      materia: string;
+      estado: EstadoAsistencia;
+      observacion?: string;
+      acta?: boolean;
+    };
+    const filas: FilaDetalle[] = [];
+
+    if (esVistaTutor) {
+      Object.entries(matrizTutor).forEach(([estId, fechas]) => {
+        const est = estudiantesGradoTutor.find((e) => e.id === estId);
+        const nombreEst = est ? `${est.apellidos} ${est.nombres}` : estId;
+        Object.entries(fechas).forEach(([fecha, materias]) => {
+          Object.entries(materias).forEach(([materiaId, reg]) => {
+            if (reg.estado === "P") return;
+            filas.push({
+              estudiante: nombreEst,
+              fecha,
+              materia:
+                materiasGradoTutor.find((m) => m.id === materiaId)?.nombre ||
+                "General",
+              estado: reg.estado,
+              observacion: reg.observacion,
+              acta: reg.representanteAsistio,
+            });
+          });
+        });
+      });
+    } else {
+      asistenciasDocente.forEach((a) => {
+        if (a.estado === "P") return;
+        const est = estudiantes.find((e) => e.id === a.estudianteId);
+        filas.push({
+          estudiante: est ? `${est.apellidos} ${est.nombres}` : a.estudianteId,
+          fecha: a.fecha,
+          materia:
+            materiasDocenteGrado.find((m) => m.id === a.ambitoId)?.nombre ||
+            "General",
+          estado: a.estado as EstadoAsistencia,
+          observacion: a.observacion,
+          acta: a.representanteAsistio,
+        });
+      });
+    }
+
+    filas.sort(
+      (a, b) =>
+        a.fecha.localeCompare(b.fecha) ||
+        a.estudiante.localeCompare(b.estudiante),
+    );
+
+    // ---- Resumen por estudiante (solo vista tutor) ----
+    let tablaResumen = "";
+    if (esVistaTutor) {
+      const filasResumen = estudiantesGradoTutor
+        .map((est, idx) => {
+          let P = 0, A = 0, I = 0, F = 0, J = 0;
+          Object.values(matrizTutor[est.id] || {}).forEach((mats) =>
+            Object.values(mats).forEach((r) => {
+              if (r.estado === "P") P++;
+              else if (r.estado === "A") A++;
+              else if (r.estado === "I") I++;
+              else if (r.estado === "F") F++;
+              else if (r.estado === "J") J++;
+            }),
+          );
+          const total = P + A + I + F + J;
+          const pct = total > 0 ? Math.round(((P + A + J) / total) * 100) : 0;
+          return `<tr>
+            <td class="num">${idx + 1}</td>
+            <td class="name">${est.apellidos} ${est.nombres}</td>
+            <td>${P}</td>
+            <td>${A}</td>
+            <td class="st-I">${I}</td>
+            <td class="st-F">${F}</td>
+            <td>${J}</td>
+            <td><strong>${pct}%</strong></td>
+          </tr>`;
+        })
+        .join("");
+      tablaResumen = `
+        <h2>Resumen por estudiante</h2>
+        <table class="grid">
+          <thead>
+            <tr>
+              <th class="num">#</th>
+              <th class="name">Estudiante</th>
+              <th>Pres.</th>
+              <th>Atrasos</th>
+              <th>Inas.</th>
+              <th>Fugas</th>
+              <th>Justif.</th>
+              <th>% Asist.</th>
+            </tr>
+          </thead>
+          <tbody>${filasResumen}</tbody>
+        </table>`;
+    }
+
+    // ---- Detalle lineal ----
+    const estadoLabel = (e: EstadoAsistencia) =>
+      e === "I"
+        ? "Inasistencia"
+        : e === "F"
+          ? "Fuga"
+          : e === "A"
+            ? "Atraso"
+            : e === "J"
+              ? "Justificado"
+              : e;
+
+    const filasDetalle =
+      filas.length === 0
+        ? `<tr><td colspan="6" class="sin">Sin registros de inasistencias, atrasos, fugas o justificados en el período.</td></tr>`
+        : filas
+            .map((f, idx) => {
+              const actaTxt =
+                f.estado === "F"
+                  ? f.acta
+                    ? " • Acta firmada"
+                    : " • Sin acta"
+                  : "";
+              const obs = f.observacion ? ` • ${f.observacion}` : "";
+              return `<tr>
+                <td class="num">${idx + 1}</td>
+                <td class="name">${f.estudiante}</td>
+                <td>${f.fecha}</td>
+                <td class="name">${f.materia}</td>
+                <td class="st-${f.estado}">${estadoLabel(f.estado)}</td>
+                <td class="name">${obs || "—"}${actaTxt}</td>
+              </tr>`;
+            })
+            .join("");
+
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Detalle de Asistencia</title>
+<style>
+  @page { size: letter portrait; margin: 2cm 1.5cm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1f2937; font-size: 10px; margin: 0; }
+  .report-header { text-align: center; margin-bottom: 12px; }
+  .report-title { font-size: 14px; font-weight: bold; letter-spacing: 1.2px; }
+  .report-subtitle { font-size: 10.5px; margin-top: 3px; font-weight: bold; }
+  .report-range { font-size: 10px; margin-top: 2px; color: #374151; }
+  h2 { font-size: 11px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+  table.grid { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  th, td { border: 1px solid #6b7280; padding: 3px 5px; text-align: center; vertical-align: top; }
+  th { background: #f3f4f6; font-size: 9px; text-transform: uppercase; }
+  td.name { text-align: left; }
+  td.num, th.num { width: 22px; color: #6b7280; }
+  td.sin { color: #9ca3af; text-align: center; }
+  tr { page-break-inside: avoid; }
+  .st-I { color: #b91c1c; font-weight: bold; }
+  .st-F { color: #7e22ce; font-weight: bold; }
+  .st-A { color: #a16207; font-weight: bold; }
+  .st-J { color: #1d4ed8; font-weight: bold; }
+  .footer { margin-top: 14px; font-size: 8.5px; color: #6b7280; text-align: right; }
+</style>
+</head>
+<body>
+  <div class="report-header">
+    <div class="report-title">REPORTE DETALLADO DE ASISTENCIA</div>
+    <div class="report-subtitle">Grado: ${grado ? grado.nombre + " \u201C" + grado.paralelo + "\u201D" : "\u2014"}</div>
+    <div class="report-range">${rangoLabel}</div>
+  </div>
+  ${tablaResumen}
+  <h2>Detalle por materia (inasistencias, atrasos, fugas y justificados)</h2>
+  <table class="grid">
+    <thead>
+      <tr>
+        <th class="num">#</th>
+        <th class="name">Estudiante</th>
+        <th>Fecha</th>
+        <th class="name">Materia</th>
+        <th>Estado</th>
+        <th class="name">Observación / Acta</th>
+      </tr>
+    </thead>
+    <tbody>${filasDetalle}</tbody>
+  </table>
+  <div class="footer">Generado el ${fechaGeneracion} por ${nombreResponsable || "Sistema"}</div>
+  <script>
+    window.onload = function () {
+      setTimeout(function () { window.print(); }, 400);
+    };
+  </script>
+</body>
+</html>`;
+  };
+
+  const handlePrintDetalle = () => {
+    const html = generarHTMLDetalle();
+    const win = window.open("", "_blank");
+    if (!win) {
+      mostrarToast(
+        "warning",
+        "Ventana emergente bloqueada",
+        "Permite las ventanas emergentes en tu navegador para poder imprimir el detalle.",
+      );
+      return;
+    }
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+  };
+
   const puedeImprimir =
     (vistaEfectiva === "tutor" && estudiantesGradoTutor.length > 0) ||
     (vistaEfectiva === "docente" && materiasDocenteGrado.length > 0);
@@ -1319,6 +1559,16 @@ export default function ReporteAsistencias() {
           >
             <FaPrint className="text-sm" />
             Imprimir
+          </button>
+
+          <button
+            onClick={handlePrintDetalle}
+            disabled={!puedeImprimir}
+            className="flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Imprimir listado lineal con detalle por materia (ideal tablet)"
+          >
+            <FaClipboardList className="text-sm" />
+            Detalle
           </button>
         </div>
       </div>
