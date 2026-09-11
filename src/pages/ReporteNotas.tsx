@@ -1,5 +1,13 @@
 import { useState, useEffect, useMemo } from "react";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  updateDoc,
+  doc,
+  serverTimestamp,
+} from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
@@ -16,6 +24,8 @@ import {
   FaCheckCircle,
   FaUserTie,
   FaChalkboardTeacher,
+  FaSyncAlt,
+  FaTimes,
 } from "react-icons/fa";
 
 // ==================== INTERFACES ====================
@@ -28,6 +38,7 @@ interface ActividadData {
   destrezaId: string;
   ambitoId: string;
   gradoId: string;
+  estrategiaNota?: string;
 }
 
 interface CalificacionData {
@@ -55,6 +66,7 @@ interface AsignaturaDocente {
 }
 
 interface RegistroEnRiesgo {
+  calificacionId: string;
   estudianteId: string;
   estudianteNombre: string;
   estudianteCedula?: string;
@@ -65,12 +77,12 @@ interface RegistroEnRiesgo {
   ambitoId: string;
   materiaNombre: string;
   ambitoNombre: string;
-  // ✅ Unidad de FILTRADO: ámbito (iniciales) o destreza (2do EGB+)
   unidadId: string;
   unidadNombre: string;
   actividadDetalle: string;
   actividadTipo: string;
   actividadFecha: string;
+  estrategiaActividad: string;
   notaOriginal: number;
   notaFinal: number;
   tieneRefuerzo: boolean;
@@ -81,12 +93,37 @@ type ModoVista = "tutor" | "docente";
 
 // ==================== HELPERS ====================
 
-// ✅ Detecta grados de Inicial / Preparatoria (trabajan por ámbitos)
 const esGradoInicial = (nombre: string): boolean => {
   const n = (nombre || "").toLowerCase();
   return (
-    n.includes("inicial 1") || n.includes("inicial 2") || n.includes("preparatoria")
+    n.includes("inicial 1") ||
+    n.includes("inicial 2") ||
+    n.includes("preparatoria")
   );
+};
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+const ESTRATEGIAS_NOTA = [
+  { value: "promediar", label: "Promediar (Original + Refuerzo) / 2" },
+  { value: "reemplazar", label: "Reemplazar (Refuerzo reemplaza Original)" },
+  { value: "maxima", label: "Máxima (Mayor entre Original y Refuerzo)" },
+];
+
+const calcularNotaFinalRefuerzo = (
+  notaOriginal: number,
+  notaRefuerzo: number,
+  estrategia: string,
+): number => {
+  switch (estrategia) {
+    case "reemplazar":
+      return round2(notaRefuerzo);
+    case "maxima":
+      return round2(Math.max(notaOriginal, notaRefuerzo));
+    case "promediar":
+    default:
+      return round2((notaOriginal + notaRefuerzo) / 2);
+  }
 };
 
 // ==================== COMPONENTE ====================
@@ -109,6 +146,18 @@ export default function ReporteNotas() {
   const [modoVista, setModoVista] = useState<ModoVista>("tutor");
   const [gradoTutorSel, setGradoTutorSel] = useState<string>("");
   const [gradoDocenteSel, setGradoDocenteSel] = useState<string>("");
+
+  // ✅ Modal de refuerzo
+  const [showRefuerzoModal, setShowRefuerzoModal] = useState(false);
+  const [refuerzoRegistro, setRefuerzoRegistro] =
+    useState<RegistroEnRiesgo | null>(null);
+  const [refuerzoForm, setRefuerzoForm] = useState({
+    nota: 7,
+    detalle: "",
+    fecha: new Date().toISOString().split("T")[0],
+    estrategia: "promediar",
+  });
+  const [isGuardandoRefuerzo, setIsGuardandoRefuerzo] = useState(false);
 
   const esAdmin = userData?.role === "super_admin";
   const esTutor = (userData?.tutorDe || []).length > 0;
@@ -160,10 +209,8 @@ export default function ReporteNotas() {
   const gradoTutorActual = grados.find((g) => g.id === gradoTutorEfectivo);
   const gradoDocenteActual = grados.find((g) => g.id === gradoDocenteEfectivo);
 
-  // ✅ ¿El grado docente seleccionado es inicial/preparatoria?
   const esInicialDocente = esGradoInicial(gradoDocenteActual?.nombre || "");
 
-  // ✅ Mis destrezas (materias) del grado docente seleccionado
   const misDestrezasDelGrado = useMemo(() => {
     return new Set(
       asignaturasDocente
@@ -172,9 +219,12 @@ export default function ReporteNotas() {
     );
   }, [asignaturasDocente, gradoDocenteEfectivo]);
 
-  // ✅ Mis UNIDADES de FILTRADO en el grado:
-  //    - Inicial/Prepa → los ÁMBITOS de mis destrezas (pocos)
-  //    - 2do EGB+      → mis DESTREZAS/materias (como antes)
+  // ✅ Todas mis destrezas (de todos mis grados) — para saber si PUEDO reforzar
+  const misDestrezasTodas = useMemo(
+    () => new Set(asignaturasDocente.map((a) => a.destrezaId)),
+    [asignaturasDocente],
+  );
+
   const misUnidadesDelGrado = useMemo(() => {
     if (esInicialDocente) {
       return new Set(
@@ -186,7 +236,6 @@ export default function ReporteNotas() {
     return misDestrezasDelGrado;
   }, [esInicialDocente, destrezas, misDestrezasDelGrado]);
 
-  // ✅ Nombres de mis unidades (para el info-box de arriba)
   const misUnidadesNombres = useMemo(() => {
     if (esInicialDocente) {
       return ambitos
@@ -255,20 +304,32 @@ export default function ReporteNotas() {
           for (let i = 0; i < gradoIds.length; i += 10) {
             const lote = gradoIds.slice(i, i + 10);
             const snap = await getDocs(
-              query(collection(db, "actividades"), where("gradoId", "in", lote)),
+              query(
+                collection(db, "actividades"),
+                where("gradoId", "in", lote),
+              ),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, { id: d.id, ...d.data() } as ActividadData),
+              actividadesMap.set(d.id, {
+                id: d.id,
+                ...d.data(),
+              } as ActividadData),
             );
           }
         } else {
           for (let i = 0; i < gradosTutorIds.length; i += 10) {
             const lote = gradosTutorIds.slice(i, i + 10);
             const snap = await getDocs(
-              query(collection(db, "actividades"), where("gradoId", "in", lote)),
+              query(
+                collection(db, "actividades"),
+                where("gradoId", "in", lote),
+              ),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, { id: d.id, ...d.data() } as ActividadData),
+              actividadesMap.set(d.id, {
+                id: d.id,
+                ...d.data(),
+              } as ActividadData),
             );
           }
           for (let i = 0; i < myDestrezaIds.length; i += 30) {
@@ -303,7 +364,10 @@ export default function ReporteNotas() {
             ),
           );
           snap.docs.forEach((d) =>
-            calificacionesBatch.push({ id: d.id, ...d.data() } as CalificacionData),
+            calificacionesBatch.push({
+              id: d.id,
+              ...d.data(),
+            } as CalificacionData),
           );
         }
         setCalificacionesBajas(calificacionesBatch);
@@ -361,9 +425,10 @@ export default function ReporteNotas() {
 
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
-      const ambito = ambitosMap.get(actividad.ambitoId || destreza?.ambitoId || "");
+      const ambito = ambitosMap.get(
+        actividad.ambitoId || destreza?.ambitoId || "",
+      );
 
-      // ✅ Unidad de FILTRADO: ámbito en iniciales, destreza en 2do EGB+
       const esInicialGrado = esGradoInicial(grado?.nombre || "");
       const unidadId = esInicialGrado
         ? ambito?.id || ""
@@ -375,21 +440,15 @@ export default function ReporteNotas() {
       let notaFinal = cal.nota;
       if (cal.refuerzo) {
         const estrategia = cal.refuerzo.estrategiaElegida || "promediar";
-        switch (estrategia) {
-          case "reemplazar":
-            notaFinal = cal.refuerzo.nota;
-            break;
-          case "maxima":
-            notaFinal = Math.max(cal.nota, cal.refuerzo.nota);
-            break;
-          case "promediar":
-          default:
-            notaFinal = Math.round(((cal.nota + cal.refuerzo.nota) / 2) * 100) / 100;
-            break;
-        }
+        notaFinal = calcularNotaFinalRefuerzo(
+          cal.nota,
+          cal.refuerzo.nota,
+          estrategia,
+        );
       }
 
       registros.push({
+        calificacionId: cal.id,
         estudianteId: estudiante.id,
         estudianteNombre: `${estudiante.apellidos} ${estudiante.nombres}`,
         estudianteCedula: estudiante.cedula,
@@ -405,6 +464,7 @@ export default function ReporteNotas() {
         actividadDetalle: actividad.detalle,
         actividadTipo: actividad.tipo,
         actividadFecha: actividad.fecha,
+        estrategiaActividad: actividad.estrategiaNota || "promediar",
         notaOriginal: cal.nota,
         notaFinal,
         tieneRefuerzo: !!cal.refuerzo,
@@ -418,16 +478,21 @@ export default function ReporteNotas() {
     });
 
     return registros;
-  }, [calificacionesBajas, estudiantes, actividades, grados, destrezas, ambitos]);
+  }, [
+    calificacionesBajas,
+    estudiantes,
+    actividades,
+    grados,
+    destrezas,
+    ambitos,
+  ]);
 
   // ==================== FILTRO POR MODO + GRADO ====================
 
   const registrosFiltrados = useMemo(() => {
     if (modoEfectivo === "tutor") {
-      // Vista Tutor: todas las unidades del grado tutorado
       return registrosEnRiesgo.filter((r) => r.gradoId === gradoTutorEfectivo);
     }
-    // Vista Docente: solo mis unidades (ámbitos en iniciales, destrezas en 2do EGB+)
     return registrosEnRiesgo.filter(
       (r) =>
         r.gradoId === gradoDocenteEfectivo &&
@@ -441,7 +506,6 @@ export default function ReporteNotas() {
     misUnidadesDelGrado,
   ]);
 
-  // ✅ Resumen por estudiante agrupado por DESTREZA/MATERIA (para mostrar detalle)
   const estudiantesUnicosEnRiesgo = useMemo(() => {
     const map = new Map<
       string,
@@ -449,7 +513,11 @@ export default function ReporteNotas() {
     >();
     registrosFiltrados.forEach((r) => {
       if (!map.has(r.estudianteId)) {
-        map.set(r.estudianteId, { estudiante: r, conteo: 0, materias: new Set() });
+        map.set(r.estudianteId, {
+          estudiante: r,
+          conteo: 0,
+          materias: new Set(),
+        });
       }
       const entry = map.get(r.estudianteId)!;
       entry.conteo++;
@@ -458,13 +526,80 @@ export default function ReporteNotas() {
     return Array.from(map.values()).sort((a, b) => b.conteo - a.conteo);
   }, [registrosFiltrados]);
 
+  // ==================== REFUERZO ====================
+
+  const abrirRefuerzo = (r: RegistroEnRiesgo) => {
+    // ✅ Solo puedo reforzar calificaciones de materias que YO dicto
+    if (!misDestrezasTodas.has(r.destrezaId)) return;
+    setRefuerzoRegistro(r);
+    setRefuerzoForm({
+      nota: 7,
+      detalle: "",
+      fecha: new Date().toISOString().split("T")[0],
+      estrategia: r.estrategiaActividad || "promediar",
+    });
+    setShowRefuerzoModal(true);
+  };
+
+  const aplicarRefuerzo = async () => {
+    if (!refuerzoRegistro) return;
+
+    if (!refuerzoForm.detalle.trim()) {
+      return;
+    }
+
+    setIsGuardandoRefuerzo(true);
+    try {
+      const refuerzoData = {
+        nota: round2(refuerzoForm.nota),
+        detalle: refuerzoForm.detalle.trim(),
+        fecha: refuerzoForm.fecha,
+        aplicadoPor: user?.uid || "",
+        estrategiaElegida: refuerzoForm.estrategia,
+      };
+
+      await updateDoc(
+        doc(db, "calificaciones", refuerzoRegistro.calificacionId),
+        {
+          refuerzo: refuerzoData,
+          updatedAt: serverTimestamp(),
+        },
+      );
+
+      // ✅ Actualizar local para reflejar inmediato sin recargar todo
+      setCalificacionesBajas((prev) =>
+        prev.map((c) =>
+          c.id === refuerzoRegistro.calificacionId
+            ? { ...c, refuerzo: refuerzoData }
+            : c,
+        ),
+      );
+
+      setShowRefuerzoModal(false);
+      setRefuerzoRegistro(null);
+    } catch (error) {
+      console.error("Error aplicando refuerzo:", error);
+    } finally {
+      setIsGuardandoRefuerzo(false);
+    }
+  };
+
+  const notaFinalEstimada = refuerzoRegistro
+    ? calcularNotaFinalRefuerzo(
+        refuerzoRegistro.notaOriginal,
+        refuerzoForm.nota,
+        refuerzoForm.estrategia,
+      )
+    : 0;
+
   // ==================== IMPRESIÓN ====================
 
   const handlePrint = () => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
-    const grado = modoEfectivo === "tutor" ? gradoTutorActual : gradoDocenteActual;
+    const grado =
+      modoEfectivo === "tutor" ? gradoTutorActual : gradoDocenteActual;
     const tituloModo =
       modoEfectivo === "tutor"
         ? `Vista Tutor — Grado ${grado?.nombre} "${grado?.paralelo}" (todas las unidades)`
@@ -596,36 +731,39 @@ export default function ReporteNotas() {
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
         <label className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
           <FaGraduationCap className="text-blue-600" />
-          {modoEfectivo === "tutor" ? "Grado que tutoras" : "Grado donde dictas"}
+          {modoEfectivo === "tutor"
+            ? "Grado que tutoras"
+            : "Grado donde dictas"}
         </label>
         <div className="flex flex-wrap gap-2">
-          {(modoEfectivo === "tutor" ? gradosTutorizados : gradosDocenteMios).map(
-            (g) => {
-              const sel =
-                modoEfectivo === "tutor"
-                  ? gradoTutorEfectivo === g.id
-                  : gradoDocenteEfectivo === g.id;
-              return (
-                <button
-                  key={g.id}
-                  onClick={() =>
-                    modoEfectivo === "tutor"
-                      ? setGradoTutorSel(g.id)
-                      : setGradoDocenteSel(g.id)
-                  }
-                  className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
-                    sel
-                      ? modoEfectivo === "tutor"
-                        ? "bg-purple-600 text-white border-purple-600"
-                        : "bg-cyan-600 text-white border-cyan-600"
-                      : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
-                  }`}
-                >
-                  {g.nombre} - {g.paralelo}
-                </button>
-              );
-            },
-          )}
+          {(modoEfectivo === "tutor"
+            ? gradosTutorizados
+            : gradosDocenteMios
+          ).map((g) => {
+            const sel =
+              modoEfectivo === "tutor"
+                ? gradoTutorEfectivo === g.id
+                : gradoDocenteEfectivo === g.id;
+            return (
+              <button
+                key={g.id}
+                onClick={() =>
+                  modoEfectivo === "tutor"
+                    ? setGradoTutorSel(g.id)
+                    : setGradoDocenteSel(g.id)
+                }
+                className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                  sel
+                    ? modoEfectivo === "tutor"
+                      ? "bg-purple-600 text-white border-purple-600"
+                      : "bg-cyan-600 text-white border-cyan-600"
+                    : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
+                }`}
+              >
+                {g.nombre} - {g.paralelo}
+              </button>
+            );
+          })}
         </div>
 
         <div className="mt-3 text-xs text-slate-600 bg-slate-50 rounded-lg p-3 border border-slate-200">
@@ -724,7 +862,9 @@ export default function ReporteNotas() {
       {loading ? (
         <div className="text-center py-16">
           <FaSpinner className="animate-spin text-4xl text-amber-500 mx-auto mb-3" />
-          <p className="text-slate-600 text-sm font-medium">Cargando reporte...</p>
+          <p className="text-slate-600 text-sm font-medium">
+            Cargando reporte...
+          </p>
         </div>
       ) : registrosFiltrados.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
@@ -741,7 +881,7 @@ export default function ReporteNotas() {
         </div>
       ) : (
         <>
-          {/* Resumen por estudiante (chips de DESTREZAS) */}
+          {/* Resumen por estudiante */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
             <div
               className={`px-5 py-4 flex items-center gap-3 ${
@@ -752,69 +892,81 @@ export default function ReporteNotas() {
             >
               <FaUserGraduate className="text-white text-xl" />
               <div>
-                <h3 className="text-white font-semibold">Resumen por Estudiante</h3>
+                <h3 className="text-white font-semibold">
+                  Resumen por Estudiante
+                </h3>
                 <p className="text-white/80 text-xs">
-                  {estudiantesUnicosEnRiesgo.length} estudiante(s) con notas menores a 7
+                  {estudiantesUnicosEnRiesgo.length} estudiante(s) con notas
+                  menores a 7
                 </p>
               </div>
             </div>
             <div className="divide-y divide-slate-100">
-              {estudiantesUnicosEnRiesgo.map(({ estudiante, conteo, materias }) => (
-                <div key={estudiante.estudianteId} className="p-4 hover:bg-slate-50">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <h4 className="font-semibold text-slate-900 text-sm">
-                          {estudiante.estudianteNombre}
-                        </h4>
-                        <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
-                          {estudiante.gradoNombre} - {estudiante.gradoParalelo}
+              {estudiantesUnicosEnRiesgo.map(
+                ({ estudiante, conteo, materias }) => (
+                  <div
+                    key={estudiante.estudianteId}
+                    className="p-4 hover:bg-slate-50"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <h4 className="font-semibold text-slate-900 text-sm">
+                            {estudiante.estudianteNombre}
+                          </h4>
+                          <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
+                            {estudiante.gradoNombre} -{" "}
+                            {estudiante.gradoParalelo}
+                          </span>
+                        </div>
+                        {estudiante.estudianteCedula && (
+                          <p className="text-xs text-slate-500 mb-1">
+                            CI: {estudiante.estudianteCedula}
+                          </p>
+                        )}
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {Array.from(materias)
+                            .slice(0, 4)
+                            .map((m) => (
+                              <span
+                                key={m}
+                                className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded"
+                              >
+                                {m}
+                              </span>
+                            ))}
+                          {materias.size > 4 && (
+                            <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+                              +{materias.size - 4} más
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end">
+                        <span
+                          className={`px-3 py-1 rounded-full text-sm font-bold ${
+                            conteo >= 5
+                              ? "bg-red-100 text-red-700 border border-red-300"
+                              : conteo >= 3
+                                ? "bg-orange-100 text-orange-700 border border-orange-300"
+                                : "bg-amber-100 text-amber-700 border border-amber-300"
+                          }`}
+                        >
+                          {conteo} {conteo === 1 ? "nota" : "notas"} {"< 7"}
+                        </span>
+                        <span className="text-[10px] text-slate-500 mt-1">
+                          {materias.size}{" "}
+                          {materias.size === 1 ? "materia" : "materias"}
                         </span>
                       </div>
-                      {estudiante.estudianteCedula && (
-                        <p className="text-xs text-slate-500 mb-1">
-                          CI: {estudiante.estudianteCedula}
-                        </p>
-                      )}
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {Array.from(materias).slice(0, 4).map((m) => (
-                          <span
-                            key={m}
-                            className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded"
-                          >
-                            {m}
-                          </span>
-                        ))}
-                        {materias.size > 4 && (
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                            +{materias.size - 4} más
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end">
-                      <span
-                        className={`px-3 py-1 rounded-full text-sm font-bold ${
-                          conteo >= 5
-                            ? "bg-red-100 text-red-700 border border-red-300"
-                            : conteo >= 3
-                              ? "bg-orange-100 text-orange-700 border border-orange-300"
-                              : "bg-amber-100 text-amber-700 border border-amber-300"
-                        }`}
-                      >
-                        {conteo} {conteo === 1 ? "nota" : "notas"} {"< 7"}
-                      </span>
-                      <span className="text-[10px] text-slate-500 mt-1">
-                        {materias.size} {materias.size === 1 ? "materia" : "materias"}
-                      </span>
                     </div>
                   </div>
-                </div>
-              ))}
+                ),
+              )}
             </div>
           </div>
 
-          {/* Tabla detallada (destreza arriba, ámbito debajo) */}
+          {/* Tabla detallada con botón de Refuerzo */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="bg-linear-to-r from-red-500 to-red-600 px-5 py-4 flex items-center gap-3">
               <FaExclamationTriangle className="text-white text-xl" />
@@ -846,6 +998,9 @@ export default function ReporteNotas() {
                     <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
                       Nota
                     </th>
+                    <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                      Acción
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -869,13 +1024,17 @@ export default function ReporteNotas() {
                           <FaBook className="text-purple-500 text-[10px]" />
                           {r.materiaNombre}
                         </p>
-                        <p className="text-[10px] text-slate-500">{r.ambitoNombre}</p>
+                        <p className="text-[10px] text-slate-500">
+                          {r.ambitoNombre}
+                        </p>
                       </td>
                       <td className="px-3 py-2.5">
                         <p className="text-xs font-medium text-slate-900">
                           {r.actividadDetalle}
                         </p>
-                        <p className="text-[10px] text-slate-500">{r.actividadTipo}</p>
+                        <p className="text-[10px] text-slate-500">
+                          {r.actividadTipo}
+                        </p>
                       </td>
                       <td className="px-3 py-2.5 text-center text-xs text-slate-600">
                         {r.actividadFecha}
@@ -896,6 +1055,31 @@ export default function ReporteNotas() {
                           </p>
                         )}
                       </td>
+                      <td className="px-3 py-2.5 text-center">
+                        {misDestrezasTodas.has(r.destrezaId) ? (
+                          !r.tieneRefuerzo ? (
+                            <button
+                              onClick={() => abrirRefuerzo(r)}
+                              className="inline-flex items-center gap-1 bg-orange-100 hover:bg-orange-200 text-orange-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                              title="Aplicar refuerzo a esta calificación"
+                            >
+                              <FaSyncAlt className="text-[10px]" />
+                              Refuerzo
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-green-600 font-semibold">
+                              Refuerzo aplicado
+                            </span>
+                          )
+                        ) : (
+                          <span
+                            className="text-[10px] text-slate-400"
+                            title="Materia de otro docente: solo él puede aplicar refuerzo"
+                          >
+                            —
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -903,6 +1087,187 @@ export default function ReporteNotas() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ==================== MODAL REFUERZO ==================== */}
+      {showRefuerzoModal && refuerzoRegistro && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-orange-100 p-2 rounded-lg">
+                  <FaSyncAlt className="text-orange-600 text-xl" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Aplicar Refuerzo
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {refuerzoRegistro.materiaNombre} ·{" "}
+                    {refuerzoRegistro.actividadDetalle}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowRefuerzoModal(false);
+                  setRefuerzoRegistro(null);
+                }}
+                disabled={isGuardandoRefuerzo}
+                className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+              >
+                <FaTimes />
+              </button>
+            </div>
+
+            <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+              <p className="text-sm text-orange-800 font-semibold">
+                {refuerzoRegistro.estudianteNombre}
+              </p>
+              <p className="text-xs text-orange-700 mt-1">
+                Nota original: <strong>{refuerzoRegistro.notaOriginal}</strong>
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Nota de Refuerzo *{" "}
+                  <span className="text-xs text-slate-500 font-normal">
+                    (0 - 10)
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  maxLength={5}
+                  value={String(refuerzoForm.nota)}
+                  onChange={(e) => {
+                    const valor = e.target.value;
+                    const regex = /^\d*(\.\d{0,2})?$/;
+                    if (valor === "" || regex.test(valor)) {
+                      if (valor === "") {
+                        setRefuerzoForm({ ...refuerzoForm, nota: 0 });
+                      } else if (/^\d+(\.\d+)?$/.test(valor)) {
+                        const num = parseFloat(valor);
+                        if (num <= 10) {
+                          setRefuerzoForm({ ...refuerzoForm, nota: num });
+                        }
+                      }
+                    }
+                  }}
+                  placeholder="Ej: 8.5"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Estrategia de cálculo *
+                </label>
+                <select
+                  value={refuerzoForm.estrategia}
+                  onChange={(e) =>
+                    setRefuerzoForm({
+                      ...refuerzoForm,
+                      estrategia: e.target.value,
+                    })
+                  }
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
+                >
+                  {ESTRATEGIAS_NOTA.map((estrategia) => (
+                    <option key={estrategia.value} value={estrategia.value}>
+                      {estrategia.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Detalle del Refuerzo *
+                </label>
+                <input
+                  type="text"
+                  value={refuerzoForm.detalle}
+                  onChange={(e) =>
+                    setRefuerzoForm({
+                      ...refuerzoForm,
+                      detalle: e.target.value,
+                    })
+                  }
+                  placeholder="Ej: Ejercicios adicionales de práctica"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Fecha del Refuerzo *
+                </label>
+                <input
+                  type="date"
+                  value={refuerzoForm.fecha}
+                  onChange={(e) =>
+                    setRefuerzoForm({ ...refuerzoForm, fecha: e.target.value })
+                  }
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
+                <p className="font-semibold mb-1">Nota final estimada:</p>
+                <p className="text-lg font-bold text-blue-900">
+                  {notaFinalEstimada}
+                </p>
+                <p className="text-[10px] text-blue-700 mt-1">
+                  Original {refuerzoRegistro.notaOriginal} + Refuerzo{" "}
+                  {refuerzoForm.nota} · estrategia{" "}
+                  {
+                    ESTRATEGIAS_NOTA.find(
+                      (e) => e.value === refuerzoForm.estrategia,
+                    )?.label.split(" ")[0]
+                  }
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-6">
+              <button
+                onClick={aplicarRefuerzo}
+                disabled={
+                  isGuardandoRefuerzo ||
+                  refuerzoForm.nota <= 0 ||
+                  refuerzoForm.nota > 10 ||
+                  !refuerzoForm.detalle.trim()
+                }
+                className="flex-1 inline-flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isGuardandoRefuerzo ? (
+                  <>
+                    <FaSpinner className="animate-spin text-xs" />
+                    Guardando...
+                  </>
+                ) : (
+                  <>
+                    <FaSyncAlt className="text-xs" />
+                    Aplicar Refuerzo
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setShowRefuerzoModal(false);
+                  setRefuerzoRegistro(null);
+                }}
+                disabled={isGuardandoRefuerzo}
+                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </Layout>
   );
