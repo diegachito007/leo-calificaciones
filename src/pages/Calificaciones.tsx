@@ -306,6 +306,7 @@ export default function Calificaciones() {
   >({});
 
   const [showActividadModal, setShowActividadModal] = useState(false);
+  const [showActividadesModal, setShowActividadesModal] = useState(false);
   const [editingActividadId, setEditingActividadId] = useState<string | null>(
     null,
   );
@@ -329,7 +330,6 @@ export default function Calificaciones() {
 
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // ✅ OPTIMIZACIÓN: Caché de estudiantes por grado en memoria
   const estudiantesCache = useRef<Map<string, Estudiante[]>>(new Map());
 
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -530,7 +530,6 @@ export default function Calificaciones() {
     [],
   );
 
-  // ✅ OPTIMIZACIÓN: asignaturasDocente como getDocs (una sola carga)
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
 
@@ -1157,11 +1156,9 @@ export default function Calificaciones() {
 
   // ==================== EFFECTS ====================
 
-  // ✅ OPTIMIZACIÓN: Caché de estudiantes por grado
   useEffect(() => {
     if (!gradoEfectivoId) return;
 
-    // ¿Ya los tengo en caché?
     const cached = estudiantesCache.current.get(gradoEfectivoId);
     if (cached && cached.length > 0) {
       setEstudiantes(cached);
@@ -1182,7 +1179,6 @@ export default function Calificaciones() {
           (doc) => ({ id: doc.id, ...doc.data() }) as Estudiante,
         );
 
-        // Guardar en caché
         estudiantesCache.current.set(gradoEfectivoId, data);
         setEstudiantes(data);
         setActiveTab("asistencia");
@@ -1271,7 +1267,6 @@ export default function Calificaciones() {
     fetchCalificaciones();
   }, [selectedActividadId]);
 
-  // ✅ Listener de asistencias - SOLO en tab asistencia
   useEffect(() => {
     if (activeTab !== "asistencia") return;
 
@@ -1344,9 +1339,7 @@ export default function Calificaciones() {
     gradoEfectivoNombre,
   ]);
 
-  // ✅ Listener de asistencias del día de la actividad - SOLO en tab calificaciones
   useEffect(() => {
-
     if (activeTab !== "calificaciones") return;
 
     const actividad = actividades.find((a) => a.id === selectedActividadId);
@@ -1948,25 +1941,26 @@ export default function Calificaciones() {
                     <>
                       <div className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-white/95 backdrop-blur border-b border-slate-200 mb-3">
                         <div className="flex items-center gap-2">
-                          <select
-                            value={selectedActividadId}
-                            onChange={(e) => {
-                              setSelectedActividadId(e.target.value);
-                              setCalificaciones({});
-                            }}
-                            className="flex-1 min-w-0 border border-slate-300 rounded-lg px-2 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500 bg-white"
+                          <button
+                            onClick={() => setShowActividadesModal(true)}
+                            className="flex-1 min-w-0 border border-slate-300 rounded-lg px-2 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500 bg-white text-left flex items-center gap-2 hover:border-blue-400 transition-all"
                           >
-                            <option value="">
-                              {actividades.length === 0
-                                ? "Sin actividades — crea una con ＋"
-                                : "Seleccionar actividad..."}
-                            </option>
-                            {actividades.map((a) => (
-                              <option key={a.id} value={a.id || ""}>
-                                {a.tipo} · {a.detalle} · {a.fecha}
-                              </option>
-                            ))}
-                          </select>
+                            <FaTasks className="text-blue-600 shrink-0" />
+                            {actividadSeleccionada ? (
+                              <span className="truncate text-slate-900">
+                                {actividadSeleccionada.tipo} ·{" "}
+                                {actividadSeleccionada.detalle} ·{" "}
+                                {actividadSeleccionada.fecha}
+                              </span>
+                            ) : (
+                              <span className="truncate text-slate-500">
+                                {actividades.length === 0
+                                  ? "Sin actividades — crea una con ＋"
+                                  : "Seleccionar actividad..."}
+                              </span>
+                            )}
+                            <FaChevronDown className="text-[10px] text-slate-400 shrink-0 ml-auto" />
+                          </button>
 
                           {actividadSeleccionada && (
                             <span className="shrink-0 text-[10px] font-bold px-2 py-1 rounded bg-blue-100 text-blue-700 whitespace-nowrap">
@@ -2722,6 +2716,140 @@ export default function Calificaciones() {
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL LISTADO DE ACTIVIDADES ==================== */}
+      {showActividadesModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-100 p-2 rounded-lg">
+                  <FaTasks className="text-blue-600 text-xl" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Actividades</h3>
+                  <p className="text-xs text-slate-500">
+                    {actividades.length} actividad(es) · ordenadas por fecha
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowActividadesModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <FaTimes />
+              </button>
+            </div>
+
+            <button
+              onClick={() => {
+                setShowActividadesModal(false);
+                setEditingActividadId(null);
+                setActividadForm({
+                  tipo: "Tarea",
+                  detalle: "",
+                  fecha: new Date().toISOString().split("T")[0],
+                  estrategiaNota: "promediar",
+                });
+                setShowActividadModal(true);
+              }}
+              className="w-full mb-3 inline-flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all"
+            >
+              <FaPlus /> Nueva actividad
+            </button>
+
+            {actividades.length === 0 ? (
+              <div className="p-6 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm text-slate-500">
+                No hay actividades aún. Crea la primera con el botón verde.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {actividades.map((a) => {
+                  const sel = a.id === selectedActividadId;
+                  return (
+                    <div
+                      key={a.id}
+                      className={`p-3 rounded-lg border-2 transition-all ${
+                        sel
+                          ? "bg-blue-50 border-blue-400"
+                          : "bg-white border-slate-200 hover:border-blue-300"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <button
+                          onClick={() => {
+                            setSelectedActividadId(a.id || "");
+                            setCalificaciones({});
+                            setShowActividadesModal(false);
+                          }}
+                          className="flex-1 text-left"
+                          title="Seleccionar esta actividad"
+                        >
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                              {a.tipo}
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              {a.fecha}
+                            </span>
+                            {sel && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-bold">
+                                ✓ Seleccionada
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-sm font-medium text-slate-900 mt-1">
+                            {a.detalle}
+                          </div>
+                          {!esGradoInicialActual && (
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              Estrategia:{" "}
+                              {
+                                ESTRATEGIAS_NOTA.find(
+                                  (e) => e.value === a.estrategiaNota,
+                                )?.label.split(" ")[0]
+                              }
+                            </div>
+                          )}
+                        </button>
+                        <div className="flex gap-1 shrink-0">
+                          <button
+                            onClick={() => {
+                              setShowActividadesModal(false);
+                              setEditingActividadId(a.id || null);
+                              setActividadForm({
+                                tipo: a.tipo,
+                                detalle: a.detalle,
+                                fecha: a.fecha,
+                                estrategiaNota: a.estrategiaNota,
+                              });
+                              setShowActividadModal(true);
+                            }}
+                            className="p-2 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg"
+                            title="Editar actividad"
+                          >
+                            <FaEdit className="text-xs" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setShowActividadesModal(false);
+                              eliminarActividad(a.id || "");
+                            }}
+                            className="p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg"
+                            title="Eliminar actividad"
+                          >
+                            <FaTrash className="text-xs" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
