@@ -754,13 +754,17 @@ export default function Calificaciones() {
         updatedAt: serverTimestamp(),
       };
 
+      let actividadGuardadaId: string | null = null;
+
       if (editingActividadId) {
         await updateDoc(doc(db, "actividades", editingActividadId), datos);
+        actividadGuardadaId = editingActividadId;
       } else {
-        await addDoc(collection(db, "actividades"), {
+        const nuevoRef = await addDoc(collection(db, "actividades"), {
           ...datos,
           createdAt: serverTimestamp(),
         });
+        actividadGuardadaId = nuevoRef.id;
       }
 
       mostrarToast(
@@ -777,6 +781,11 @@ export default function Calificaciones() {
         estrategiaNota: "promediar",
       });
       await cargarActividades(destrezaEfectivaId);
+
+      // ✅ Seleccionar automáticamente la actividad recién creada/editada
+      if (actividadGuardadaId) {
+        setSelectedActividadId(actividadGuardadaId);
+      }
     } catch (error) {
       console.error("Error guardando actividad:", error);
       mostrarToast(
