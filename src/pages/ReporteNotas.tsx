@@ -3,7 +3,7 @@ import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
-import type { Estudiante } from "../types";
+import type { Estudiante, Grado } from "../types";
 import Layout from "../components/Layout";
 import {
   FaExclamationTriangle,
@@ -14,6 +14,8 @@ import {
   FaInfoCircle,
   FaSpinner,
   FaCheckCircle,
+  FaUserTie,
+  FaChalkboardTeacher,
 } from "react-icons/fa";
 
 // ==================== INTERFACES ====================
@@ -56,10 +58,16 @@ interface RegistroEnRiesgo {
   estudianteId: string;
   estudianteNombre: string;
   estudianteCedula?: string;
+  gradoId: string;
   gradoNombre: string;
   gradoParalelo: string;
+  destrezaId: string;
+  ambitoId: string;
   materiaNombre: string;
   ambitoNombre: string;
+  // ✅ Unidad de FILTRADO: ámbito (iniciales) o destreza (2do EGB+)
+  unidadId: string;
+  unidadNombre: string;
   actividadDetalle: string;
   actividadTipo: string;
   actividadFecha: string;
@@ -68,6 +76,18 @@ interface RegistroEnRiesgo {
   tieneRefuerzo: boolean;
   observacion?: string;
 }
+
+type ModoVista = "tutor" | "docente";
+
+// ==================== HELPERS ====================
+
+// ✅ Detecta grados de Inicial / Preparatoria (trabajan por ámbitos)
+const esGradoInicial = (nombre: string): boolean => {
+  const n = (nombre || "").toLowerCase();
+  return (
+    n.includes("inicial 1") || n.includes("inicial 2") || n.includes("preparatoria")
+  );
+};
 
 // ==================== COMPONENTE ====================
 
@@ -84,34 +104,102 @@ export default function ReporteNotas() {
     CalificacionData[]
   >([]);
 
-  // ✅ ÚNICO state de carga: guarda la "clave" de lo último cargado.
-  // Se actualiza SOLO dentro del callback async (permitido por ESLint).
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
 
-  const [filtroGrado, setFiltroGrado] = useState<string>("todos");
-  const [filtroMateria, setFiltroMateria] = useState<string>("todas");
+  const [modoVista, setModoVista] = useState<ModoVista>("tutor");
+  const [gradoTutorSel, setGradoTutorSel] = useState<string>("");
+  const [gradoDocenteSel, setGradoDocenteSel] = useState<string>("");
 
   const esAdmin = userData?.role === "super_admin";
   const esTutor = (userData?.tutorDe || []).length > 0;
+  const tieneMaterias = asignaturasDocente.length > 0;
 
-  // ✅ Grados disponibles según rol
+  const modoEfectivo = useMemo<ModoVista>(() => {
+    if (modoVista === "tutor" && !esTutor) return "docente";
+    if (modoVista === "docente" && !tieneMaterias && esTutor) return "tutor";
+    return modoVista;
+  }, [modoVista, esTutor, tieneMaterias]);
+
   const gradosDisponibles = useMemo(() => {
-    if (!anioActivo) return [];
+    if (!anioActivo) return [] as Grado[];
     const anioGrados = grados.filter(
       (g) => g.anioLectivoId === anioActivo.id && g.activo,
     );
-
     if (esAdmin) return anioGrados;
-
     const idsSet = new Set<string>();
     asignaturasDocente.forEach((a) => idsSet.add(a.gradoId));
     (userData?.tutorDe || []).forEach((id) => idsSet.add(id));
     return anioGrados.filter((g) => idsSet.has(g.id));
   }, [grados, anioActivo, asignaturasDocente, userData, esAdmin]);
 
+  const gradosTutorizados = useMemo(() => {
+    const tutorIds = new Set(userData?.tutorDe || []);
+    return gradosDisponibles.filter((g) => tutorIds.has(g.id));
+  }, [gradosDisponibles, userData]);
+
+  const gradosDocenteMios = useMemo(() => {
+    const misGradoIds = new Set(asignaturasDocente.map((a) => a.gradoId));
+    return gradosDisponibles.filter((g) => misGradoIds.has(g.id));
+  }, [gradosDisponibles, asignaturasDocente]);
+
+  const gradoTutorEfectivo = useMemo(() => {
+    if (gradoTutorSel && gradosTutorizados.some((g) => g.id === gradoTutorSel))
+      return gradoTutorSel;
+    return gradosTutorizados[0]?.id || "";
+  }, [gradoTutorSel, gradosTutorizados]);
+
+  const gradoDocenteEfectivo = useMemo(() => {
+    if (
+      gradoDocenteSel &&
+      gradosDocenteMios.some((g) => g.id === gradoDocenteSel)
+    )
+      return gradoDocenteSel;
+    return gradosDocenteMios[0]?.id || "";
+  }, [gradoDocenteSel, gradosDocenteMios]);
+
+  const gradoTutorActual = grados.find((g) => g.id === gradoTutorEfectivo);
+  const gradoDocenteActual = grados.find((g) => g.id === gradoDocenteEfectivo);
+
+  // ✅ ¿El grado docente seleccionado es inicial/preparatoria?
+  const esInicialDocente = esGradoInicial(gradoDocenteActual?.nombre || "");
+
+  // ✅ Mis destrezas (materias) del grado docente seleccionado
+  const misDestrezasDelGrado = useMemo(() => {
+    return new Set(
+      asignaturasDocente
+        .filter((a) => a.gradoId === gradoDocenteEfectivo)
+        .map((a) => a.destrezaId),
+    );
+  }, [asignaturasDocente, gradoDocenteEfectivo]);
+
+  // ✅ Mis UNIDADES de FILTRADO en el grado:
+  //    - Inicial/Prepa → los ÁMBITOS de mis destrezas (pocos)
+  //    - 2do EGB+      → mis DESTREZAS/materias (como antes)
+  const misUnidadesDelGrado = useMemo(() => {
+    if (esInicialDocente) {
+      return new Set(
+        destrezas
+          .filter((d) => misDestrezasDelGrado.has(d.id))
+          .map((d) => d.ambitoId),
+      );
+    }
+    return misDestrezasDelGrado;
+  }, [esInicialDocente, destrezas, misDestrezasDelGrado]);
+
+  // ✅ Nombres de mis unidades (para el info-box de arriba)
+  const misUnidadesNombres = useMemo(() => {
+    if (esInicialDocente) {
+      return ambitos
+        .filter((a) => misUnidadesDelGrado.has(a.id))
+        .map((a) => a.nombre);
+    }
+    return destrezas
+      .filter((d) => misUnidadesDelGrado.has(d.id))
+      .map((d) => d.nombre);
+  }, [esInicialDocente, ambitos, destrezas, misUnidadesDelGrado]);
+
   const shouldLoadData = ready && gradosDisponibles.length > 0;
 
-  // 🔑 Clave que identifica la combinación actual de datos a cargar
   const loadKey = useMemo(
     () =>
       JSON.stringify({
@@ -122,45 +210,10 @@ export default function ReporteNotas() {
     [esAdmin, gradosDisponibles, asignaturasDocente],
   );
 
-  // ✅ LOADING DERIVADO (sin setState síncrono → sin error de ESLint):
-  // "cargando" = hay datos que cargar Y aún no se han cargado para esta clave
   const loading = shouldLoadData && loadedKey !== loadKey;
-
-  // ✅ Materias disponibles según el rol y el filtro
-  const materiasDisponibles = useMemo(() => {
-    if (esAdmin) return destrezas;
-
-    const tutorGrados = new Set(userData?.tutorDe || []);
-    const destrezaIds = new Set(asignaturasDocente.map((a) => a.destrezaId));
-
-    // Grado específico seleccionado
-    if (filtroGrado !== "todos" && filtroGrado !== "tutor") {
-      const esTutorDelGrado = tutorGrados.has(filtroGrado);
-      if (esTutorDelGrado) {
-        return destrezas.filter((d) => d.gradoId === filtroGrado);
-      }
-      const destrezaIdsDelGrado = new Set(
-        asignaturasDocente
-          .filter((a) => a.gradoId === filtroGrado)
-          .map((a) => a.destrezaId),
-      );
-      return destrezas.filter((d) => destrezaIdsDelGrado.has(d.id));
-    }
-
-    // "tutor": materias de todos los grados que tutora
-    if (filtroGrado === "tutor") {
-      return destrezas.filter((d) => tutorGrados.has(d.gradoId));
-    }
-
-    // "todos": materias que dicta + materias de grados tutorados
-    return destrezas.filter(
-      (d) => destrezaIds.has(d.id) || tutorGrados.has(d.gradoId),
-    );
-  }, [asignaturasDocente, destrezas, esAdmin, filtroGrado, userData]);
 
   // ==================== CARGA DE DATOS ====================
 
-  // Cargar asignaturas del docente
   useEffect(() => {
     if (!user?.uid || esAdmin || !anioActivo?.id) return;
     const fetchAsignaturas = async () => {
@@ -184,7 +237,6 @@ export default function ReporteNotas() {
     fetchAsignaturas();
   }, [user?.uid, anioActivo?.id, esAdmin]);
 
-  // ✅ Cargar reporte: solo si hay datos pendientes para la clave actual
   useEffect(() => {
     if (!shouldLoadData || loadedKey === loadKey) return;
 
@@ -197,43 +249,28 @@ export default function ReporteNotas() {
           new Set(asignaturasDocente.map((a) => a.destrezaId)),
         );
 
-        // 1. Actividades del scope según el rol
         const actividadesMap = new Map<string, ActividadData>();
 
         if (esAdmin) {
           for (let i = 0; i < gradoIds.length; i += 10) {
             const lote = gradoIds.slice(i, i + 10);
             const snap = await getDocs(
-              query(
-                collection(db, "actividades"),
-                where("gradoId", "in", lote),
-              ),
+              query(collection(db, "actividades"), where("gradoId", "in", lote)),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, {
-                id: d.id,
-                ...d.data(),
-              } as ActividadData),
+              actividadesMap.set(d.id, { id: d.id, ...d.data() } as ActividadData),
             );
           }
         } else {
-          // a) Como TUTOR: todas las actividades de grados tutorados
           for (let i = 0; i < gradosTutorIds.length; i += 10) {
             const lote = gradosTutorIds.slice(i, i + 10);
             const snap = await getDocs(
-              query(
-                collection(db, "actividades"),
-                where("gradoId", "in", lote),
-              ),
+              query(collection(db, "actividades"), where("gradoId", "in", lote)),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, {
-                id: d.id,
-                ...d.data(),
-              } as ActividadData),
+              actividadesMap.set(d.id, { id: d.id, ...d.data() } as ActividadData),
             );
           }
-          // b) Como DOCENTE: solo actividades de materias que dicta
           for (let i = 0; i < myDestrezaIds.length; i += 30) {
             const lote = myDestrezaIds.slice(i, i + 30);
             const snap = await getDocs(
@@ -254,7 +291,6 @@ export default function ReporteNotas() {
         const actividadesBatch = Array.from(actividadesMap.values());
         setActividades(actividadesBatch);
 
-        // 2. Solo calificaciones bajas (nota <= 6)
         const actividadIds = actividadesBatch.map((a) => a.id);
         const calificacionesBatch: CalificacionData[] = [];
         for (let i = 0; i < actividadIds.length; i += 30) {
@@ -267,15 +303,11 @@ export default function ReporteNotas() {
             ),
           );
           snap.docs.forEach((d) =>
-            calificacionesBatch.push({
-              id: d.id,
-              ...d.data(),
-            } as CalificacionData),
+            calificacionesBatch.push({ id: d.id, ...d.data() } as CalificacionData),
           );
         }
         setCalificacionesBajas(calificacionesBatch);
 
-        // 3. Solo los estudiantes en calificaciones bajas
         const estudianteIds = Array.from(
           new Set(calificacionesBatch.map((c) => c.estudianteId)),
         );
@@ -283,23 +315,17 @@ export default function ReporteNotas() {
         for (let i = 0; i < estudianteIds.length; i += 30) {
           const lote = estudianteIds.slice(i, i + 30);
           const snap = await getDocs(
-            query(
-              collection(db, "estudiantes"),
-              where("__name__", "in", lote),
-            ),
+            query(collection(db, "estudiantes"), where("__name__", "in", lote)),
           );
           snap.docs.forEach((d) =>
             estudiantesBatch.push({ id: d.id, ...d.data() } as Estudiante),
           );
         }
-        estudiantesBatch.sort((a, b) =>
-          a.apellidos.localeCompare(b.apellidos),
-        );
+        estudiantesBatch.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
         setEstudiantes(estudiantesBatch);
       } catch (error) {
         console.error("Error cargando reporte:", error);
       } finally {
-        // ✅ setState dentro de callback async → permitido por ESLint
         setLoadedKey(loadKey);
       }
     };
@@ -326,10 +352,6 @@ export default function ReporteNotas() {
     const destrezasMap = new Map(destrezas.map((d) => [d.id, d]));
     const ambitosMap = new Map(ambitos.map((a) => [a.id, a]));
 
-    const destrezasDelDocente = new Set(
-      asignaturasDocente.map((a) => a.destrezaId),
-    );
-
     const registros: RegistroEnRiesgo[] = [];
 
     calificacionesBajas.forEach((cal) => {
@@ -339,24 +361,17 @@ export default function ReporteNotas() {
 
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
-      const ambito = ambitosMap.get(
-        actividad.ambitoId || destreza?.ambitoId || "",
-      );
+      const ambito = ambitosMap.get(actividad.ambitoId || destreza?.ambitoId || "");
 
-      const esTutorDelGrado = (userData?.tutorDe || []).includes(
-        estudiante.gradoId,
-      );
+      // ✅ Unidad de FILTRADO: ámbito en iniciales, destreza en 2do EGB+
+      const esInicialGrado = esGradoInicial(grado?.nombre || "");
+      const unidadId = esInicialGrado
+        ? ambito?.id || ""
+        : destreza?.id || actividad.destrezaId;
+      const unidadNombre = esInicialGrado
+        ? ambito?.nombre || "—"
+        : destreza?.nombre || "—";
 
-      // 🔑 LÓGICA CLARA DE FILTRADO:
-      if (!esAdmin) {
-        // Si NO es tutor del grado, solo mostrar si es materia que dicta
-        if (!esTutorDelGrado && !destrezasDelDocente.has(actividad.destrezaId)) {
-          return;
-        }
-        // Si ES tutor: mostrar todas las materias del grado
-      }
-
-      // Calcular nota final según estrategia del refuerzo
       let notaFinal = cal.nota;
       if (cal.refuerzo) {
         const estrategia = cal.refuerzo.estrategiaElegida || "promediar";
@@ -369,8 +384,7 @@ export default function ReporteNotas() {
             break;
           case "promediar":
           default:
-            notaFinal =
-              Math.round(((cal.nota + cal.refuerzo.nota) / 2) * 100) / 100;
+            notaFinal = Math.round(((cal.nota + cal.refuerzo.nota) / 2) * 100) / 100;
             break;
         }
       }
@@ -379,10 +393,15 @@ export default function ReporteNotas() {
         estudianteId: estudiante.id,
         estudianteNombre: `${estudiante.apellidos} ${estudiante.nombres}`,
         estudianteCedula: estudiante.cedula,
+        gradoId: estudiante.gradoId,
         gradoNombre: grado?.nombre || "—",
         gradoParalelo: grado?.paralelo || "",
+        destrezaId: actividad.destrezaId,
+        ambitoId: ambito?.id || "",
         materiaNombre: destreza?.nombre || "—",
         ambitoNombre: ambito?.nombre || "—",
+        unidadId,
+        unidadNombre,
         actividadDetalle: actividad.detalle,
         actividadTipo: actividad.tipo,
         actividadFecha: actividad.fecha,
@@ -399,40 +418,30 @@ export default function ReporteNotas() {
     });
 
     return registros;
-  }, [
-    calificacionesBajas,
-    estudiantes,
-    actividades,
-    grados,
-    destrezas,
-    ambitos,
-    asignaturasDocente,
-    userData,
-    esAdmin,
-  ]);
+  }, [calificacionesBajas, estudiantes, actividades, grados, destrezas, ambitos]);
 
-  // ==================== FILTROS ====================
+  // ==================== FILTRO POR MODO + GRADO ====================
 
   const registrosFiltrados = useMemo(() => {
-    return registrosEnRiesgo.filter((r) => {
-      const grado = grados.find(
-        (g) => g.nombre === r.gradoNombre && g.paralelo === r.gradoParalelo,
-      );
+    if (modoEfectivo === "tutor") {
+      // Vista Tutor: todas las unidades del grado tutorado
+      return registrosEnRiesgo.filter((r) => r.gradoId === gradoTutorEfectivo);
+    }
+    // Vista Docente: solo mis unidades (ámbitos en iniciales, destrezas en 2do EGB+)
+    return registrosEnRiesgo.filter(
+      (r) =>
+        r.gradoId === gradoDocenteEfectivo &&
+        misUnidadesDelGrado.has(r.unidadId),
+    );
+  }, [
+    registrosEnRiesgo,
+    modoEfectivo,
+    gradoTutorEfectivo,
+    gradoDocenteEfectivo,
+    misUnidadesDelGrado,
+  ]);
 
-      if (filtroGrado !== "todos" && filtroGrado !== "tutor") {
-        if (!grado || grado.id !== filtroGrado) return false;
-      }
-      if (filtroGrado === "tutor") {
-        if (!grado || !(userData?.tutorDe || []).includes(grado.id))
-          return false;
-      }
-      if (filtroMateria !== "todas") {
-        if (r.materiaNombre !== filtroMateria) return false;
-      }
-      return true;
-    });
-  }, [registrosEnRiesgo, filtroGrado, filtroMateria, grados, userData]);
-
+  // ✅ Resumen por estudiante agrupado por DESTREZA/MATERIA (para mostrar detalle)
   const estudiantesUnicosEnRiesgo = useMemo(() => {
     const map = new Map<
       string,
@@ -440,11 +449,7 @@ export default function ReporteNotas() {
     >();
     registrosFiltrados.forEach((r) => {
       if (!map.has(r.estudianteId)) {
-        map.set(r.estudianteId, {
-          estudiante: r,
-          conteo: 0,
-          materias: new Set(),
-        });
+        map.set(r.estudianteId, { estudiante: r, conteo: 0, materias: new Set() });
       }
       const entry = map.get(r.estudianteId)!;
       entry.conteo++;
@@ -459,6 +464,14 @@ export default function ReporteNotas() {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
+    const grado = modoEfectivo === "tutor" ? gradoTutorActual : gradoDocenteActual;
+    const tituloModo =
+      modoEfectivo === "tutor"
+        ? `Vista Tutor — Grado ${grado?.nombre} "${grado?.paralelo}" (todas las unidades)`
+        : `Vista Docente — Grado ${grado?.nombre} "${grado?.paralelo}" (${
+            esInicialDocente ? "ámbitos" : "mis materias"
+          }: ${misUnidadesNombres.join(", ")})`;
+
     const html = `
     <!DOCTYPE html>
     <html>
@@ -467,8 +480,9 @@ export default function ReporteNotas() {
       <style>
         body { font-family: Arial, sans-serif; padding: 30px; color: #333; line-height: 1.5; }
         h1 { text-align: center; color: #d97706; font-size: 24px; margin-bottom: 5px; }
-        h2 { text-align: center; color: #555; font-size: 16px; margin-bottom: 20px; font-weight: normal; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
+        h2 { text-align: center; color: #555; font-size: 16px; margin-bottom: 10px; font-weight: normal; }
+        .modo { text-align: center; font-size: 12px; color: #666; margin-bottom: 20px; font-style: italic; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 11px; }
         th { background-color: #fbbf24; color: #78350f; padding: 8px; text-align: left; border: 1px solid #d97706; }
         td { padding: 6px 8px; border: 1px solid #ddd; vertical-align: top; }
         tr:nth-child(even) { background-color: #fef3c7; }
@@ -481,13 +495,14 @@ export default function ReporteNotas() {
     <body>
       <h1>⚠️ Reporte de Estudiantes en Riesgo Académico</h1>
       <h2>Estudiantes con notas menores a 7</h2>
+      <p class="modo">${tituloModo}</p>
       <p><strong>Total:</strong> ${registrosFiltrados.length} registro(s) | ${estudiantesUnicosEnRiesgo.length} estudiante(s)</p>
       <table>
         <thead>
           <tr>
             <th>Estudiante</th>
             <th>Grado</th>
-            <th>Materia</th>
+            <th>Materia / Destreza</th>
             <th>Actividad</th>
             <th>Fecha</th>
             <th>Nota</th>
@@ -500,7 +515,7 @@ export default function ReporteNotas() {
             <tr>
               <td>${r.estudianteNombre}${r.estudianteCedula ? `<br><small>CI: ${r.estudianteCedula}</small>` : ""}</td>
               <td>${r.gradoNombre} - ${r.gradoParalelo}</td>
-              <td>${r.materiaNombre}</td>
+              <td>${r.materiaNombre}<br><small>${r.ambitoNombre}</small></td>
               <td>${r.actividadTipo}: ${r.actividadDetalle}</td>
               <td>${r.actividadFecha}</td>
               <td class="nota">${r.notaOriginal}${r.tieneRefuerzo ? `<br><span class="refuerzo">→ ${r.notaFinal} (ref.)</span>` : ""}</td>
@@ -536,6 +551,127 @@ export default function ReporteNotas() {
 
   return (
     <Layout>
+      {/* TABS DE MODO */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+        <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
+          <div className="flex gap-2 flex-1">
+            {esTutor && (
+              <button
+                onClick={() => setModoVista("tutor")}
+                className={`flex-1 px-4 py-3 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+                  modoEfectivo === "tutor"
+                    ? "bg-purple-600 text-white shadow-lg"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                <FaUserTie />
+                Vista Tutor
+              </button>
+            )}
+            {tieneMaterias && (
+              <button
+                onClick={() => setModoVista("docente")}
+                className={`flex-1 px-4 py-3 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+                  modoEfectivo === "docente"
+                    ? "bg-cyan-600 text-white shadow-lg"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                <FaChalkboardTeacher />
+                Vista Docente
+              </button>
+            )}
+          </div>
+          <button
+            onClick={handlePrint}
+            disabled={registrosFiltrados.length === 0}
+            className="inline-flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+          >
+            <FaPrint /> Imprimir
+          </button>
+        </div>
+      </div>
+
+      {/* SELECTOR DE GRADO */}
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+        <label className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
+          <FaGraduationCap className="text-blue-600" />
+          {modoEfectivo === "tutor" ? "Grado que tutoras" : "Grado donde dictas"}
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {(modoEfectivo === "tutor" ? gradosTutorizados : gradosDocenteMios).map(
+            (g) => {
+              const sel =
+                modoEfectivo === "tutor"
+                  ? gradoTutorEfectivo === g.id
+                  : gradoDocenteEfectivo === g.id;
+              return (
+                <button
+                  key={g.id}
+                  onClick={() =>
+                    modoEfectivo === "tutor"
+                      ? setGradoTutorSel(g.id)
+                      : setGradoDocenteSel(g.id)
+                  }
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                    sel
+                      ? modoEfectivo === "tutor"
+                        ? "bg-purple-600 text-white border-purple-600"
+                        : "bg-cyan-600 text-white border-cyan-600"
+                      : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
+                  }`}
+                >
+                  {g.nombre} - {g.paralelo}
+                </button>
+              );
+            },
+          )}
+        </div>
+
+        <div className="mt-3 text-xs text-slate-600 bg-slate-50 rounded-lg p-3 border border-slate-200">
+          <FaInfoCircle className="inline mr-1 text-blue-600" />
+          {modoEfectivo === "tutor" ? (
+            <>
+              <strong>Vista Tutor:</strong> estudiantes de{" "}
+              <strong>
+                {gradoTutorActual?.nombre} {gradoTutorActual?.paralelo}
+              </strong>{" "}
+              con notas &lt; 7 en{" "}
+              {esGradoInicial(gradoTutorActual?.nombre || "") ? (
+                <>
+                  sus <strong>ámbitos</strong>
+                </>
+              ) : (
+                <>
+                  <strong>todas las materias</strong>
+                </>
+              )}{" "}
+              del grado.
+            </>
+          ) : (
+            <>
+              <strong>Vista Docente:</strong> estudiantes de{" "}
+              <strong>
+                {gradoDocenteActual?.nombre} {gradoDocenteActual?.paralelo}
+              </strong>{" "}
+              con notas &lt; 7 en{" "}
+              {esInicialDocente ? (
+                <>
+                  tus <strong>ámbitos</strong>:{" "}
+                  <strong>{misUnidadesNombres.join(", ") || "—"}</strong>
+                </>
+              ) : (
+                <>
+                  tus <strong>materias</strong>:{" "}
+                  <strong>{misUnidadesNombres.join(", ") || "—"}</strong>
+                </>
+              )}
+              .
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Resumen en tarjetas */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
@@ -585,94 +721,10 @@ export default function ReporteNotas() {
         </div>
       </div>
 
-      {/* Filtros */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
-        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-end">
-          <div className="flex-1">
-            <label className="text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
-              <FaGraduationCap className="text-blue-600" /> Filtrar por Grado
-            </label>
-            <select
-              value={filtroGrado}
-              onChange={(e) => {
-                setFiltroGrado(e.target.value);
-                setFiltroMateria("todas");
-              }}
-              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500"
-            >
-              <option value="todos">Todos los grados visibles</option>
-              {esTutor && !esAdmin && (
-                <option value="tutor">Solo mis grados como tutor</option>
-              )}
-              {gradosDisponibles.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.nombre} - {g.paralelo}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {materiasDisponibles.length > 0 && (
-            <div className="flex-1">
-              <label className="text-xs font-semibold text-slate-700 mb-1.5 flex items-center gap-1">
-                <FaBook className="text-purple-600" /> Filtrar por Materia
-              </label>
-              <select
-                value={filtroMateria}
-                onChange={(e) => setFiltroMateria(e.target.value)}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500"
-              >
-                <option value="todas">Todas las materias</option>
-                {materiasDisponibles.map((m) => (
-                  <option key={m.id} value={m.nombre}>
-                    {m.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <button
-            onClick={handlePrint}
-            disabled={registrosFiltrados.length === 0}
-            className="inline-flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          >
-            <FaPrint /> Imprimir
-          </button>
-        </div>
-      </div>
-
-      {/* Info del rol */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 flex items-start gap-2">
-        <FaInfoCircle className="text-blue-600 mt-0.5 shrink-0" />
-        <p className="text-xs text-blue-800">
-          {esAdmin ? (
-            <>
-              Vista administrador: se muestran{" "}
-              <strong>todas las calificaciones</strong> menores a 7 de todos los
-              grados del año lectivo.
-            </>
-          ) : esTutor ? (
-            <>
-              Como <strong>tutor</strong> ves todas las materias de tus
-              estudiantes en grados tutorados. Como <strong>docente</strong>{" "}
-              solo ves las calificaciones de las materias que dictas.
-            </>
-          ) : (
-            <>
-              Como <strong>docente</strong> solo ves calificaciones menores a 7
-              de las materias que dictas en todos los grados asignados.
-            </>
-          )}
-        </p>
-      </div>
-
       {loading ? (
         <div className="text-center py-16">
           <FaSpinner className="animate-spin text-4xl text-amber-500 mx-auto mb-3" />
-          <p className="text-slate-600 text-sm font-medium">
-            Cargando reporte...
-          </p>
+          <p className="text-slate-600 text-sm font-medium">Cargando reporte...</p>
         </div>
       ) : registrosFiltrados.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
@@ -683,92 +735,86 @@ export default function ReporteNotas() {
             ¡Excelente! No hay estudiantes en riesgo
           </h3>
           <p className="text-slate-600 text-sm">
-            No se encontraron calificaciones menores a 7 en el alcance
-            seleccionado.
+            No se encontraron calificaciones menores a 7 en el grado y modo
+            seleccionados.
           </p>
         </div>
       ) : (
         <>
-          {/* Vista resumen por estudiante */}
+          {/* Resumen por estudiante (chips de DESTREZAS) */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
-            <div className="bg-linear-to-r from-amber-500 to-amber-600 px-5 py-4 flex items-center gap-3">
+            <div
+              className={`px-5 py-4 flex items-center gap-3 ${
+                modoEfectivo === "tutor"
+                  ? "bg-linear-to-r from-purple-500 to-purple-600"
+                  : "bg-linear-to-r from-cyan-500 to-cyan-600"
+              }`}
+            >
               <FaUserGraduate className="text-white text-xl" />
               <div>
-                <h3 className="text-white font-semibold">
-                  Resumen por Estudiante
-                </h3>
+                <h3 className="text-white font-semibold">Resumen por Estudiante</h3>
                 <p className="text-white/80 text-xs">
-                  {estudiantesUnicosEnRiesgo.length} estudiante(s) con notas
-                  menores a 7
+                  {estudiantesUnicosEnRiesgo.length} estudiante(s) con notas menores a 7
                 </p>
               </div>
             </div>
             <div className="divide-y divide-slate-100">
-              {estudiantesUnicosEnRiesgo.map(
-                ({ estudiante, conteo, materias }) => (
-                  <div
-                    key={estudiante.estudianteId}
-                    className="p-4 hover:bg-slate-50"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <h4 className="font-semibold text-slate-900 text-sm">
-                            {estudiante.estudianteNombre}
-                          </h4>
-                          <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
-                            {estudiante.gradoNombre} -{" "}
-                            {estudiante.gradoParalelo}
-                          </span>
-                        </div>
-                        {estudiante.estudianteCedula && (
-                          <p className="text-xs text-slate-500 mb-1">
-                            CI: {estudiante.estudianteCedula}
-                          </p>
-                        )}
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          {Array.from(materias)
-                            .slice(0, 3)
-                            .map((m) => (
-                              <span
-                                key={m}
-                                className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded"
-                              >
-                                {m}
-                              </span>
-                            ))}
-                          {materias.size > 3 && (
-                            <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                              +{materias.size - 3} más
-                            </span>
-                          )}
-                        </div>
+              {estudiantesUnicosEnRiesgo.map(({ estudiante, conteo, materias }) => (
+                <div key={estudiante.estudianteId} className="p-4 hover:bg-slate-50">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <h4 className="font-semibold text-slate-900 text-sm">
+                          {estudiante.estudianteNombre}
+                        </h4>
+                        <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
+                          {estudiante.gradoNombre} - {estudiante.gradoParalelo}
+                        </span>
                       </div>
-                      <div className="flex flex-col items-end">
-                        <span
-                          className={`px-3 py-1 rounded-full text-sm font-bold ${
-                            conteo >= 5
-                              ? "bg-red-100 text-red-700 border border-red-300"
-                              : conteo >= 3
-                                ? "bg-orange-100 text-orange-700 border border-orange-300"
-                                : "bg-amber-100 text-amber-700 border border-amber-300"
-                          }`}
-                        >
-                          {conteo} {conteo === 1 ? "nota" : "notas"} {"< 7"}
-                        </span>
-                        <span className="text-[10px] text-slate-500 mt-1">
-                          {materias.size}{" "}
-                          {materias.size === 1 ? "materia" : "materias"}
-                        </span>
+                      {estudiante.estudianteCedula && (
+                        <p className="text-xs text-slate-500 mb-1">
+                          CI: {estudiante.estudianteCedula}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {Array.from(materias).slice(0, 4).map((m) => (
+                          <span
+                            key={m}
+                            className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded"
+                          >
+                            {m}
+                          </span>
+                        ))}
+                        {materias.size > 4 && (
+                          <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+                            +{materias.size - 4} más
+                          </span>
+                        )}
                       </div>
                     </div>
+                    <div className="flex flex-col items-end">
+                      <span
+                        className={`px-3 py-1 rounded-full text-sm font-bold ${
+                          conteo >= 5
+                            ? "bg-red-100 text-red-700 border border-red-300"
+                            : conteo >= 3
+                              ? "bg-orange-100 text-orange-700 border border-orange-300"
+                              : "bg-amber-100 text-amber-700 border border-amber-300"
+                        }`}
+                      >
+                        {conteo} {conteo === 1 ? "nota" : "notas"} {"< 7"}
+                      </span>
+                      <span className="text-[10px] text-slate-500 mt-1">
+                        {materias.size} {materias.size === 1 ? "materia" : "materias"}
+                      </span>
+                    </div>
                   </div>
-                ),
-              )}
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Vista detallada */}
+          {/* Tabla detallada (destreza arriba, ámbito debajo) */}
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
             <div className="bg-linear-to-r from-red-500 to-red-600 px-5 py-4 flex items-center gap-3">
               <FaExclamationTriangle className="text-white text-xl" />
@@ -789,10 +835,7 @@ export default function ReporteNotas() {
                       Estudiante
                     </th>
                     <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                      Grado
-                    </th>
-                    <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                      Materia
+                      Materia / Destreza
                     </th>
                     <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
                       Actividad
@@ -806,11 +849,9 @@ export default function ReporteNotas() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {registrosFiltrados.map((r) => (
+                  {registrosFiltrados.map((r, idx) => (
                     <tr
-                      key={
-                        r.estudianteId + r.actividadDetalle + r.actividadFecha
-                      }
+                      key={`${r.estudianteId}-${r.destrezaId}-${r.actividadDetalle}-${idx}`}
                       className="hover:bg-slate-50"
                     >
                       <td className="px-4 py-2.5">
@@ -823,24 +864,18 @@ export default function ReporteNotas() {
                           </p>
                         )}
                       </td>
-                      <td className="px-3 py-2.5 text-xs text-slate-700">
-                        {r.gradoNombre} - {r.gradoParalelo}
-                      </td>
                       <td className="px-3 py-2.5">
-                        <p className="text-xs font-medium text-slate-900">
+                        <p className="text-xs font-medium text-slate-900 flex items-center gap-1">
+                          <FaBook className="text-purple-500 text-[10px]" />
                           {r.materiaNombre}
                         </p>
-                        <p className="text-[10px] text-slate-500">
-                          {r.ambitoNombre}
-                        </p>
+                        <p className="text-[10px] text-slate-500">{r.ambitoNombre}</p>
                       </td>
                       <td className="px-3 py-2.5">
                         <p className="text-xs font-medium text-slate-900">
                           {r.actividadDetalle}
                         </p>
-                        <p className="text-[10px] text-slate-500">
-                          {r.actividadTipo}
-                        </p>
+                        <p className="text-[10px] text-slate-500">{r.actividadTipo}</p>
                       </td>
                       <td className="px-3 py-2.5 text-center text-xs text-slate-600">
                         {r.actividadFecha}
