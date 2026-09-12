@@ -109,7 +109,7 @@ export default function Login() {
           <div className="text-center mb-8">
             <div className="w-56 h-56 mx-auto mb-5">
               <img 
-                src="/logo.png" 
+                src="/logo.png"
                 alt="Escudo Institucional"
                 className="w-full h-full object-contain"
               />
