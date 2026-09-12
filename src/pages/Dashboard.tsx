@@ -13,7 +13,6 @@ import {
   FaSignOutAlt,
   FaTrophy,
   FaUserShield,
-  FaUserTie,
   FaCogs,
   FaSchool,
   FaUserCog,
@@ -27,16 +26,18 @@ import {
 interface InstitutionData {
   nombreInstitucion?: string;
   codigoAmie?: string;
-  nombreRector?: string;
+  nombreRector?: nombreRectorType;
   logo?: string;
   direccion?: string;
   telefono?: string;
 }
+type nombreRectorType = string;
 
 export default function Dashboard() {
   const { user, userData, logout } = useAuth();
   const navigate = useNavigate();
   const [showDropdown, setShowDropdown] = useState(false);
+  const [logoError, setLogoError] = useState(false);
   const [grados, setGrados] = useState<Grado[]>([]);
   const [, setAniosLectivos] = useState<AnioLectivo[]>([]);
   const [stats, setStats] = useState({
@@ -269,7 +270,6 @@ export default function Dashboard() {
       badge: "ADMIN",
       roles: ["super_admin"],
     },
-    // === GRUPO 3: OPERACIÓN DIARIA (orden solicitado) ===
     {
       path: "/calificaciones",
       name: "Registro Asistencia Notas",
@@ -277,7 +277,7 @@ export default function Dashboard() {
       color: "from-orange-500 to-orange-600",
       desc: "Registro de asistencia y notas",
       stats: `${stats.calificaciones} registro${stats.calificaciones !== 1 ? "s" : ""}`,
-      badge: "NIVEL 4",
+      badge: "DOCENTE",
       roles: ["super_admin", "docente"],
     },
     {
@@ -317,7 +317,7 @@ export default function Dashboard() {
       color: "from-green-500 to-green-600",
       desc: "Matrícula de alumnos",
       stats: `${stats.estudiantesActivos} activo${stats.estudiantesActivos !== 1 ? "s" : ""}`,
-      badge: "NIVEL 3",
+      badge: "TUTOR",
       roles: ["super_admin", "docente"],
     },
   ];
@@ -326,41 +326,26 @@ export default function Dashboard() {
   const filteredModules = modules.filter((mod) => mod.roles.includes(userRole));
 
   const esTutor = tutorDeAnioActivo.length > 0;
-  const gradosTutor = tutorDeAnioActivo;
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100">
+    <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex flex-col">
+      {/* Header — solo el logo */}
       <header className="bg-white shadow-lg border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-            <div className="flex items-center gap-4">
-              <div className="bg-linear-to-br from-blue-600 to-purple-600 p-3 rounded-xl shadow-lg">
-                <FaTrophy className="text-white text-3xl" />
-              </div>
-              <div>
-                <h1 className="text-2xl md:text-3xl font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                  Gestión Escolar
-                </h1>
-                <p className="text-slate-600 text-sm flex items-center gap-2 flex-wrap">
-                  {institutionData?.nombreInstitucion && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-semibold">
-                      <FaSchool className="w-3 h-3" />
-                      {institutionData.nombreInstitucion}
-                    </span>
-                  )}
-                  {userData?.role && (
-                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-semibold">
-                      {userData.role === "super_admin" ? "Super Admin" : "Docente"}
-                    </span>
-                  )}
-                  {esTutor && (
-                    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-semibold inline-flex items-center gap-1">
-                      <FaUserTie className="w-3 h-3" />
-                      Tutor ({gradosTutor.length})
-                    </span>
-                  )}
-                </p>
-              </div>
+            <div className="flex items-center">
+              {logoError ? (
+                <div className="bg-linear-to-br from-blue-600 to-purple-600 p-3 rounded-xl shadow-lg">
+                  <FaTrophy className="text-white text-3xl" />
+                </div>
+              ) : (
+                <img
+                  src="/dayaniX-eduX-i.png"
+                  alt="dayaniX"
+                  className="h-16 w-auto object-contain"
+                  onError={() => setLogoError(true)}
+                />
+              )}
             </div>
 
             <div className="relative">
@@ -480,7 +465,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
         {userData?.role === "super_admin" &&
           loadingInstitution === false &&
           !institutionData && (
@@ -574,9 +559,16 @@ export default function Dashboard() {
         </div>
       </main>
 
+      {/* ✅ Footer SOLO en el Dashboard — una sola línea */}
       <footer className="bg-white border-t border-slate-200 mt-12">
-        <div className="max-w-7xl mx-auto px-4 py-6 text-center text-slate-600 text-sm">
-          <p>© 2026 Gestión Escolar - Todos los derechos reservados</p>
+        <div className="max-w-7xl mx-auto px-4 py-4 text-center">
+          <p className="text-sm text-slate-600">
+            © 2026{" "}
+            <span className="font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              dayaniX
+            </span>{" "}
+            · Ing. Diego Yamberla · Todos los derechos reservados
+          </p>
         </div>
       </footer>
     </div>

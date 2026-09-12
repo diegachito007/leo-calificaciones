@@ -28,12 +28,12 @@ export default function Layout({
   subtitle,
   showBack = false,
   backTo = '/',
-  action,
-  showFooter = false
+  action
 }: LayoutProps) {
   const { user, userData, logout } = useAuth();
   const navigate = useNavigate();
   const [showDropdown, setShowDropdown] = useState(false);
+  const [logoError, setLogoError] = useState(false);
 
   const { grados } = useData();
 
@@ -41,7 +41,6 @@ export default function Layout({
     ? userData.nombreDocumento
     : user?.displayName || 'Usuario';
 
-  // ✅ Grados filtrados según el rol (sin useMemo - React Compiler lo optimiza)
   const gradosFiltrados = (() => {
     if (
       userData?.role === 'docente' &&
@@ -54,7 +53,6 @@ export default function Layout({
     return grados;
   })();
 
-  // ✅ Filtrar tutorDe solo del año lectivo activo (sin useMemo)
   const tutorDeAnioActivo = (() => {
     if (!userData?.tutorDe) return [];
     return gradosFiltrados
@@ -66,20 +64,23 @@ export default function Layout({
 
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex flex-col">
-      {/* Header Fijo */}
+      {/* Header Fijo — solo el logo */}
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-lg shadow-sm border-b border-slate-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between">
-            <Link to="/" className="flex items-center gap-3 group">
-              <div className="bg-linear-to-br from-blue-600 to-purple-600 p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
-                <FaTrophy className="text-white text-xl" />
-              </div>
-              <div className="hidden sm:block">
-                <h1 className="text-lg font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-                  Gestión Escolar
-                </h1>
-                <p className="text-xs text-slate-500">Sistema integral educativo</p>
-              </div>
+            <Link to="/" className="flex items-center group" title="dayaniX">
+              {logoError ? (
+                <div className="bg-linear-to-br from-blue-600 to-purple-600 p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
+                  <FaTrophy className="text-white text-xl" />
+                </div>
+              ) : (
+                <img
+                  src="/dayaniX-eduX-i.png"
+                  alt="dayaniX"
+                  className="h-11 w-auto object-contain group-hover:scale-105 transition-transform"
+                  onError={() => setLogoError(true)}
+                />
+              )}
             </Link>
 
             <div className="relative">
@@ -230,13 +231,7 @@ export default function Layout({
         {children}
       </main>
 
-      {showFooter && (
-        <footer className="bg-white border-t border-slate-200 mt-auto">
-          <div className="max-w-7xl mx-auto px-4 py-4 text-center text-slate-600 text-sm">
-            <p>© 2026 Gestión Escolar - Todos los derechos reservados</p>
-          </div>
-        </footer>
-      )}
+      {/* ✅ Sin footer en las páginas internas (solo el Dashboard lo muestra) */}
     </div>
   );
 }
