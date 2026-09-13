@@ -68,7 +68,7 @@ export default function Layout({
       <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-lg shadow-sm border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between">
-            <Link to="/" className="flex items-center group" title="dayaniX">
+            <Link to="/" className="flex items-center group" title="eduX">
               {logoError ? (
                 <div className="bg-linear-to-br from-blue-600 to-purple-600 p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
                   <FaTrophy className="text-white text-xl" />
@@ -76,7 +76,7 @@ export default function Layout({
               ) : (
                 <img
                   src="/logo.eduX.png"
-                  alt="dayaniX"
+                  alt="eduX"
                   className="h-11 w-auto object-contain group-hover:scale-105 transition-transform"
                   onError={() => setLogoError(true)}
                 />
