@@ -75,7 +75,7 @@ export default function Layout({
                 </div>
               ) : (
                 <img
-                  src="/logo.dayaniX.jpg"
+                  src="/logo.eduX.jpg"
                   alt="dayaniX"
                   className="h-11 w-auto object-contain group-hover:scale-105 transition-transform"
                   onError={() => setLogoError(true)}
