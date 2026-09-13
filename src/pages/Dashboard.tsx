@@ -565,7 +565,7 @@ export default function Dashboard() {
           <p className="text-sm text-slate-600">
             © 2026{" "}
             <span className="font-bold bg-linear-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              eduX
+              saydeX
             </span>{" "}
             · Ing. Diego Yamberla · Todos los derechos reservados
           </p>
