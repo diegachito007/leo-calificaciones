@@ -1,7 +1,20 @@
-import { useState, useEffect, useCallback, startTransition, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  startTransition,
+  useMemo,
+} from "react";
 import { useAuth } from "../context/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  getCountFromServer,
+} from "firebase/firestore";
+import type { Query } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import type { Grado, AnioLectivo } from "../types";
 import {
@@ -49,13 +62,16 @@ export default function Dashboard() {
     solicitudesPendientes: 0,
     estudiantesEnRiesgo: 0,
   });
-  const [institutionData, setInstitutionData] = useState<InstitutionData | null>(null);
+  const [institutionData, setInstitutionData] =
+    useState<InstitutionData | null>(null);
   const [loadingInstitution, setLoadingInstitution] = useState(true);
 
   useEffect(() => {
     const cargarConfiguracion = async () => {
       try {
-        const configSnap = await getDocs(collection(db, "configuracionInstitucional"));
+        const configSnap = await getDocs(
+          collection(db, "configuracionInstitucional"),
+        );
         if (!configSnap.empty) {
           const data = configSnap.docs[0].data() as InstitutionData;
           setInstitutionData(data);
@@ -72,36 +88,47 @@ export default function Dashboard() {
   useEffect(() => {
     const cargarDatos = async () => {
       try {
-        const qAnios = query(collection(db, 'aniosLectivos'), where('activo', '==', true));
+        const qAnios = query(
+          collection(db, "aniosLectivos"),
+          where("activo", "==", true),
+        );
         const snapAnios = await getDocs(qAnios);
-        const aniosData = snapAnios.docs.map(doc => ({ id: doc.id, ...doc.data() } as AnioLectivo));
+        const aniosData = snapAnios.docs.map(
+          (doc) => ({ id: doc.id, ...doc.data() }) as AnioLectivo,
+        );
         setAniosLectivos(aniosData);
 
         if (aniosData.length > 0) {
           const anioActivo = aniosData[0];
           let qGrados;
 
-          if (userData?.role === 'docente' && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
+          if (
+            userData?.role === "docente" &&
+            userData?.gradosAsignados &&
+            userData.gradosAsignados.length > 0
+          ) {
             qGrados = query(
-              collection(db, 'grados'),
-              where('anioLectivoId', '==', anioActivo.id),
-              where('__name__', 'in', userData.gradosAsignados),
-              where('activo', '==', true)
+              collection(db, "grados"),
+              where("anioLectivoId", "==", anioActivo.id),
+              where("__name__", "in", userData.gradosAsignados),
+              where("activo", "==", true),
             );
           } else {
             qGrados = query(
-              collection(db, 'grados'),
-              where('anioLectivoId', '==', anioActivo.id),
-              where('activo', '==', true)
+              collection(db, "grados"),
+              where("anioLectivoId", "==", anioActivo.id),
+              where("activo", "==", true),
             );
           }
 
           const snapGrados = await getDocs(qGrados);
-          const gradosData = snapGrados.docs.map(doc => ({ id: doc.id, ...doc.data() } as Grado));
+          const gradosData = snapGrados.docs.map(
+            (doc) => ({ id: doc.id, ...doc.data() }) as Grado,
+          );
           setGrados(gradosData);
         }
       } catch (error) {
-        console.error('Error cargando datos para Dashboard:', error);
+        console.error("Error cargando datos para Dashboard:", error);
       }
     };
 
@@ -110,7 +137,9 @@ export default function Dashboard() {
 
   const tutorDeAnioActivo = useMemo(() => {
     if (!userData?.tutorDe) return [];
-    return grados.filter(g => userData.tutorDe?.includes(g.id)).map(g => g.id);
+    return grados
+      .filter((g) => userData.tutorDe?.includes(g.id))
+      .map((g) => g.id);
   }, [grados, userData]);
 
   const nombreUsuario = userData?.nombreDocumento
@@ -119,85 +148,104 @@ export default function Dashboard() {
 
   const cargarStats = useCallback(async () => {
     try {
-      const aniosQuery = query(collection(db, "aniosLectivos"), where("activo", "==", true));
-      const aniosSnap = await getDocs(aniosQuery);
+      // ✅ Variable local con tipo garantizado (nunca undefined)
+      const gradosAsignados: string[] = userData?.gradosAsignados ?? [];
+      const esDocenteConAsignados =
+        userData?.role === "docente" && gradosAsignados.length > 0;
 
-      let gradosQuery;
-      if (userData?.role === "docente" && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
-        gradosQuery = query(collection(db, "grados"), where("activo", "==", true), where("__name__", "in", userData.gradosAsignados));
-      } else {
-        gradosQuery = query(collection(db, "grados"), where("activo", "==", true));
-      }
-      const gradosSnap = await getDocs(gradosQuery);
+      // ✅ Conteo SIN descargar documentos (1 agregación c/u)
+      const contar = (q: Query) =>
+        getCountFromServer(q).then((s) => s.data().count);
 
-      let estudiantesQuery;
-      if (userData?.role === "docente" && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
-        estudiantesQuery = query(collection(db, "estudiantes"), where("activo", "==", true), where("gradoId", "in", userData.gradosAsignados));
-      } else {
-        estudiantesQuery = query(collection(db, "estudiantes"), where("activo", "==", true));
-      }
-      const estudiantesSnap = await getDocs(estudiantesQuery);
+      let aniosCount = 0;
+      let gradosCount = 0;
+      let estudiantesCount = 0;
+      let ambitosCount = 0;
+      let calificacionesCount = 0;
+      let solicitudesCount = 0;
+      let estudiantesEnRiesgo = 0;
 
-      let ambitosQuery;
-      if (userData?.role === "docente" && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
-        ambitosQuery = query(collection(db, "ambitos"), where("gradoId", "in", userData.gradosAsignados), where("activo", "==", true));
-      } else {
-        ambitosQuery = query(collection(db, "ambitos"), where("activo", "==", true));
-      }
-      const ambitosSnap = await getDocs(ambitosQuery);
-
-      let calificacionesQuery;
-      if (userData?.role === "docente" && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
-        calificacionesQuery = query(collection(db, "calificaciones"), where("gradoId", "in", userData.gradosAsignados));
-      } else {
-        calificacionesQuery = query(collection(db, "calificaciones"));
-      }
-      const calificacionesSnap = await getDocs(calificacionesQuery);
-
-      const estudiantesEnRiesgoSet = new Set<string>();
-      try {
-        const idsEstudiantes = estudiantesSnap.docs.map(d => d.id);
-        if (idsEstudiantes.length > 0 && idsEstudiantes.length <= 30) {
-          const notasBajasQuery = query(
-            collection(db, "calificaciones"),
-            where("estudianteId", "in", idsEstudiantes),
-            where("nota", "<=", 6)
-          );
-          const notasBajasSnap = await getDocs(notasBajasQuery);
-          notasBajasSnap.docs.forEach(d => {
-            estudiantesEnRiesgoSet.add(d.data().estudianteId);
-          });
-        } else if (idsEstudiantes.length > 30) {
-          for (let i = 0; i < idsEstudiantes.length; i += 30) {
-            const lote = idsEstudiantes.slice(i, i + 30);
-            const loteQuery = query(
-              collection(db, "calificaciones"),
-              where("estudianteId", "in", lote),
-              where("nota", "<=", 6)
-            );
-            const loteSnap = await getDocs(loteQuery);
-            loteSnap.docs.forEach(d => {
-              estudiantesEnRiesgoSet.add(d.data().estudianteId);
-            });
-          }
-        }
-      } catch (error) {
-        console.error("Error contando estudiantes en riesgo:", error);
-      }
-
-      const solicitudesSnap = await getDocs(
-        query(collection(db, "solicitudesMatriculas"), where("estado", "==", "pendiente"))
+      aniosCount = await contar(
+        query(collection(db, "aniosLectivos"), where("activo", "==", true)),
       );
+
+      if (esDocenteConAsignados) {
+        gradosCount = await contar(
+          query(
+            collection(db, "grados"),
+            where("activo", "==", true),
+            where("__name__", "in", gradosAsignados),
+          ),
+        );
+        estudiantesCount = await contar(
+          query(
+            collection(db, "estudiantes"),
+            where("activo", "==", true),
+            where("gradoId", "in", gradosAsignados),
+          ),
+        );
+        ambitosCount = await contar(
+          query(
+            collection(db, "ambitos"),
+            where("activo", "==", true),
+            where("gradoId", "in", gradosAsignados),
+          ),
+        );
+        calificacionesCount = await contar(
+          query(
+            collection(db, "calificaciones"),
+            where("gradoId", "in", gradosAsignados),
+          ),
+        );
+      } else {
+        gradosCount = await contar(
+          query(collection(db, "grados"), where("activo", "==", true)),
+        );
+        estudiantesCount = await contar(
+          query(collection(db, "estudiantes"), where("activo", "==", true)),
+        );
+        ambitosCount = await contar(
+          query(collection(db, "ambitos"), where("activo", "==", true)),
+        );
+        calificacionesCount = await contar(collection(db, "calificaciones"));
+      }
+
+      solicitudesCount = await contar(
+        query(
+          collection(db, "solicitudesMatriculas"),
+          where("estado", "==", "pendiente"),
+        ),
+      );
+
+      // ✅ Estudiantes en riesgo: solo calificaciones bajas (acotado), distinct en cliente
+      try {
+        const set = new Set<string>();
+        const snap = await getDocs(
+          query(collection(db, "calificaciones"), where("nota", "<=", 6)),
+        );
+        snap.docs.forEach((d) => {
+          const data = d.data();
+          if (
+            !esDocenteConAsignados ||
+            gradosAsignados.includes(data.gradoId)
+          ) {
+            set.add(data.estudianteId);
+          }
+        });
+        estudiantesEnRiesgo = set.size;
+      } catch (e) {
+        console.error("Error contando estudiantes en riesgo:", e);
+      }
 
       startTransition(() => {
         setStats({
-          aniosActivos: aniosSnap.size,
-          gradosActivos: gradosSnap.size,
-          estudiantesActivos: estudiantesSnap.size,
-          ambitos: ambitosSnap.size,
-          calificaciones: calificacionesSnap.size,
-          solicitudesPendientes: solicitudesSnap.size,
-          estudiantesEnRiesgo: estudiantesEnRiesgoSet.size,
+          aniosActivos: aniosCount,
+          gradosActivos: gradosCount,
+          estudiantesActivos: estudiantesCount,
+          ambitos: ambitosCount,
+          calificaciones: calificacionesCount,
+          solicitudesPendientes: solicitudesCount,
+          estudiantesEnRiesgo,
         });
       });
     } catch (error) {
@@ -341,8 +389,7 @@ export default function Dashboard() {
               ) : (
                 <img
                   src="/logo.eduX.png"
-                  alt="eduX"
-                  className="h-16 w-auto object-contain"
+                  className="h-24 w-auto object-contain"
                   onError={() => setLogoError(true)}
                 />
               )}
@@ -380,7 +427,9 @@ export default function Dashboard() {
                     <div className="px-4 py-3 border-b border-slate-100">
                       <div className="flex items-center gap-3">
                         <img
-                          src={user?.photoURL || "https://via.placeholder.com/150"}
+                          src={
+                            user?.photoURL || "https://via.placeholder.com/150"
+                          }
                           alt="avatar"
                           className="w-14 h-14 rounded-full border-2 border-blue-500"
                         />
@@ -393,7 +442,9 @@ export default function Dashboard() {
                           </p>
                           <div className="flex gap-1 mt-1 flex-wrap">
                             <span className="inline-block px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
-                              {userData?.role === "super_admin" ? "Super Admin" : "Docente"}
+                              {userData?.role === "super_admin"
+                                ? "Super Admin"
+                                : "Docente"}
                             </span>
                             {esTutor && (
                               <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
@@ -485,8 +536,18 @@ export default function Dashboard() {
                     className="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors"
                   >
                     Configurar ahora
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
                     </svg>
                   </Link>
                 </div>
@@ -511,8 +572,18 @@ export default function Dashboard() {
                   className="inline-flex items-center gap-2 mt-3 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
                 >
                   Configurar mi perfil
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  <svg
+                    className="w-4 h-4"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 5l7 7-7 7"
+                    />
                   </svg>
                 </button>
               </div>
@@ -530,7 +601,9 @@ export default function Dashboard() {
               <div className={`h-2 bg-linear-to-r ${mod.color}`} />
               <div className="p-6">
                 <div className="flex items-start justify-between mb-4">
-                  <div className={`p-3 rounded-xl bg-linear-to-br ${mod.color} shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                  <div
+                    className={`p-3 rounded-xl bg-linear-to-br ${mod.color} shadow-lg group-hover:scale-110 transition-transform duration-300`}
+                  >
                     <mod.icon className="text-white text-2xl" />
                   </div>
                   <div className="flex flex-col items-end gap-1">
@@ -548,12 +621,24 @@ export default function Dashboard() {
                 <p className="text-slate-600 text-sm mb-4">{mod.desc}</p>
                 <div className="flex items-center text-blue-600 font-semibold text-sm group-hover:translate-x-2 transition-transform">
                   Acceder
-                  <svg className="w-4 h-4 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  <svg
+                    className="w-4 h-4 ml-2"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 5l7 7-7 7"
+                    />
                   </svg>
                 </div>
               </div>
-              <div className={`absolute inset-0 bg-linear-to-br ${mod.color} opacity-0 group-hover:opacity-5 transition-opacity duration-300`} />
+              <div
+                className={`absolute inset-0 bg-linear-to-br ${mod.color} opacity-0 group-hover:opacity-5 transition-opacity duration-300`}
+              />
             </Link>
           ))}
         </div>
