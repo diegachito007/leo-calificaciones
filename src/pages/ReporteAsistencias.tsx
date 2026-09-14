@@ -3,7 +3,6 @@ import {
   collection,
   query,
   where,
-  onSnapshot,
   updateDoc,
   doc,
   serverTimestamp,
@@ -37,6 +36,7 @@ import {
   FaSignOutAlt,
   FaClipboardList,
   FaLock,
+  FaSync,
 } from "react-icons/fa";
 import {
   type EstadoAsistencia,
@@ -91,19 +91,15 @@ type RegistroFuga = {
   representanteEl?: Timestamp | Date;
 };
 
-// ==================== MOTIVOS PREESTABLECIDOS ====================
-
 const MOTIVOS_JUSTIFICACION = [
   { label: "Enfermedad", icon: "🤒" },
   { label: "Cita médica", icon: "🏥" },
-  { label: "Problemas familiares", icon: "👨‍👩‍" },
+  { label: "Problemas familiares", icon: "👨‍👩‍👧" },
   { label: "Calamidad doméstica", icon: "🏠" },
   { label: "Fallecimiento familiar", icon: "🕯️" },
   { label: "Trámite personal", icon: "📋" },
   { label: "Emergencia", icon: "🚨" },
 ];
-
-// ==================== HELPERS ====================
 
 const getLunesSemana = (fecha: Date): Date => {
   const d = new Date(fecha);
@@ -262,12 +258,12 @@ const ESTADO_CONFIG: Record<
   },
 };
 
-// ==================== COMPONENTE ====================
-
 export default function ReporteAsistencias() {
   const { user, userData } = useAuth();
 
   const { grados, ambitos, destrezas, periodos, anioActivo, ready } = useData();
+
+  const cacheAsistencias = useRef<Map<string, AsistenciaData[]>>(new Map());
 
   const [asignaturasDocente, setAsignaturasDocente] = useState<
     AsignaturaDocente[]
@@ -310,7 +306,6 @@ export default function ReporteAsistencias() {
 
   const periodoInicializado = useRef(false);
 
-  // ✅ OPTIMIZACIÓN: cargar asignaturasDocente para calcular gradosDocente sin depender de asistencias
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
 
@@ -336,37 +331,12 @@ export default function ReporteAsistencias() {
     fetchAsignaturas();
   }, [user?.uid, anioActivo?.id]);
 
-  useEffect(() => {
-    if (!ready) return;
-
-    const fetchEstudiantes = async () => {
-      try {
-        const q = query(
-          collection(db, "estudiantes"),
-          where("activo", "==", true),
-        );
-        const snap = await getDocs(q);
-        const data = snap.docs.map(
-          (d) => ({ id: d.id, ...d.data() }) as Estudiante,
-        );
-        setEstudiantes(data);
-      } catch (error) {
-        console.error("Error cargando estudiantes:", error);
-      } finally {
-        setLoadingEstudiantes(false);
-      }
-    };
-
-    fetchEstudiantes();
-  }, [ready]);
-
   const esTutor = (userData?.tutorDe?.length ?? 0) > 0;
 
   const gradosTutor = useMemo(() => {
     return grados.filter((g) => userData?.tutorDe?.includes(g.id));
   }, [grados, userData]);
 
-  // ✅ OPTIMIZACIÓN: gradosDocente desde asignaturasDocente (no desde asistencias)
   const gradosDocente = useMemo(() => {
     if (!user?.uid) return [];
     const gradosConMaterias = new Set(
@@ -424,10 +394,67 @@ export default function ReporteAsistencias() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // ✅ OPTIMIZACIÓN: query de asistencias FILTRADA por grado efectivo
+  useEffect(() => {
+    if (!ready) return;
+
+    const gradosPermitidos = [
+      ...gradosTutor.map((g) => g.id),
+      ...gradosDocente.map((g) => g.id),
+    ];
+
+    let isMounted = true;
+
+    const fetchEstudiantes = async () => {
+      if (isMounted) setLoadingEstudiantes(true);
+
+      if (gradosPermitidos.length === 0) {
+        if (isMounted) {
+          setEstudiantes([]);
+          setLoadingEstudiantes(false);
+        }
+        return;
+      }
+
+      try {
+        const chunks: string[][] = [];
+        for (let i = 0; i < gradosPermitidos.length; i += 10) {
+          chunks.push(gradosPermitidos.slice(i, i + 10));
+        }
+
+        const todos: Estudiante[] = [];
+        for (const chunk of chunks) {
+          const q = query(
+            collection(db, "estudiantes"),
+            where("activo", "==", true),
+            where("gradoId", "in", chunk),
+          );
+          const snap = await getDocs(q);
+          todos.push(
+            ...snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
+          );
+        }
+
+        if (isMounted) {
+          todos.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+          setEstudiantes(todos);
+        }
+      } catch (error) {
+        console.error("Error cargando estudiantes:", error);
+      } finally {
+        if (isMounted) setLoadingEstudiantes(false);
+      }
+    };
+
+    fetchEstudiantes();
+    return () => {
+      isMounted = false;
+    };
+  }, [ready, gradosTutor, gradosDocente]);
+
   useEffect(() => {
     const gradoEfectivo =
       vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
+
     let isMounted = true;
     let fechasAFiltrar: string[] = [];
 
@@ -445,67 +472,66 @@ export default function ReporteAsistencias() {
       }
     }
 
-    if (!gradoEfectivo || fechasAFiltrar.length === 0) {
-      const limpiar = async () => {
+    const fetchAsistencias = async () => {
+      if (!gradoEfectivo || fechasAFiltrar.length === 0) {
         if (isMounted) setAsistencias([]);
+        return;
+      }
+
+      const cacheKey = `${tipoReporte}|${gradoEfectivo}|${fechasAFiltrar.join(",")}`;
+
+      if (cacheAsistencias.current.has(cacheKey)) {
+        if (isMounted) setAsistencias(cacheAsistencias.current.get(cacheKey)!);
+        return;
+      }
+
+      const normalizarDocs = (
+        docs: { id: string; data: () => Record<string, unknown> }[],
+      ): AsistenciaData[] => {
+        return docs.map((d) => {
+          const raw = d.data();
+          const estadoNormalizado = normalizarEstado(
+            raw.estado as string | undefined,
+            raw.v2 as boolean | undefined,
+          );
+          return {
+            ...(raw as Record<string, unknown>),
+            id: d.id,
+            estado: estadoNormalizado || (raw.estado as string),
+          } as AsistenciaData;
+        });
       };
-      limpiar();
-      return;
-    }
 
-    const normalizarDocs = (
-      docs: { id: string; data: () => Record<string, unknown> }[],
-    ): AsistenciaData[] => {
-      return docs.map((d) => {
-        const raw = d.data();
-        const estadoNormalizado = normalizarEstado(
-          raw.estado as string | undefined,
-          raw.v2 as boolean | undefined,
-        );
-        return {
-          ...(raw as Record<string, unknown>),
-          id: d.id,
-          estado: estadoNormalizado || (raw.estado as string),
-        } as AsistenciaData;
-      });
-    };
-
-    if (fechasAFiltrar.length <= 30) {
-      // ✅ AGREGADO: where("gradoId", "==", gradoEfectivo)
-      const q = query(
-        collection(db, "asistencias"),
-        where("gradoId", "==", gradoEfectivo),
-        where("fecha", "in", fechasAFiltrar),
-      );
-
-      const unsub = onSnapshot(q, (snap) => {
-        if (!isMounted) return;
-        setAsistencias(normalizarDocs(snap.docs));
-      });
-
-      return () => {
-        isMounted = false;
-        unsub();
-      };
-    }
-
-    const cargarChunks = async () => {
       const todas: AsistenciaData[] = [];
-      for (let i = 0; i < fechasAFiltrar.length; i += 30) {
-        const chunk = fechasAFiltrar.slice(i, i + 30);
-        // ✅ AGREGADO: where("gradoId", "==", gradoEfectivo)
+
+      if (fechasAFiltrar.length <= 30) {
         const q = query(
           collection(db, "asistencias"),
           where("gradoId", "==", gradoEfectivo),
-          where("fecha", "in", chunk),
+          where("fecha", "in", fechasAFiltrar),
         );
         const snap = await getDocs(q);
         todas.push(...normalizarDocs(snap.docs));
+      } else {
+        for (let i = 0; i < fechasAFiltrar.length; i += 30) {
+          const chunk = fechasAFiltrar.slice(i, i + 30);
+          const q = query(
+            collection(db, "asistencias"),
+            where("gradoId", "==", gradoEfectivo),
+            where("fecha", "in", chunk),
+          );
+          const snap = await getDocs(q);
+          todas.push(...normalizarDocs(snap.docs));
+        }
       }
-      if (isMounted) setAsistencias(todas);
+
+      if (isMounted) {
+        cacheAsistencias.current.set(cacheKey, todas);
+        setAsistencias(todas);
+      }
     };
 
-    cargarChunks();
+    fetchAsistencias();
     return () => {
       isMounted = false;
     };
@@ -547,6 +573,43 @@ export default function ReporteAsistencias() {
     setSemanaActual(getLunesSemana(new Date()));
     setMesActual(new Date().getMonth());
     setAnioActual(new Date().getFullYear());
+  };
+
+  const refrescarVista = () => {
+    const gradoEfectivo =
+      vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
+
+    if (!gradoEfectivo) return;
+
+    let fechasAFiltrar: string[] = [];
+
+    if (tipoReporte === "semanal") {
+      fechasAFiltrar = generarDiasSemana(semanaActual).map(formatFechaISO);
+    } else if (tipoReporte === "mensual") {
+      fechasAFiltrar = getDiasDelMes(anioActual, mesActual).map(formatFechaISO);
+    } else if (tipoReporte === "trimestral" && periodoSeleccionado) {
+      const periodo = periodos.find((p) => p.id === periodoSeleccionado);
+      if (periodo) {
+        fechasAFiltrar = getDiasDelPeriodo(
+          periodo.fechaInicio,
+          periodo.fechaFin,
+        ).map(formatFechaISO);
+      }
+    }
+
+    if (fechasAFiltrar.length === 0) return;
+
+    const cacheKey = `${tipoReporte}|${gradoEfectivo}|${fechasAFiltrar.join(",")}`;
+    cacheAsistencias.current.delete(cacheKey);
+
+    setAsistencias([]);
+
+    mostrarToast(
+      "info",
+      "Refrescando datos",
+      "Se actualizarán los datos de asistencia para este rango.",
+      2000,
+    );
   };
 
   const diasSemana = useMemo(
@@ -903,10 +966,15 @@ export default function ReporteAsistencias() {
 
       await Promise.all(batch);
 
+      const gradoEfectivo = gradoTutorEfectivo;
+      const fechas = diasSemana.map(formatFechaISO);
+      const cacheKey = `semanal|${gradoEfectivo}|${fechas.join(",")}`;
+      cacheAsistencias.current.delete(cacheKey);
+
       mostrarToast(
         "success",
         "Justificación completada",
-        `Se justificaron ${asistenciasAActualizar.length} inasistencia(s) correctamente.`,
+        `Se justificaron ${asistenciasAActualizar.length} inasistencia(s) correctamente. Pulsa "Refrescar" para ver los cambios.`,
         5000,
       );
       setShowJustificarModal(false);
@@ -1038,10 +1106,15 @@ export default function ReporteAsistencias() {
 
       await Promise.all(ops);
 
+      const gradoEfectivo = gradoTutorEfectivo;
+      const fechas = diasSemana.map(formatFechaISO);
+      const cacheKey = `semanal|${gradoEfectivo}|${fechas.join(",")}`;
+      cacheAsistencias.current.delete(cacheKey);
+
       mostrarToast(
         "success",
         "Acta(s) registrada(s)",
-        `Se registraron ${gruposAGuardar.length} acta(s) que cubren ${ops.length} fuga(s).`,
+        `Se registraron ${gruposAGuardar.length} acta(s) que cubren ${ops.length} fuga(s). Pulsa "Refrescar" para ver los cambios.`,
         5000,
       );
       setShowActaModal(false);
@@ -1714,6 +1787,15 @@ export default function ReporteAsistencias() {
           >
             <FaCalendarAlt className="text-sm" />
             Trimestral/Quimestral
+          </button>
+
+          <button
+            onClick={refrescarVista}
+            className="flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white shadow"
+            title="Refrescar datos desde Firebase"
+          >
+            <FaSync className="text-sm" />
+            Refrescar
           </button>
 
           <button
