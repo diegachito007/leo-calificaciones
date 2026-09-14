@@ -795,7 +795,8 @@ export default function ReporteAsistencias() {
     setNotasPorDia((prev) => {
       const actual = (prev[fecha] || "").trim();
       if (actual === "") return { ...prev, [fecha]: texto };
-      if (actual.endsWith(".")) return { ...prev, [fecha]: actual + " " + texto };
+      if (actual.endsWith("."))
+        return { ...prev, [fecha]: actual + " " + texto };
       return { ...prev, [fecha]: actual + ". " + texto };
     });
   };
@@ -963,7 +964,11 @@ export default function ReporteAsistencias() {
       );
 
       if (gruposAGuardar.length === 0) {
-        mostrarToast("info", "Sin cambios", "No hay días nuevos para registrar.");
+        mostrarToast(
+          "info",
+          "Sin cambios",
+          "No hay días nuevos para registrar.",
+        );
         setIsGuardandoActa(false);
         return;
       }
@@ -2091,7 +2096,9 @@ export default function ReporteAsistencias() {
                                 </button>
                               )}
                               {!tieneInasistencias && !tieneFugas && (
-                                <span className="text-slate-300 text-xs">—</span>
+                                <span className="text-slate-300 text-xs">
+                                  —
+                                </span>
                               )}
                               {tieneInasistencias &&
                                 tipoReporte !== "semanal" && (
@@ -2605,7 +2612,9 @@ export default function ReporteAsistencias() {
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="flex-1 min-w-0">
                                     <div className="font-semibold text-slate-900 text-sm capitalize">
-                                      {formatFechaCompleta(parseFechaLocal(fecha))}
+                                      {formatFechaCompleta(
+                                        parseFechaLocal(fecha),
+                                      )}
                                     </div>
                                     <div className="text-xs text-slate-500">
                                       {fugasDelDia.length} materia(s):{" "}
@@ -2624,8 +2633,9 @@ export default function ReporteAsistencias() {
                                       primera.representanteEl) && (
                                       <div className="mt-1 text-[10px] text-slate-400">
                                         Registrado por{" "}
-                                        {nombreDocente(primera.representantePor) ||
-                                          "tutor"}
+                                        {nombreDocente(
+                                          primera.representantePor,
+                                        ) || "tutor"}
                                         {primera.representanteEl
                                           ? ` el ${formatFechaRegistro(primera.representanteEl)}`
                                           : ""}
