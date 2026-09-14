@@ -62,6 +62,15 @@ interface AsistenciaData {
   actaNumero?: string;
 }
 
+interface AsignaturaDocente {
+  id: string;
+  docenteId: string;
+  gradoId: string;
+  destrezaId: string;
+  anioLectivoId: string;
+  activo: boolean;
+}
+
 type TipoReporte = "semanal" | "mensual" | "trimestral";
 
 interface Toast {
@@ -87,7 +96,7 @@ type RegistroFuga = {
 const MOTIVOS_JUSTIFICACION = [
   { label: "Enfermedad", icon: "🤒" },
   { label: "Cita médica", icon: "🏥" },
-  { label: "Problemas familiares", icon: "👨‍👩‍👧" },
+  { label: "Problemas familiares", icon: "👨‍👩‍" },
   { label: "Calamidad doméstica", icon: "🏠" },
   { label: "Fallecimiento familiar", icon: "🕯️" },
   { label: "Trámite personal", icon: "📋" },
@@ -258,8 +267,11 @@ const ESTADO_CONFIG: Record<
 export default function ReporteAsistencias() {
   const { user, userData } = useAuth();
 
-  const { grados, ambitos, destrezas, periodos, ready } = useData();
+  const { grados, ambitos, destrezas, periodos, anioActivo, ready } = useData();
 
+  const [asignaturasDocente, setAsignaturasDocente] = useState<
+    AsignaturaDocente[]
+  >([]);
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [asistencias, setAsistencias] = useState<AsistenciaData[]>([]);
   const [loadingEstudiantes, setLoadingEstudiantes] = useState(true);
@@ -286,7 +298,6 @@ export default function ReporteAsistencias() {
   const [motivoJustificacion, setMotivoJustificacion] = useState("");
   const [isJustificando, setIsJustificando] = useState(false);
 
-  // ✅ Modal de acta de compromiso (fugas) - agrupado por día
   const [showActaModal, setShowActaModal] = useState(false);
   const [estudianteActaId, setEstudianteActaId] = useState<string | null>(null);
   const [diasSeleccionados, setDiasSeleccionados] = useState<Set<string>>(
@@ -298,6 +309,32 @@ export default function ReporteAsistencias() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const periodoInicializado = useRef(false);
+
+  // ✅ OPTIMIZACIÓN: cargar asignaturasDocente para calcular gradosDocente sin depender de asistencias
+  useEffect(() => {
+    if (!user?.uid || !anioActivo?.id) return;
+
+    const fetchAsignaturas = async () => {
+      try {
+        const q = query(
+          collection(db, "asignaturasDocente"),
+          where("docenteId", "==", user.uid),
+          where("anioLectivoId", "==", anioActivo.id),
+          where("activo", "==", true),
+        );
+        const snap = await getDocs(q);
+        setAsignaturasDocente(
+          snap.docs.map(
+            (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
+          ),
+        );
+      } catch (error) {
+        console.error("Error cargando asignaturas del docente:", error);
+      }
+    };
+
+    fetchAsignaturas();
+  }, [user?.uid, anioActivo?.id]);
 
   useEffect(() => {
     if (!ready) return;
@@ -329,14 +366,16 @@ export default function ReporteAsistencias() {
     return grados.filter((g) => userData?.tutorDe?.includes(g.id));
   }, [grados, userData]);
 
+  // ✅ OPTIMIZACIÓN: gradosDocente desde asignaturasDocente (no desde asistencias)
   const gradosDocente = useMemo(() => {
+    if (!user?.uid) return [];
     const gradosConMaterias = new Set(
-      asistencias
-        .filter((a) => a.registradoPor === user?.uid)
+      asignaturasDocente
+        .filter((a) => a.docenteId === user.uid)
         .map((a) => a.gradoId),
     );
     return grados.filter((g) => gradosConMaterias.has(g.id));
-  }, [grados, asistencias, user?.uid]);
+  }, [grados, asignaturasDocente, user]);
 
   const gradoTutorEfectivo = useMemo(() => {
     if (gradoTutorSel && gradosTutor.some((g) => g.id === gradoTutorSel)) {
@@ -385,7 +424,10 @@ export default function ReporteAsistencias() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // ✅ OPTIMIZACIÓN: query de asistencias FILTRADA por grado efectivo
   useEffect(() => {
+    const gradoEfectivo =
+      vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
     let isMounted = true;
     let fechasAFiltrar: string[] = [];
 
@@ -403,7 +445,11 @@ export default function ReporteAsistencias() {
       }
     }
 
-    if (fechasAFiltrar.length === 0) {
+    if (!gradoEfectivo || fechasAFiltrar.length === 0) {
+      const limpiar = async () => {
+        if (isMounted) setAsistencias([]);
+      };
+      limpiar();
       return;
     }
 
@@ -425,8 +471,10 @@ export default function ReporteAsistencias() {
     };
 
     if (fechasAFiltrar.length <= 30) {
+      // ✅ AGREGADO: where("gradoId", "==", gradoEfectivo)
       const q = query(
         collection(db, "asistencias"),
+        where("gradoId", "==", gradoEfectivo),
         where("fecha", "in", fechasAFiltrar),
       );
 
@@ -445,8 +493,10 @@ export default function ReporteAsistencias() {
       const todas: AsistenciaData[] = [];
       for (let i = 0; i < fechasAFiltrar.length; i += 30) {
         const chunk = fechasAFiltrar.slice(i, i + 30);
+        // ✅ AGREGADO: where("gradoId", "==", gradoEfectivo)
         const q = query(
           collection(db, "asistencias"),
+          where("gradoId", "==", gradoEfectivo),
           where("fecha", "in", chunk),
         );
         const snap = await getDocs(q);
@@ -466,6 +516,9 @@ export default function ReporteAsistencias() {
     anioActual,
     periodoSeleccionado,
     periodos,
+    vistaEfectiva,
+    gradoTutorEfectivo,
+    gradoDocenteEfectivo,
   ]);
 
   const cambiarSemana = (offset: number) => {
@@ -676,7 +729,7 @@ export default function ReporteAsistencias() {
       (a) =>
         a.gradoId === gradoDocenteEfectivo && a.registradoPor === user?.uid,
     );
-  }, [asistencias, gradoDocenteEfectivo, user?.uid]);
+  }, [asistencias, gradoDocenteEfectivo, user]);
 
   const materiasDocenteGrado = useMemo(() => {
     const ambitosIds = new Set(
@@ -790,7 +843,6 @@ export default function ReporteAsistencias() {
     });
   };
 
-  // ✅ Agrega texto al textarea de un DÍA específico
   const agregarTextoDia = (fecha: string, texto: string) => {
     setNotasPorDia((prev) => {
       const actual = (prev[fecha] || "").trim();
@@ -873,8 +925,6 @@ export default function ReporteAsistencias() {
     }
   }
 
-  // ==================== ACTA DE COMPROMISO (FUGAS) — AGRUPADA POR DÍA ====================
-
   const registrosFugas = useMemo(() => {
     if (!estudianteActaId) return [] as RegistroFuga[];
     const regs = matrizTutor[estudianteActaId] || {};
@@ -900,7 +950,6 @@ export default function ReporteAsistencias() {
     return lista.sort((a, b) => a.fecha.localeCompare(b.fecha));
   }, [estudianteActaId, matrizTutor, materiasGradoTutor]);
 
-  // ✅ Agrupa las fugas PENDIENTES por DÍA: cada día = una sola caja = una sola acta
   const gruposPendientes = useMemo(() => {
     const map = new Map<
       string,
@@ -923,7 +972,6 @@ export default function ReporteAsistencias() {
     );
   }, [registrosFugas]);
 
-  // ✅ Número de acta por día: base + índice del día entre los pendientes
   const numeroParaDia = (fecha: string): number => {
     const idx = gruposPendientes.findIndex((g) => g.fecha === fecha);
     return siguienteNumeroActa(estudianteActaId || "") + (idx === -1 ? 0 : idx);
@@ -953,7 +1001,6 @@ export default function ReporteAsistencias() {
     });
   };
 
-  // ✅ Guarda UNA acta por día seleccionado, cubriendo todas sus fugas
   async function guardarActaCompromiso() {
     if (!estudianteActaId) return;
 
@@ -2322,7 +2369,6 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
-      {/* ==================== MODAL JUSTIFICAR (solo I) CON CHIPS ==================== */}
       {showJustificarModal && estudianteJustificar && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -2525,7 +2571,6 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
-      {/* ==================== MODAL ACTA: AGRUPADA POR DÍA ==================== */}
       {showActaModal && estudianteActa && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -2584,7 +2629,6 @@ export default function ReporteAsistencias() {
               </div>
             ) : (
               <>
-                {/* ✅ ACTAS YA REGISTRADAS: SOLO LECTURA (una caja por día) */}
                 {fugasRegistradas.length > 0 && (
                   <div className="mb-4">
                     <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -2593,7 +2637,6 @@ export default function ReporteAsistencias() {
                     </label>
                     <div className="space-y-2">
                       {(() => {
-                        // Agrupar por día para mostrar una sola caja por día
                         const map = new Map<string, RegistroFuga[]>();
                         fugasRegistradas.forEach((f) => {
                           const arr = map.get(f.fecha) || [];
@@ -2658,7 +2701,6 @@ export default function ReporteAsistencias() {
                   </div>
                 )}
 
-                {/* ✅ UNA CAJA POR DÍA PENDIENTE: todas las materias del día en una sola acta */}
                 {gruposPendientes.length > 0 ? (
                   <div className="mb-4 space-y-3">
                     <label className="block text-sm font-semibold text-slate-700">
