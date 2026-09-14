@@ -94,7 +94,7 @@ type RegistroFuga = {
 const MOTIVOS_JUSTIFICACION = [
   { label: "Enfermedad", icon: "🤒" },
   { label: "Cita médica", icon: "🏥" },
-  { label: "Problemas familiares", icon: "👨‍👩‍👧" },
+  { label: "Problemas familiares", icon: "👨‍👩‍" },
   { label: "Calamidad doméstica", icon: "🏠" },
   { label: "Fallecimiento familiar", icon: "🕯️" },
   { label: "Trámite personal", icon: "📋" },
@@ -284,7 +284,6 @@ export default function ReporteAsistencias() {
 
   const [vistaActiva, setVistaActiva] = useState<"tutor" | "docente">("tutor");
   const [gradoTutorSel, setGradoTutorSel] = useState<string>("");
-  const [gradoDocenteSel, setGradoDocenteSel] = useState<string>("");
 
   const [showJustificarModal, setShowJustificarModal] = useState(false);
   const [estudianteJustificarId, setEstudianteJustificarId] = useState<
@@ -354,16 +353,6 @@ export default function ReporteAsistencias() {
     return gradosTutor[0]?.id || "";
   }, [gradoTutorSel, gradosTutor]);
 
-  const gradoDocenteEfectivo = useMemo(() => {
-    if (
-      gradoDocenteSel &&
-      gradosDocente.some((g) => g.id === gradoDocenteSel)
-    ) {
-      return gradoDocenteSel;
-    }
-    return gradosDocente[0]?.id || "";
-  }, [gradoDocenteSel, gradosDocente]);
-
   const vistaEfectiva = useMemo<"tutor" | "docente">(() => {
     if (vistaActiva === "tutor" && !esTutor) return "docente";
     if (vistaActiva === "docente" && gradosDocente.length === 0 && esTutor)
@@ -430,7 +419,9 @@ export default function ReporteAsistencias() {
           );
           const snap = await getDocs(q);
           todos.push(
-            ...snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
+            ...snap.docs.map(
+              (d) => ({ id: d.id, ...d.data() }) as Estudiante,
+            ),
           );
         }
 
@@ -453,7 +444,7 @@ export default function ReporteAsistencias() {
 
   useEffect(() => {
     const gradoEfectivo =
-      vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
+      vistaEfectiva === "tutor" ? gradoTutorEfectivo : "";
 
     let isMounted = true;
     let fechasAFiltrar: string[] = [];
@@ -473,6 +464,71 @@ export default function ReporteAsistencias() {
     }
 
     const fetchAsistencias = async () => {
+      // ✅ Para vista docente, cargar asistencias de TODOS los grados del docente
+      if (vistaEfectiva === "docente") {
+        if (gradosDocente.length === 0 || fechasAFiltrar.length === 0) {
+          if (isMounted) setAsistencias([]);
+          return;
+        }
+
+        const cacheKey = `${tipoReporte}|docente|${gradosDocente.map((g) => g.id).sort().join(",")}|${fechasAFiltrar.join(",")}`;
+
+        if (cacheAsistencias.current.has(cacheKey)) {
+          if (isMounted) setAsistencias(cacheAsistencias.current.get(cacheKey)!);
+          return;
+        }
+
+        const normalizarDocs = (
+          docs: { id: string; data: () => Record<string, unknown> }[],
+        ): AsistenciaData[] => {
+          return docs.map((d) => {
+            const raw = d.data();
+            const estadoNormalizado = normalizarEstado(
+              raw.estado as string | undefined,
+              raw.v2 as boolean | undefined,
+            );
+            return {
+              ...(raw as Record<string, unknown>),
+              id: d.id,
+              estado: estadoNormalizado || (raw.estado as string),
+            } as AsistenciaData;
+          });
+        };
+
+        const todas: AsistenciaData[] = [];
+
+        // Cargar asistencias de todos los grados del docente
+        for (const grado of gradosDocente) {
+          if (fechasAFiltrar.length <= 30) {
+            const q = query(
+              collection(db, "asistencias"),
+              where("gradoId", "==", grado.id),
+              where("fecha", "in", fechasAFiltrar),
+            );
+            const snap = await getDocs(q);
+            todas.push(...normalizarDocs(snap.docs));
+          } else {
+            for (let i = 0; i < fechasAFiltrar.length; i += 30) {
+              const chunk = fechasAFiltrar.slice(i, i + 30);
+              const q = query(
+                collection(db, "asistencias"),
+                where("gradoId", "==", grado.id),
+                where("fecha", "in", chunk),
+              );
+              const snap = await getDocs(q);
+              todas.push(...normalizarDocs(snap.docs));
+            }
+          }
+        }
+
+        if (isMounted) {
+          cacheAsistencias.current.set(cacheKey, todas);
+          setAsistencias(todas);
+        }
+        return;
+      }
+
+      // Vista tutor: cargar solo del grado efectivo
       if (!gradoEfectivo || fechasAFiltrar.length === 0) {
         if (isMounted) setAsistencias([]);
         return;
@@ -544,7 +600,7 @@ export default function ReporteAsistencias() {
     periodos,
     vistaEfectiva,
     gradoTutorEfectivo,
-    gradoDocenteEfectivo,
+    gradosDocente,
   ]);
 
   const cambiarSemana = (offset: number) => {
@@ -576,31 +632,54 @@ export default function ReporteAsistencias() {
   };
 
   const refrescarVista = () => {
-    const gradoEfectivo =
-      vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
+    if (vistaEfectiva === "tutor") {
+      const gradoEfectivo = gradoTutorEfectivo;
 
-    if (!gradoEfectivo) return;
+      if (!gradoEfectivo) return;
 
-    let fechasAFiltrar: string[] = [];
+      let fechasAFiltrar: string[] = [];
 
-    if (tipoReporte === "semanal") {
-      fechasAFiltrar = generarDiasSemana(semanaActual).map(formatFechaISO);
-    } else if (tipoReporte === "mensual") {
-      fechasAFiltrar = getDiasDelMes(anioActual, mesActual).map(formatFechaISO);
-    } else if (tipoReporte === "trimestral" && periodoSeleccionado) {
-      const periodo = periodos.find((p) => p.id === periodoSeleccionado);
-      if (periodo) {
-        fechasAFiltrar = getDiasDelPeriodo(
-          periodo.fechaInicio,
-          periodo.fechaFin,
-        ).map(formatFechaISO);
+      if (tipoReporte === "semanal") {
+        fechasAFiltrar = generarDiasSemana(semanaActual).map(formatFechaISO);
+      } else if (tipoReporte === "mensual") {
+        fechasAFiltrar = getDiasDelMes(anioActual, mesActual).map(formatFechaISO);
+      } else if (tipoReporte === "trimestral" && periodoSeleccionado) {
+        const periodo = periodos.find((p) => p.id === periodoSeleccionado);
+        if (periodo) {
+          fechasAFiltrar = getDiasDelPeriodo(
+            periodo.fechaInicio,
+            periodo.fechaFin,
+          ).map(formatFechaISO);
+        }
       }
+
+      if (fechasAFiltrar.length === 0) return;
+
+      const cacheKey = `${tipoReporte}|${gradoEfectivo}|${fechasAFiltrar.join(",")}`;
+      cacheAsistencias.current.delete(cacheKey);
+    } else {
+      // Vista docente: limpiar cache de todos los grados
+      let fechasAFiltrar: string[] = [];
+
+      if (tipoReporte === "semanal") {
+        fechasAFiltrar = generarDiasSemana(semanaActual).map(formatFechaISO);
+      } else if (tipoReporte === "mensual") {
+        fechasAFiltrar = getDiasDelMes(anioActual, mesActual).map(formatFechaISO);
+      } else if (tipoReporte === "trimestral" && periodoSeleccionado) {
+        const periodo = periodos.find((p) => p.id === periodoSeleccionado);
+        if (periodo) {
+          fechasAFiltrar = getDiasDelPeriodo(
+            periodo.fechaInicio,
+            periodo.fechaFin,
+          ).map(formatFechaISO);
+        }
+      }
+
+      if (fechasAFiltrar.length === 0) return;
+
+      const cacheKey = `${tipoReporte}|docente|${gradosDocente.map((g) => g.id).sort().join(",")}|${fechasAFiltrar.join(",")}`;
+      cacheAsistencias.current.delete(cacheKey);
     }
-
-    if (fechasAFiltrar.length === 0) return;
-
-    const cacheKey = `${tipoReporte}|${gradoEfectivo}|${fechasAFiltrar.join(",")}`;
-    cacheAsistencias.current.delete(cacheKey);
 
     setAsistencias([]);
 
@@ -787,47 +866,52 @@ export default function ReporteAsistencias() {
     [user, userData],
   );
 
-  const asistenciasDocente = useMemo(() => {
-    return asistencias.filter(
-      (a) =>
-        a.gradoId === gradoDocenteEfectivo && a.registradoPor === user?.uid,
-    );
-  }, [asistencias, gradoDocenteEfectivo, user]);
+  // ✅ Vista docente: datos consolidados por grado
+  const datosDocenteConsolidado = useMemo(() => {
+    return gradosDocente.map((grado) => {
+      const asistenciasGrado = asistencias.filter(
+        (a) => a.gradoId === grado.id && a.registradoPor === user?.uid,
+      );
 
-  const materiasDocenteGrado = useMemo(() => {
-    const ambitosIds = new Set(
-      asistenciasDocente
-        .filter((a) => a.ambitoId)
-        .map((a) => a.ambitoId as string),
-    );
-    return Array.from(ambitosIds).map((id) => {
-      const ambito = ambitos.find((a: Ambito) => a.id === id);
-      const destreza = destrezas.find((d: Destreza) => d.id === id);
-      return { id, nombre: ambito?.nombre || destreza?.nombre || "Sin nombre" };
-    });
-  }, [asistenciasDocente, ambitos, destrezas]);
+      const ambitosIds = new Set(
+        asistenciasGrado
+          .filter((a) => a.ambitoId)
+          .map((a) => a.ambitoId as string),
+      );
 
-  const matrizDocente = useMemo(() => {
-    const mapa: Record<
-      string,
-      Record<
+      const materias = Array.from(ambitosIds).map((id) => {
+        const ambito = ambitos.find((a: Ambito) => a.id === id);
+        const destreza = destrezas.find((d: Destreza) => d.id === id);
+        return { id, nombre: ambito?.nombre || destreza?.nombre || "Sin nombre" };
+      });
+
+      const matriz: Record<
         string,
-        { P: number; A: number; I: number; F: number; J: number; total: number }
-      >
-    > = {};
-    asistenciasDocente.forEach((a) => {
-      const estado = a.estado as EstadoAsistencia;
-      if (!estadoConfig(estado)) return;
-      const materiaId = a.ambitoId || "sin_materia";
-      if (!mapa[materiaId]) mapa[materiaId] = {};
-      if (!mapa[materiaId][a.fecha]) {
-        mapa[materiaId][a.fecha] = { P: 0, A: 0, I: 0, F: 0, J: 0, total: 0 };
-      }
-      (mapa[materiaId][a.fecha] as Record<string, number>)[estado]++;
-      mapa[materiaId][a.fecha].total++;
+        Record<
+          string,
+          { P: number; A: number; I: number; F: number; J: number; total: number }
+        >
+      > = {};
+
+      asistenciasGrado.forEach((a) => {
+        const estado = a.estado as EstadoAsistencia;
+        if (!estadoConfig(estado)) return;
+        const materiaId = a.ambitoId || "sin_materia";
+        if (!matriz[materiaId]) matriz[materiaId] = {};
+        if (!matriz[materiaId][a.fecha]) {
+          matriz[materiaId][a.fecha] = { P: 0, A: 0, I: 0, F: 0, J: 0, total: 0 };
+        }
+        (matriz[materiaId][a.fecha] as Record<string, number>)[estado]++;
+        matriz[materiaId][a.fecha].total++;
+      });
+
+      return {
+        grado,
+        materias,
+        matriz,
+      };
     });
-    return mapa;
-  }, [asistenciasDocente]);
+  }, [gradosDocente, asistencias, user?.uid, ambitos, destrezas]);
 
   const renderCeldaEstado = (
     estado?: EstadoAsistencia,
@@ -863,7 +947,6 @@ export default function ReporteAsistencias() {
   };
 
   const gradoTutorActual = grados.find((g) => g.id === gradoTutorEfectivo);
-  const gradoDocenteActual = grados.find((g) => g.id === gradoDocenteEfectivo);
 
   const abrirModalJustificar = (estudianteId: string) => {
     setEstudianteJustificarId(estudianteId);
@@ -1135,7 +1218,7 @@ export default function ReporteAsistencias() {
 
   const generarHTMLImpresion = (): string => {
     const esVistaTutor = vistaEfectiva === "tutor" && esTutor;
-    const grado = esVistaTutor ? gradoTutorActual : gradoDocenteActual;
+    const grado = esVistaTutor ? gradoTutorActual : null;
     const nombreResponsable =
       userData?.nombreDocumento || user?.displayName || "";
 
@@ -1270,88 +1353,50 @@ export default function ReporteAsistencias() {
           </table>`;
       }
     } else {
-      if (tipoReporte === "semanal") {
-        const encabezados = diasSemana
-          .map(
-            (dia) =>
-              `<th>${nombreDia(dia)}<br/><span class="fecha">${formatFechaCorta(dia)}</span></th>`,
-          )
-          .join("");
+      // ✅ Vista docente consolidada: todas las tablas de grados
+      cuerpoTabla = datosDocenteConsolidado
+        .map(({ grado, materias, matriz }) => {
+          const encabezados = diasSemana
+            .map(
+              (dia) =>
+                `<th>${nombreDia(dia)}<br/><span class="fecha">${formatFechaCorta(dia)}</span></th>`,
+            )
+            .join("");
 
-        const filas = materiasDocenteGrado
-          .map((m) => {
-            const celdas = diasSemana
-              .map((dia) => {
-                const d = matrizDocente[m.id]?.[formatFechaISO(dia)];
-                if (!d || d.total === 0) return `<td class="sin">—</td>`;
-                const partes = [];
-                if (d.P) partes.push(`<span class="st-P">${d.P}P</span>`);
-                if (d.A) partes.push(`<span class="st-A">${d.A}a</span>`);
-                if (d.I) partes.push(`<span class="st-I">${d.I}i</span>`);
-                if (d.F) partes.push(`<span class="st-F">${d.F}f</span>`);
-                if (d.J) partes.push(`<span class="st-J">${d.J}j</span>`);
-                return `<td>${partes.join(" ")}</td>`;
-              })
-              .join("");
-            return `<tr><td class="name">${m.nombre}</td>${celdas}</tr>`;
-          })
-          .join("");
+          const filas = materias
+            .map((m) => {
+              const celdas = diasSemana
+                .map((dia) => {
+                  const d = matriz[m.id]?.[formatFechaISO(dia)];
+                  if (!d || d.total === 0) return `<td class="sin">—</td>`;
+                  const partes = [];
+                  if (d.P) partes.push(`<span class="st-P">${d.P}P</span>`);
+                  if (d.A) partes.push(`<span class="st-A">${d.A}a</span>`);
+                  if (d.I) partes.push(`<span class="st-I">${d.I}i</span>`);
+                  if (d.F) partes.push(`<span class="st-F">${d.F}f</span>`);
+                  if (d.J) partes.push(`<span class="st-J">${d.J}j</span>`);
+                  return `<td>${partes.join(" ")}</td>`;
+                })
+                .join("");
+              return `<tr><td class="name">${m.nombre}</td>${celdas}</tr>`;
+            })
+            .join("");
 
-        cuerpoTabla = `
-          <table class="grid">
-            <thead>
-              <tr>
-                <th class="name">Materia</th>
-                ${encabezados}
-              </tr>
-            </thead>
-            <tbody>${filas}</tbody>
-          </table>`;
-      } else {
-        const filas = materiasDocenteGrado
-          .map((m) => {
-            let P = 0,
-              A = 0,
-              I = 0,
-              F = 0,
-              J = 0,
-              sesiones = 0;
-            Object.values(matrizDocente[m.id] || {}).forEach((d) => {
-              P += d.P;
-              A += d.A;
-              I += d.I;
-              F += d.F;
-              J += d.J;
-              if (d.total > 0) sesiones++;
-            });
-            return `<tr>
-              <td class="name">${m.nombre}</td>
-              <td>${sesiones}</td>
-              <td class="st-P">${P}</td>
-              <td class="st-A">${A}</td>
-              <td class="st-I">${I}</td>
-              <td class="st-F">${F}</td>
-              <td class="st-J">${J}</td>
-            </tr>`;
-          })
-          .join("");
-
-        cuerpoTabla = `
-          <table class="grid">
-            <thead>
-              <tr>
-                <th class="name">Materia</th>
-                <th>Días reg.</th>
-                <th>Pres.</th>
-                <th>Atrasos</th>
-                <th>Inas.</th>
-                <th>Fugas</th>
-                <th>Justif.</th>
-              </tr>
-            </thead>
-            <tbody>${filas}</tbody>
-          </table>`;
-      }
+          return `
+            <div class="grado-section">
+              <h3 class="grado-title">${grado.nombre} - ${grado.paralelo}</h3>
+              <table class="grid">
+                <thead>
+                  <tr>
+                    <th class="name">Materia</th>
+                    ${encabezados}
+                  </tr>
+                </thead>
+                <tbody>${filas}</tbody>
+              </table>
+            </div>`;
+        })
+        .join("");
     }
 
     const rolResponsable = esVistaTutor ? "Tutor(a) del Grado" : "Docente";
@@ -1391,20 +1436,22 @@ export default function ReporteAsistencias() {
   .sig { width: 220px; text-align: center; border-top: 1px solid #1f2937; padding-top: 4px; font-size: 10px; }
   .sig .rol { font-weight: bold; }
   .footer { margin-top: 14px; font-size: 8.5px; color: #6b7280; text-align: right; }
+  .grado-section { margin-bottom: 20px; page-break-inside: avoid; }
+  .grado-title { font-size: 11px; font-weight: bold; margin: 10px 0 5px 0; color: #1f2937; border-bottom: 2px solid #06b6d4; padding-bottom: 3px; }
 </style>
 </head>
 <body>
   <div class="report-header">
     <div class="report-title">${titulo}</div>
-    <div class="report-subtitle">Grado: ${grado ? grado.nombre + " \u201C" + grado.paralelo + "\u201D" : "\u2014"}</div>
+    <div class="report-subtitle">${esVistaTutor && grado ? `Grado: ${grado.nombre} \u201C${grado.paralelo}\u201D` : "Todos los grados asignados"}</div>
     <div class="report-range">${rangoLabel}</div>
   </div>
   <table class="meta">
     <tr>
       <td class="lbl">${esVistaTutor ? "Tutor(a):" : "Docente:"}</td>
       <td>${nombreResponsable || "\u2014"}</td>
-      <td class="lbl" style="text-align:right;">Estudiantes:</td>
-      <td style="text-align:right;">${esVistaTutor ? estudiantesGradoTutor.length : estudiantes.length}</td>
+      <td class="lbl" style="text-align:right;">${esVistaTutor ? "Estudiantes:" : "Grados:"}</td>
+      <td style="text-align:right;">${esVistaTutor ? estudiantesGradoTutor.length : gradosDocente.length}</td>
     </tr>
   </table>
   ${cuerpoTabla}
@@ -1455,7 +1502,7 @@ export default function ReporteAsistencias() {
 
   const generarHTMLDetalle = (): string => {
     const esVistaTutor = vistaEfectiva === "tutor" && esTutor;
-    const grado = esVistaTutor ? gradoTutorActual : gradoDocenteActual;
+    const grado = esVistaTutor ? gradoTutorActual : null;
     const nombreResponsable =
       userData?.nombreDocumento || user?.displayName || "";
 
@@ -1509,22 +1556,6 @@ export default function ReporteAsistencias() {
               actaNumero: reg.actaNumero,
             });
           });
-        });
-      });
-    } else {
-      asistenciasDocente.forEach((a) => {
-        if (a.estado === "P") return;
-        const est = estudiantes.find((e) => e.id === a.estudianteId);
-        filas.push({
-          estudiante: est ? `${est.apellidos} ${est.nombres}` : a.estudianteId,
-          fecha: a.fecha,
-          materia:
-            materiasDocenteGrado.find((m) => m.id === a.ambitoId)?.nombre ||
-            "General",
-          estado: a.estado as EstadoAsistencia,
-          observacion: a.observacion,
-          acta: a.representanteAsistio,
-          actaNumero: a.actaNumero,
         });
       });
     }
@@ -1651,7 +1682,7 @@ export default function ReporteAsistencias() {
 <body>
   <div class="report-header">
     <div class="report-title">REPORTE DETALLADO DE ASISTENCIA</div>
-    <div class="report-subtitle">Grado: ${grado ? grado.nombre + " \u201C" + grado.paralelo + "\u201D" : "\u2014"}</div>
+    <div class="report-subtitle">${esVistaTutor && grado ? `Grado: ${grado.nombre} \u201C${grado.paralelo}\u201D` : "Todos los grados"}</div>
     <div class="report-range">${rangoLabel}</div>
   </div>
   ${tablaResumen}
@@ -1697,7 +1728,7 @@ export default function ReporteAsistencias() {
 
   const puedeImprimir =
     (vistaEfectiva === "tutor" && estudiantesGradoTutor.length > 0) ||
-    (vistaEfectiva === "docente" && materiasDocenteGrado.length > 0);
+    (vistaEfectiva === "docente" && gradosDocente.length > 0);
 
   const toastConfig = {
     success: {
@@ -1802,7 +1833,7 @@ export default function ReporteAsistencias() {
             onClick={handlePrint}
             disabled={!puedeImprimir}
             className="flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-800 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Imprimir reporte en hoja membretada"
+            title="Imprimir reporte"
           >
             <FaPrint className="text-sm" />
             Imprimir
@@ -1810,9 +1841,9 @@ export default function ReporteAsistencias() {
 
           <button
             onClick={handlePrintDetalle}
-            disabled={!puedeImprimir}
+            disabled={!puedeImprimir || vistaEfectiva !== "tutor"}
             className="flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Imprimir listado lineal con detalle por materia (ideal tablet)"
+            title="Imprimir listado lineal con detalle por materia (solo vista tutor)"
           >
             <FaClipboardList className="text-sm" />
             Detalle
@@ -2264,176 +2295,160 @@ export default function ReporteAsistencias() {
             <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
               <FaChalkboardTeacher className="text-yellow-600 text-4xl mx-auto mb-3" />
               <p className="text-yellow-800 font-medium mb-1">
-                No has registrado asistencias en este período
+                No tienes grados asignados
               </p>
               <p className="text-yellow-700 text-sm">
-                Ve al módulo de Calificaciones para tomar asistencia en tus
-                grados
+                Contacta al administrador para que te asigne materias
               </p>
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap gap-2">
-                {gradosDocente.map((g) => (
-                  <button
-                    key={g.id}
-                    onClick={() => setGradoDocenteSel(g.id)}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
-                      gradoDocenteEfectivo === g.id
-                        ? "bg-cyan-600 text-white border-cyan-600"
-                        : "bg-white text-slate-700 border-slate-200 hover:border-cyan-300"
-                    }`}
-                  >
-                    {g.nombre} - {g.paralelo}
-                  </button>
-                ))}
-              </div>
-
-              {materiasDocenteGrado.length === 0 ? (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center">
-                  <FaBook className="text-slate-400 text-4xl mx-auto mb-3" />
-                  <p className="text-slate-700 font-medium mb-1">
-                    No has registrado asistencias en este grado en este período
-                  </p>
-                  <p className="text-slate-600 text-sm">
-                    Selecciona otro grado o registra asistencia en
-                    Calificaciones
-                  </p>
-                </div>
-              ) : (
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                  <div className="bg-linear-to-r from-cyan-600 to-cyan-700 px-5 py-4">
-                    <div className="flex items-center gap-3">
-                      <FaChalkboardTeacher className="text-white text-xl" />
-                      <div>
-                        <h3 className="text-white font-semibold">
-                          Mis Registros en {gradoDocenteActual?.nombre} -{" "}
-                          {gradoDocenteActual?.paralelo}
-                        </h3>
-                        <p className="text-white/80 text-xs">
-                          {materiasDocenteGrado.length} materia(s) con
-                          asistencia registrada por ti
-                        </p>
-                      </div>
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <div className="bg-linear-to-r from-cyan-600 to-cyan-700 px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <FaChalkboardTeacher className="text-white text-xl" />
+                    <div>
+                      <h3 className="text-white font-semibold">
+                        Mis Registros - Todos los grados
+                      </h3>
+                      <p className="text-white/80 text-xs">
+                        {gradosDocente.length} grado(s) asignado(s)
+                      </p>
                     </div>
                   </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                          <th className="text-left px-4 py-3 font-semibold text-slate-700 min-w-50">
-                            Materia
-                          </th>
-                          {diasVisibles.map((dia, i) => {
-                            const esHoy = formatFechaISO(dia) === hoyISO;
-                            return (
-                              <th
-                                key={i}
-                                className={`text-center px-2 py-3 font-semibold min-w-27.5 ${
-                                  esHoy
-                                    ? "bg-blue-50 text-blue-700"
-                                    : "text-slate-700"
-                                }`}
-                              >
-                                <div>{nombreDia(dia)}</div>
-                                <div
-                                  className={`text-xs font-normal ${esHoy ? "text-blue-600" : "text-slate-500"}`}
-                                >
-                                  {formatFechaCorta(dia)}
-                                </div>
-                              </th>
-                            );
-                          })}
-                          {diasAMostrar.length > diasVisibles.length && (
-                            <th className="text-center px-2 py-3 font-semibold text-slate-500 text-xs">
-                              +{diasAMostrar.length - diasVisibles.length} días
-                            </th>
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {materiasDocenteGrado.map((materia) => (
-                          <tr
-                            key={materia.id}
-                            className="border-b border-slate-100 hover:bg-slate-50"
-                          >
-                            <td className="px-4 py-3">
-                              <div className="font-semibold text-slate-900 text-sm">
-                                {materia.nombre}
-                              </div>
-                            </td>
-                            {diasVisibles.map((dia, i) => {
-                              const fechaISO = formatFechaISO(dia);
-                              const datos =
-                                matrizDocente[materia.id]?.[fechaISO];
-                              if (!datos || datos.total === 0) {
-                                return (
-                                  <td
-                                    key={i}
-                                    className="px-2 py-3 text-center text-slate-300 text-xs"
-                                  >
-                                    —
-                                  </td>
-                                );
-                              }
-                              return (
-                                <td key={i} className="px-2 py-3">
-                                  <div className="flex flex-wrap justify-center gap-1">
-                                    {datos.P > 0 && (
-                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs font-bold">
-                                        <FaCheckCircle className="text-[9px]" />
-                                        {datos.P}
-                                      </span>
-                                    )}
-                                    {datos.A > 0 && (
-                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-bold">
-                                        <FaClock className="text-[9px]" />
-                                        {datos.A}
-                                      </span>
-                                    )}
-                                    {datos.I > 0 && (
-                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs font-bold">
-                                        <FaUserTimes className="text-[9px]" />
-                                        {datos.I}
-                                      </span>
-                                    )}
-                                    {datos.F > 0 && (
-                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold">
-                                        <FaSignOutAlt className="text-[9px]" />
-                                        {datos.F}
-                                      </span>
-                                    )}
-                                    {datos.J > 0 && (
-                                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-bold">
-                                        <FaUserCheck className="text-[9px]" />
-                                        {datos.J}
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                              );
-                            })}
-                            {diasAMostrar.length > diasVisibles.length && (
-                              <td className="px-2 py-3 text-center text-slate-400 text-xs">
-                                ...
-                              </td>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
-                    <FaInfoCircle className="inline mr-1" />
-                    Los números muestran cuántos estudiantes tuvieron cada
-                    estado en esa materia y día.{" "}
-                    {tipoReporte !== "semanal" &&
-                      `Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length} días hábiles en total.`}
-                  </div>
                 </div>
-              )}
+
+                <div className="p-4 space-y-6">
+                  {datosDocenteConsolidado.map(({ grado, materias, matriz }) => (
+                    <div key={grado.id} className="border-b border-slate-200 pb-6 last:border-b-0">
+                      <h4 className="text-lg font-semibold text-slate-900 mb-3 flex items-center gap-2">
+                        <FaBook className="text-cyan-600" />
+                        {grado.nombre} - {grado.paralelo}
+                      </h4>
+                      {materias.length === 0 ? (
+                        <p className="text-slate-500 text-sm italic">
+                          Sin registros de asistencia en este grado
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-slate-50 border-b border-slate-200">
+                              <tr>
+                                <th className="text-left px-4 py-3 font-semibold text-slate-700 min-w-50">
+                                  Materia
+                                </th>
+                                {diasVisibles.map((dia, i) => {
+                                  const esHoy = formatFechaISO(dia) === hoyISO;
+                                  return (
+                                    <th
+                                      key={i}
+                                      className={`text-center px-2 py-3 font-semibold min-w-27.5 ${
+                                        esHoy
+                                          ? "bg-blue-50 text-blue-700"
+                                          : "text-slate-700"
+                                      }`}
+                                    >
+                                      <div>{nombreDia(dia)}</div>
+                                      <div
+                                        className={`text-xs font-normal ${esHoy ? "text-blue-600" : "text-slate-500"}`}
+                                      >
+                                        {formatFechaCorta(dia)}
+                                      </div>
+                                    </th>
+                                  );
+                                })}
+                                {diasAMostrar.length > diasVisibles.length && (
+                                  <th className="text-center px-2 py-3 font-semibold text-slate-500 text-xs">
+                                    +{diasAMostrar.length - diasVisibles.length} días
+                                  </th>
+                                )}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {materias.map((materia) => (
+                                <tr
+                                  key={materia.id}
+                                  className="border-b border-slate-100 hover:bg-slate-50"
+                                >
+                                  <td className="px-4 py-3">
+                                    <div className="font-semibold text-slate-900 text-sm">
+                                      {materia.nombre}
+                                    </div>
+                                  </td>
+                                  {diasVisibles.map((dia, i) => {
+                                    const fechaISO = formatFechaISO(dia);
+                                    const datos =
+                                      matriz[materia.id]?.[fechaISO];
+                                    if (!datos || datos.total === 0) {
+                                      return (
+                                        <td
+                                          key={i}
+                                          className="px-2 py-3 text-center text-slate-300 text-xs"
+                                        >
+                                          —
+                                        </td>
+                                      );
+                                    }
+                                    return (
+                                      <td key={i} className="px-2 py-3">
+                                        <div className="flex flex-wrap justify-center gap-1">
+                                          {datos.P > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs font-bold">
+                                              <FaCheckCircle className="text-[9px]" />
+                                              {datos.P}
+                                            </span>
+                                          )}
+                                          {datos.A > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-xs font-bold">
+                                              <FaClock className="text-[9px]" />
+                                              {datos.A}
+                                            </span>
+                                          )}
+                                          {datos.I > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-xs font-bold">
+                                              <FaUserTimes className="text-[9px]" />
+                                              {datos.I}
+                                            </span>
+                                          )}
+                                          {datos.F > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold">
+                                              <FaSignOutAlt className="text-[9px]" />
+                                              {datos.F}
+                                            </span>
+                                          )}
+                                          {datos.J > 0 && (
+                                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-bold">
+                                              <FaUserCheck className="text-[9px]" />
+                                              {datos.J}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </td>
+                                    );
+                                  })}
+                                  {diasAMostrar.length > diasVisibles.length && (
+                                    <td className="px-2 py-3 text-center text-slate-400 text-xs">
+                                      ...
+                                    </td>
+                                  )}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
+                  <FaInfoCircle className="inline mr-1" />
+                  Los números muestran cuántos estudiantes tuvieron cada
+                  estado en esa materia y día.{" "}
+                  {tipoReporte !== "semanal" &&
+                    `Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length} días hábiles en total.`}
+                </div>
+              </div>
             </>
           )}
         </div>
