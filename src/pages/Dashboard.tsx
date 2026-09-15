@@ -27,24 +27,27 @@ import {
   FaTrophy,
   FaUserShield,
   FaCogs,
-  FaSchool,
   FaUserCog,
   FaChevronDown,
   FaUserGraduate,
   FaChalkboardTeacher,
   FaClipboardCheck,
   FaExclamationTriangle,
+  FaExchangeAlt,
+  FaLock,
 } from "react-icons/fa";
 
 interface InstitutionData {
   nombreInstitucion?: string;
   codigoAmie?: string;
-  nombreRector?: nombreRectorType;
+  nombreRector?: string;
   logo?: string;
   direccion?: string;
   telefono?: string;
 }
-type nombreRectorType = string;
+
+type ActiveRole = "super_admin" | "docente";
+const ACTIVE_ROLE_KEY = "eduX_activeRole";
 
 export default function Dashboard() {
   const { user, userData, logout } = useAuth();
@@ -66,6 +69,62 @@ export default function Dashboard() {
     useState<InstitutionData | null>(null);
   const [loadingInstitution, setLoadingInstitution] = useState(true);
 
+  // ✅ Estado del rol activo: decide qué módulos/stats mostrar
+  const [activeRole, setActiveRole] = useState<ActiveRole | null>(null);
+  const [showRoleDialog, setShowRoleDialog] = useState(false);
+
+  // ¿El usuario es super_admin?
+  const isSuperAdmin = userData?.role === "super_admin";
+  // ¿El usuario tiene capacidades de docente? (grados asignados O es tutor)
+  const hasDocenteCapabilities =
+    (userData?.gradosAsignados && userData.gradosAsignados.length > 0) ||
+    (userData?.tutorDe && userData.tutorDe.length > 0);
+  // ¿Tiene ambos roles? → debe elegir
+  const hasDualRole = isSuperAdmin && hasDocenteCapabilities;
+
+  // ✅ Al cargar, decidir el rol activo
+  useEffect(() => {
+    if (!userData) return;
+
+    // ✅ Envolver en async para evitar setState síncrono en el cuerpo del effect
+    const determinarRol = async () => {
+      // Caso 1: solo docente → forzar docente
+      if (!isSuperAdmin) {
+        setActiveRole("docente");
+        return;
+      }
+
+      // Caso 2: solo super_admin (sin capacidades docente) → forzar admin
+      if (isSuperAdmin && !hasDocenteCapabilities) {
+        setActiveRole("super_admin");
+        return;
+      }
+
+      // Caso 3: ambos roles → revisar localStorage
+      const stored = localStorage.getItem(ACTIVE_ROLE_KEY) as ActiveRole | null;
+      if (stored === "super_admin" || stored === "docente") {
+        setActiveRole(stored);
+      } else {
+        // No hay preferencia → mostrar diálogo
+        setShowRoleDialog(true);
+      }
+    };
+
+    determinarRol();
+  }, [userData, isSuperAdmin, hasDocenteCapabilities]);
+
+  const seleccionarRol = (rol: ActiveRole) => {
+    setActiveRole(rol);
+    localStorage.setItem(ACTIVE_ROLE_KEY, rol);
+    setShowRoleDialog(false);
+  };
+
+  const cambiarRol = () => {
+    setShowDropdown(false);
+    setShowRoleDialog(true);
+    localStorage.removeItem(ACTIVE_ROLE_KEY);
+  };
+
   useEffect(() => {
     const cargarConfiguracion = async () => {
       try {
@@ -86,6 +145,9 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    // ✅ No cargar datos hasta que haya rol activo definido
+    if (!activeRole) return;
+
     const cargarDatos = async () => {
       try {
         const qAnios = query(
@@ -100,10 +162,11 @@ export default function Dashboard() {
 
         if (aniosData.length > 0) {
           const anioActivo = aniosData[0];
-          let qGrados;
+          let qGrados: Query;
 
+          // ✅ Si está como docente, filtrar por sus grados asignados
           if (
-            userData?.role === "docente" &&
+            activeRole === "docente" &&
             userData?.gradosAsignados &&
             userData.gradosAsignados.length > 0
           ) {
@@ -133,7 +196,7 @@ export default function Dashboard() {
     };
 
     cargarDatos();
-  }, [userData?.role, userData?.gradosAsignados]);
+  }, [activeRole, userData?.gradosAsignados]);
 
   const tutorDeAnioActivo = useMemo(() => {
     if (!userData?.tutorDe) return [];
@@ -147,13 +210,14 @@ export default function Dashboard() {
     : user?.displayName || "Usuario";
 
   const cargarStats = useCallback(async () => {
-    try {
-      // ✅ Variable local con tipo garantizado (nunca undefined)
-      const gradosAsignados: string[] = userData?.gradosAsignados ?? [];
-      const esDocenteConAsignados =
-        userData?.role === "docente" && gradosAsignados.length > 0;
+    if (!activeRole) return;
 
-      // ✅ Conteo SIN descargar documentos (1 agregación c/u)
+    try {
+      const gradosAsignados: string[] = userData?.gradosAsignados ?? [];
+      // ✅ Solo usar filtro docente si el rol ACTIVO es docente
+      const usarFiltroDocente =
+        activeRole === "docente" && gradosAsignados.length > 0;
+
       const contar = (q: Query) =>
         getCountFromServer(q).then((s) => s.data().count);
 
@@ -169,7 +233,7 @@ export default function Dashboard() {
         query(collection(db, "aniosLectivos"), where("activo", "==", true)),
       );
 
-      if (esDocenteConAsignados) {
+      if (usarFiltroDocente) {
         gradosCount = await contar(
           query(
             collection(db, "grados"),
@@ -217,7 +281,6 @@ export default function Dashboard() {
         ),
       );
 
-      // ✅ Estudiantes en riesgo: solo calificaciones bajas (acotado), distinct en cliente
       try {
         const set = new Set<string>();
         const snap = await getDocs(
@@ -225,10 +288,7 @@ export default function Dashboard() {
         );
         snap.docs.forEach((d) => {
           const data = d.data();
-          if (
-            !esDocenteConAsignados ||
-            gradosAsignados.includes(data.gradoId)
-          ) {
+          if (!usarFiltroDocente || gradosAsignados.includes(data.gradoId)) {
             set.add(data.estudianteId);
           }
         });
@@ -251,13 +311,14 @@ export default function Dashboard() {
     } catch (error) {
       console.error("Error cargando estadísticas:", error);
     }
-  }, [userData]);
+  }, [userData, activeRole]);
 
   useEffect(() => {
     cargarStats();
   }, [cargarStats]);
 
   const modules = [
+    // ========== MÓDULOS SOLO SUPER_ADMIN ==========
     {
       path: "/configuracion-institucional",
       name: "Configuración Institucional",
@@ -266,7 +327,7 @@ export default function Dashboard() {
       desc: "Datos de la institución y rector/a",
       stats: "Admin",
       badge: "ADMIN",
-      roles: ["super_admin"],
+      roles: ["super_admin"] as ActiveRole[],
     },
     {
       path: "/gestion-usuarios",
@@ -276,7 +337,7 @@ export default function Dashboard() {
       desc: "Administrar usuarios del sistema",
       stats: "Admin",
       badge: "ADMIN",
-      roles: ["super_admin"],
+      roles: ["super_admin"] as ActiveRole[],
     },
     {
       path: "/anios-lectivos",
@@ -286,7 +347,7 @@ export default function Dashboard() {
       desc: "Base del sistema: periodos académicos",
       stats: `${stats.aniosActivos} activo${stats.aniosActivos !== 1 ? "s" : ""}`,
       badge: "BASE",
-      roles: ["super_admin"],
+      roles: ["super_admin"] as ActiveRole[],
     },
     {
       path: "/grados",
@@ -296,7 +357,7 @@ export default function Dashboard() {
       desc: "Niveles educativos y paralelos",
       stats: `${stats.gradosActivos} activo${stats.gradosActivos !== 1 ? "s" : ""}`,
       badge: "NIVEL 2",
-      roles: ["super_admin"],
+      roles: ["super_admin"] as ActiveRole[],
     },
     {
       path: "/ambitos-destrezas",
@@ -306,7 +367,7 @@ export default function Dashboard() {
       desc: "Competencias y destrezas",
       stats: `${stats.ambitos} ámbito${stats.ambitos !== 1 ? "s" : ""}`,
       badge: "NIVEL 3",
-      roles: ["super_admin"],
+      roles: ["super_admin"] as ActiveRole[],
     },
     {
       path: "/matriculas",
@@ -316,47 +377,7 @@ export default function Dashboard() {
       desc: "Revisar y aprobar solicitudes de matrícula",
       stats: `${stats.solicitudesPendientes} pendiente${stats.solicitudesPendientes !== 1 ? "s" : ""}`,
       badge: "ADMIN",
-      roles: ["super_admin"],
-    },
-    {
-      path: "/calificaciones",
-      name: "Registro Asistencia Notas",
-      icon: FaChartBar,
-      color: "from-orange-500 to-orange-600",
-      desc: "Registro de asistencia y notas",
-      stats: `${stats.calificaciones} registro${stats.calificaciones !== 1 ? "s" : ""}`,
-      badge: "DOCENTE",
-      roles: ["super_admin", "docente"],
-    },
-    {
-      path: "/reporte-asistencias",
-      name: "Reporte Asistencias",
-      icon: FaClipboardCheck,
-      color: "from-rose-500 to-rose-600",
-      desc: "Control de asistencia por grado y materia",
-      stats: "Semanal",
-      badge: "TUTOR/DOCENTE",
-      roles: ["super_admin", "docente"],
-    },
-    {
-      path: "/reporte-notas",
-      name: "Reporte Notas",
-      icon: FaExclamationTriangle,
-      color: "from-amber-500 to-amber-600",
-      desc: "Estudiantes con notas menores a 7 en riesgo académico",
-      stats: `${stats.estudiantesEnRiesgo} en riesgo`,
-      badge: "TUTOR/DOCENTE",
-      roles: ["super_admin", "docente"],
-    },
-    {
-      path: "/mi-horario",
-      name: "Mi Horario",
-      icon: FaChalkboardTeacher,
-      color: "from-cyan-500 to-cyan-600",
-      desc: "Configura las materias que dictas en cada grado",
-      stats: "Configurar",
-      badge: "DOCENTE",
-      roles: ["super_admin", "docente"],
+      roles: ["super_admin"] as ActiveRole[],
     },
     {
       path: "/estudiantes",
@@ -366,18 +387,157 @@ export default function Dashboard() {
       desc: "Matrícula de alumnos",
       stats: `${stats.estudiantesActivos} activo${stats.estudiantesActivos !== 1 ? "s" : ""}`,
       badge: "TUTOR",
-      roles: ["super_admin", "docente"],
+      roles: ["super_admin", "docente"] as ActiveRole[],
+    },
+    // ========== MÓDULOS SOLO DOCENTE ==========
+    {
+      path: "/calificaciones",
+      name: "Registro Asistencia Notas",
+      icon: FaChartBar,
+      color: "from-orange-500 to-orange-600",
+      desc: "Registro de asistencia y notas",
+      stats: `${stats.calificaciones} registro${stats.calificaciones !== 1 ? "s" : ""}`,
+      badge: "DOCENTE",
+      roles: ["docente"] as ActiveRole[],
+    },
+    {
+      path: "/reporte-asistencias",
+      name: "Reporte Asistencias",
+      icon: FaClipboardCheck,
+      color: "from-rose-500 to-rose-600",
+      desc: "Control de asistencia por grado y materia",
+      stats: "Semanal",
+      badge: "TUTOR/DOCENTE",
+      roles: ["docente"] as ActiveRole[],
+    },
+    {
+      path: "/reporte-notas",
+      name: "Reporte Notas",
+      icon: FaExclamationTriangle,
+      color: "from-amber-500 to-amber-600",
+      desc: "Estudiantes con notas menores a 7 en riesgo académico",
+      stats: `${stats.estudiantesEnRiesgo} en riesgo`,
+      badge: "TUTOR/DOCENTE",
+      roles: ["docente"] as ActiveRole[],
+    },
+    {
+      path: "/mi-horario",
+      name: "Mi Horario",
+      icon: FaChalkboardTeacher,
+      color: "from-cyan-500 to-cyan-600",
+      desc: "Configura las materias que dictas en cada grado",
+      stats: "Configurar",
+      badge: "DOCENTE",
+      roles: ["docente"] as ActiveRole[],
     },
   ];
 
-  const userRole = userData?.role || "docente";
-  const filteredModules = modules.filter((mod) => mod.roles.includes(userRole));
+  // ✅ Filtrar módulos por rol ACTIVO (permite que algunos aparezcan en ambos)
+  const filteredModules = modules.filter(
+    (mod) => activeRole && mod.roles.includes(activeRole),
+  );
 
   const esTutor = tutorDeAnioActivo.length > 0;
 
+  // ✅ Pantalla de carga mientras se decide el rol
+  if (activeRole === null) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mx-auto mb-4"></div>
+          <p className="text-slate-600 font-medium">Cargando...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex flex-col">
-      {/* Header — solo el logo */}
+      {/* ==================== MODAL SELECTOR DE ROL ==================== */}
+      {showRoleDialog && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-200 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-linear-to-r from-blue-600 to-purple-600 px-6 py-5 text-white">
+              <div className="flex items-center gap-3">
+                <div className="bg-white/20 p-2.5 rounded-xl">
+                  <FaExchangeAlt className="text-xl" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold">Selecciona tu rol</h3>
+                  <p className="text-white/80 text-sm mt-0.5">
+                    ¿Cómo deseas trabajar en esta sesión?
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-3">
+              <p className="text-sm text-slate-600 mb-4">
+                Tienes permisos de <strong>Administrador</strong> y de{" "}
+                <strong>Docente</strong>. Puedes cambiar de rol en cualquier
+                momento desde el menú superior.
+              </p>
+
+              <button
+                onClick={() => seleccionarRol("super_admin")}
+                className="w-full p-4 border-2 border-slate-200 hover:border-red-400 hover:bg-red-50/50 rounded-xl transition-all group text-left flex items-center gap-4"
+              >
+                <div className="bg-linear-to-br from-red-500 to-red-600 p-3 rounded-xl text-white shadow-md group-hover:scale-110 transition-transform">
+                  <FaUserShield className="text-2xl" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="font-bold text-slate-900">Super Admin</h4>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-700">
+                      ADMINISTRACIÓN
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Configuración institucional, gestión de usuarios, años
+                    lectivos, grados, ámbitos y matrículas.
+                  </p>
+                </div>
+              </button>
+
+              <button
+                onClick={() => seleccionarRol("docente")}
+                className="w-full p-4 border-2 border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 rounded-xl transition-all group text-left flex items-center gap-4"
+              >
+                <div className="bg-linear-to-br from-blue-500 to-purple-600 p-3 rounded-xl text-white shadow-md group-hover:scale-110 transition-transform">
+                  <FaChalkboardTeacher className="text-2xl" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="font-bold text-slate-900">Docente</h4>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                      AULA
+                    </span>
+                    {esTutor && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                        TUTOR
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Registro de asistencia, calificaciones, reportes y horario
+                    docente de tus grados asignados.
+                  </p>
+                </div>
+              </button>
+            </div>
+
+            <div className="px-6 py-3 bg-slate-50 border-t border-slate-200">
+              <p className="text-xs text-slate-500 text-center">
+                <FaLock className="inline text-[9px] mr-1" />
+                Tu elección se guarda localmente. Puedes cambiarla en cualquier
+                momento.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <header className="bg-white shadow-lg border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
@@ -395,129 +555,179 @@ export default function Dashboard() {
               )}
             </div>
 
-            <div className="relative">
-              <button
-                onClick={() => setShowDropdown(!showDropdown)}
-                className="flex items-center gap-3 bg-slate-50 hover:bg-slate-100 px-3 py-2 rounded-xl border border-slate-200 transition-all"
-              >
-                <div className="text-right hidden sm:block">
-                  <p className="text-sm font-semibold text-slate-800 max-w-45 truncate">
-                    {nombreUsuario}
-                  </p>
-                  <p className="text-xs text-slate-500 max-w-45 truncate">
-                    {user?.email}
-                  </p>
-                </div>
-                <img
-                  src={user?.photoURL || "https://via.placeholder.com/150"}
-                  alt="avatar"
-                  className="w-12 h-12 rounded-full border-2 border-blue-500 shadow-md"
-                />
-                <FaChevronDown
-                  className={`text-slate-400 text-xs transition-transform ${showDropdown ? "rotate-180" : ""}`}
-                />
-              </button>
-              {showDropdown && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowDropdown(false)}
+            <div className="flex items-center gap-2">
+              {/* ✅ Badge de rol activo (visible + clickeable si tiene dual role) */}
+              {hasDualRole ? (
+                <button
+                  onClick={cambiarRol}
+                  className={`hidden sm:flex items-center gap-2 px-3 py-2 rounded-xl border-2 transition-all font-semibold text-xs hover:shadow-md ${
+                    activeRole === "super_admin"
+                      ? "bg-red-50 border-red-300 text-red-700 hover:bg-red-100"
+                      : "bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100"
+                  }`}
+                  title="Clic para cambiar de rol"
+                >
+                  {activeRole === "super_admin" ? (
+                    <FaUserShield className="text-sm" />
+                  ) : (
+                    <FaChalkboardTeacher className="text-sm" />
+                  )}
+                  <span>
+                    {activeRole === "super_admin" ? "Super Admin" : "Docente"}
+                    {activeRole === "docente" && esTutor ? " · Tutor" : ""}
+                  </span>
+                  <FaExchangeAlt className="text-[10px] opacity-60" />
+                </button>
+              ) : (
+                <span
+                  className={`hidden sm:flex items-center gap-2 px-3 py-2 rounded-xl border-2 font-semibold text-xs ${
+                    activeRole === "super_admin"
+                      ? "bg-red-50 border-red-200 text-red-700"
+                      : "bg-blue-50 border-blue-200 text-blue-700"
+                  }`}
+                >
+                  {activeRole === "super_admin" ? (
+                    <FaUserShield className="text-sm" />
+                  ) : (
+                    <FaChalkboardTeacher className="text-sm" />
+                  )}
+                  <span>
+                    {activeRole === "super_admin" ? "Super Admin" : "Docente"}
+                  </span>
+                </span>
+              )}
+
+              <div className="relative">
+                <button
+                  onClick={() => setShowDropdown(!showDropdown)}
+                  className="flex items-center gap-3 bg-slate-50 hover:bg-slate-100 px-3 py-2 rounded-xl border border-slate-200 transition-all"
+                >
+                  <div className="text-right hidden sm:block">
+                    <p className="text-sm font-semibold text-slate-800 max-w-45 truncate">
+                      {nombreUsuario}
+                    </p>
+                    <p className="text-xs text-slate-500 max-w-45 truncate">
+                      {user?.email}
+                    </p>
+                  </div>
+                  <img
+                    src={user?.photoURL || "https://via.placeholder.com/150"}
+                    alt="avatar"
+                    className="w-12 h-12 rounded-full border-2 border-blue-500 shadow-md"
                   />
-                  <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50">
-                    <div className="px-4 py-3 border-b border-slate-100">
-                      <div className="flex items-center gap-3">
-                        <img
-                          src={
-                            user?.photoURL || "https://via.placeholder.com/150"
-                          }
-                          alt="avatar"
-                          className="w-14 h-14 rounded-full border-2 border-blue-500"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="font-semibold text-slate-900 text-sm truncate">
-                            {nombreUsuario}
-                          </p>
-                          <p className="text-xs text-slate-500 truncate">
-                            {user?.email}
-                          </p>
-                          <div className="flex gap-1 mt-1 flex-wrap">
-                            <span className="inline-block px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
-                              {userData?.role === "super_admin"
-                                ? "Super Admin"
-                                : "Docente"}
-                            </span>
-                            {esTutor && (
-                              <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
-                                Tutor
+                  <FaChevronDown
+                    className={`text-slate-400 text-xs transition-transform ${showDropdown ? "rotate-180" : ""}`}
+                  />
+                </button>
+                {showDropdown && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setShowDropdown(false)}
+                    />
+                    <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50">
+                      <div className="px-4 py-3 border-b border-slate-100">
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={
+                              user?.photoURL ||
+                              "https://via.placeholder.com/150"
+                            }
+                            alt="avatar"
+                            className="w-14 h-14 rounded-full border-2 border-blue-500"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-semibold text-slate-900 text-sm truncate">
+                              {nombreUsuario}
+                            </p>
+                            <p className="text-xs text-slate-500 truncate">
+                              {user?.email}
+                            </p>
+                            <div className="flex gap-1 mt-1 flex-wrap">
+                              <span
+                                className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                                  activeRole === "super_admin"
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-blue-100 text-blue-700"
+                                }`}
+                              >
+                                {activeRole === "super_admin"
+                                  ? "Super Admin"
+                                  : "Docente"}
                               </span>
-                            )}
+                              {activeRole === "docente" && esTutor && (
+                                <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
+                                  Tutor
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="py-1">
-                      <button
-                        onClick={() => {
-                          setShowDropdown(false);
-                          navigate("/configuracion");
-                        }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
-                          <FaUserCog className="text-sm" />
-                        </div>
-                        <div className="text-left flex-1">
-                          <p className="font-medium">Mi Perfil</p>
-                          <p className="text-xs text-slate-500">
-                            Editar nombre para documentos
-                          </p>
-                        </div>
-                      </button>
-                      {userData?.role === "super_admin" && (
+                      <div className="py-1">
                         <button
                           onClick={() => {
                             setShowDropdown(false);
-                            navigate("/configuracion-institucional");
+                            navigate("/configuracion");
                           }}
                           className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
                         >
-                          <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-600 flex items-center justify-center">
-                            <FaSchool className="text-sm" />
+                          <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
+                            <FaUserCog className="text-sm" />
                           </div>
                           <div className="text-left flex-1">
-                            <p className="font-medium">Config. Institucional</p>
+                            <p className="font-medium">Mi Perfil</p>
                             <p className="text-xs text-slate-500">
-                              Datos de la institución
+                              Editar nombre para documentos
                             </p>
                           </div>
                         </button>
-                      )}
+                        {/* ✅ Botón para cambiar de rol (solo si tiene dual role) */}
+                        {hasDualRole && (
+                          <button
+                            onClick={cambiarRol}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center">
+                              <FaExchangeAlt className="text-sm" />
+                            </div>
+                            <div className="text-left flex-1">
+                              <p className="font-medium">Cambiar de rol</p>
+                              <p className="text-xs text-slate-500">
+                                Cambiar entre Super Admin y Docente
+                              </p>
+                            </div>
+                          </button>
+                        )}
+                      </div>
+                      <div className="border-t border-slate-100 my-1"></div>
+                      <div className="py-1">
+                        <button
+                          onClick={async () => {
+                            setShowDropdown(false);
+                            localStorage.removeItem(ACTIVE_ROLE_KEY);
+                            await logout();
+                          }}
+                          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                        >
+                          <div className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center">
+                            <FaSignOutAlt className="text-sm" />
+                          </div>
+                          <span className="font-medium">Cerrar Sesión</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="border-t border-slate-100 my-1"></div>
-                    <div className="py-1">
-                      <button
-                        onClick={async () => {
-                          setShowDropdown(false);
-                          await logout();
-                        }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center">
-                          <FaSignOutAlt className="text-sm" />
-                        </div>
-                        <span className="font-medium">Cerrar Sesión</span>
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
       </header>
 
       <main className="grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
-        {userData?.role === "super_admin" &&
+        {/* Banner de advertencia de config solo si está como super_admin */}
+        {activeRole === "super_admin" &&
           loadingInstitution === false &&
           !institutionData && (
             <div className="mb-6 bg-amber-50 border-l-4 border-amber-400 p-4 rounded-lg">
@@ -591,6 +801,24 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* ✅ Encabezado contextual según el rol activo */}
+        <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">
+              {activeRole === "super_admin"
+                ? "Panel de Administración"
+                : esTutor
+                  ? "Panel Docente · Tutor"
+                  : "Panel Docente"}
+            </h1>
+            <p className="text-sm text-slate-600 mt-1">
+              {activeRole === "super_admin"
+                ? "Gestión institucional y configuración del sistema"
+                : "Bienvenido a tu espacio de trabajo diario"}
+            </p>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredModules.map((mod) => (
             <Link
@@ -644,7 +872,6 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* ✅ Footer SOLO en el Dashboard — una sola línea */}
       <footer className="bg-white border-t border-slate-200 mt-12">
         <div className="max-w-7xl mx-auto px-4 py-4 text-center">
           <p className="text-sm text-slate-600">
