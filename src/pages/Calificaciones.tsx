@@ -44,6 +44,7 @@ import {
   FaUserTimes,
   FaChevronDown,
   FaLock,
+  FaListUl,
 } from "react-icons/fa";
 import {
   type EstadoAsistencia,
@@ -144,6 +145,15 @@ interface ConfirmModalState {
   icon?: React.ComponentType<{ className?: string }>;
   onConfirm: () => void;
   onCancel: () => void;
+}
+
+interface FichaBaseEntry {
+  calId: string;
+  notaGuardada: string;
+  observacion: string;
+  refuerzo?: RefuerzoData | null;
+  docenteId?: string;
+  notaOriginalPrevio?: number;
 }
 
 // ==================== CONSTANTES ====================
@@ -257,23 +267,19 @@ export default function Calificaciones() {
   const [asignaturasDocente, setAsignaturasDocente] = useState<
     AsignaturaDocente[]
   >([]);
-
   const [activeTab, setActiveTab] = useState<"asistencia" | "calificaciones">(
     "asistencia",
   );
   const [selectedGradoId, setSelectedGradoId] = useState("");
   const [selectedGradoNombre, setSelectedGradoNombre] = useState("");
   const [gradosExpanded, setGradosExpanded] = useState(false);
-
   const [selectedMateriaId, setSelectedMateriaId] = useState("");
   const [selectedAmbitoId, setSelectedAmbitoId] = useState("");
   const [selectedDestrezaId, setSelectedDestrezaId] = useState("");
   const [selectedActividadId, setSelectedActividadId] = useState("");
-
   const [fechaAsistencia, setFechaAsistencia] = useState(
     new Date().toISOString().split("T")[0],
   );
-
   const [asistencias, setAsistencias] = useState<
     Record<
       string,
@@ -287,7 +293,6 @@ export default function Calificaciones() {
       }
     >
   >({});
-
   const [calificaciones, setCalificaciones] = useState<
     Record<
       string,
@@ -300,11 +305,9 @@ export default function Calificaciones() {
       }
     >
   >({});
-
   const [asistenciasDiaActividad, setAsistenciasDiaActividad] = useState<
     Record<string, EstadoAsistencia | undefined>
   >({});
-
   const [showActividadModal, setShowActividadModal] = useState(false);
   const [showActividadesModal, setShowActividadesModal] = useState(false);
   const [editingActividadId, setEditingActividadId] = useState<string | null>(
@@ -316,7 +319,6 @@ export default function Calificaciones() {
     fecha: new Date().toISOString().split("T")[0],
     estrategiaNota: "promediar" as EstrategiaNota,
   });
-
   const [showRefuerzoModal, setShowRefuerzoModal] = useState(false);
   const [refuerzoEstudianteId, setRefuerzoEstudianteId] = useState<
     string | null
@@ -328,12 +330,23 @@ export default function Calificaciones() {
     estrategia: "promediar" as EstrategiaNota,
   });
 
+  // ✅ Ficha individual: calificar varias actividades de un estudiante a la vez
+  const [showFichaModal, setShowFichaModal] = useState(false);
+  const [fichaEstudianteId, setFichaEstudianteId] = useState<string | null>(
+    null,
+  );
+  const [fichaLoading, setFichaLoading] = useState(false);
+  const [fichaNotas, setFichaNotas] = useState<Record<string, string>>({});
+  const [fichaBase, setFichaBase] = useState<Record<string, FichaBaseEntry>>(
+    {},
+  );
+  const [fichaAsistencias, setFichaAsistencias] = useState<
+    Record<string, EstadoAsistencia | undefined>
+  >({});
+
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-
   const estudiantesCache = useRef<Map<string, Estudiante[]>>(new Map());
-
   const [toasts, setToasts] = useState<Toast[]>([]);
-
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
     title: "",
@@ -367,7 +380,6 @@ export default function Calificaciones() {
 
   const esGradoBachillerato = esBachillerato(gradoEfectivoNombre);
   const esGradoInicialActual = esGradoInicial(gradoEfectivoNombre);
-
   const esTutorDelGradoActual = gradoEfectivoId
     ? (userData?.tutorDe || []).includes(gradoEfectivoId)
     : false;
@@ -393,7 +405,6 @@ export default function Calificaciones() {
 
   const autoSeleccion = useMemo(() => {
     if (!gradoEfectivoId) return null;
-
     const materiasDelGrado = asignaturasDocente
       .filter((a) => a.gradoId === gradoEfectivoId)
       .map((a) => a.destrezaId);
@@ -402,7 +413,6 @@ export default function Calificaciones() {
     );
     const esInicial = esGradoInicial(gradoEfectivoNombre);
     const esBach = esBachillerato(gradoEfectivoNombre);
-
     if (destrezasDelGrado.length === 1 && !esInicial) {
       const unica = destrezasDelGrado[0];
       if (esBach) {
@@ -532,28 +542,23 @@ export default function Calificaciones() {
 
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
-
     const q = query(
       collection(db, "asignaturasDocente"),
       where("docenteId", "==", user.uid),
       where("anioLectivoId", "==", anioActivo.id),
       where("activo", "==", true),
     );
-
     const cargarAsignaturas = async () => {
       try {
         const snapshot = await getDocs(q);
-
         const data = snapshot.docs.map(
           (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
         );
-
         setAsignaturasDocente(data);
       } catch (error) {
         console.error("Error cargando asignaturas del docente:", error);
       }
     };
-
     cargarAsignaturas();
   }, [user?.uid, anioActivo?.id]);
 
@@ -584,7 +589,6 @@ export default function Calificaciones() {
       const data = snap.docs.map(
         (doc) => ({ id: doc.id, ...doc.data() }) as unknown as CalificacionData,
       );
-
       const calificacionesMap: Record<
         string,
         {
@@ -607,7 +611,6 @@ export default function Calificaciones() {
           editadoPor: calificacion.editadoPor,
         };
       });
-
       setCalificaciones(calificacionesMap);
     } catch (error) {
       console.error("Error cargando calificaciones:", error);
@@ -623,7 +626,6 @@ export default function Calificaciones() {
       );
       return;
     }
-
     setIsSaving(true);
     try {
       const anioLectivoId = anioActivo?.id || "";
@@ -631,7 +633,6 @@ export default function Calificaciones() {
       const ambitoIdParaGuardar = esGradoInicialActual
         ? "general"
         : materiaSeleccionadaEfectiva;
-
       const existentesSnap = await getDocs(
         query(
           collection(db, "asistencias"),
@@ -650,15 +651,12 @@ export default function Calificaciones() {
           data: d.data() as AsistenciaData,
         });
       });
-
       const batch = writeBatch(db);
       let operaciones = 0;
-
       estudiantes.forEach((est) => {
         const asistencia = asistencias[est.id];
         if (!asistencia || !asistencia.estado) return;
         if (asistencia.esTutorOnly && !esTutorDelGradoActual) return;
-
         const existente = existentesMap.get(est.id);
         const estadoExistenteNormalizado = normalizarEstado(
           existente?.data.estado,
@@ -667,7 +665,6 @@ export default function Calificaciones() {
         const configExistente = estadoConfig(estadoExistenteNormalizado);
         if (configExistente?.quien === "tutor" && !esTutorDelGradoActual)
           return;
-
         const datos = {
           estudianteId: est.id,
           gradoId: gradoEfectivoId,
@@ -680,7 +677,6 @@ export default function Calificaciones() {
           observacion: asistencia.observacion || "",
           updatedAt: serverTimestamp(),
         };
-
         if (!existente) {
           const nuevoRef = doc(collection(db, "asistencias"));
           batch.set(nuevoRef, {
@@ -706,7 +702,6 @@ export default function Calificaciones() {
         }
         operaciones++;
       });
-
       if (operaciones > 0) await batch.commit();
       mostrarToast(
         "success",
@@ -734,12 +729,10 @@ export default function Calificaciones() {
       );
       return;
     }
-
     setIsSaving(true);
     try {
       const anioLectivoId = anioActivo?.id || "";
       const periodoId = periodoActual?.id || "";
-
       const datos = {
         tipo: actividadForm.tipo,
         detalle: actividadForm.detalle.trim(),
@@ -753,9 +746,7 @@ export default function Calificaciones() {
         estrategiaNota: actividadForm.estrategiaNota,
         updatedAt: serverTimestamp(),
       };
-
       let actividadGuardadaId: string | null = null;
-
       if (editingActividadId) {
         await updateDoc(doc(db, "actividades", editingActividadId), datos);
         actividadGuardadaId = editingActividadId;
@@ -766,7 +757,6 @@ export default function Calificaciones() {
         });
         actividadGuardadaId = nuevoRef.id;
       }
-
       mostrarToast(
         "success",
         editingActividadId ? "Actividad actualizada" : "Actividad creada",
@@ -781,8 +771,6 @@ export default function Calificaciones() {
         estrategiaNota: "promediar",
       });
       await cargarActividades(destrezaEfectivaId);
-
-      // ✅ Seleccionar automáticamente la actividad recién creada/editada
       if (actividadGuardadaId) {
         setSelectedActividadId(actividadGuardadaId);
       }
@@ -810,7 +798,6 @@ export default function Calificaciones() {
       },
     );
     if (!confirmado) return;
-
     setIsSaving(true);
     try {
       const qCalificaciones = query(
@@ -818,19 +805,16 @@ export default function Calificaciones() {
         where("actividadId", "==", actividadId),
       );
       const snapCalificaciones = await getDocs(qCalificaciones);
-
       const batch = writeBatch(db);
       snapCalificaciones.docs.forEach((d) => batch.delete(d.ref));
       batch.delete(doc(db, "actividades", actividadId));
       await batch.commit();
-
       mostrarToast(
         "success",
         "Actividad eliminada",
         "La actividad y sus calificaciones fueron eliminadas.",
       );
       await cargarActividades(destrezaEfectivaId);
-
       if (selectedActividadId === actividadId) {
         setSelectedActividadId("");
         setCalificaciones({});
@@ -856,7 +840,6 @@ export default function Calificaciones() {
       );
       return;
     }
-
     setIsSaving(true);
     try {
       const existentesSnap = await getDocs(
@@ -875,13 +858,10 @@ export default function Calificaciones() {
           data: d.data() as CalificacionData,
         });
       });
-
       const fechaActividad = actividadSeleccionada?.fecha || "";
       const actividadEsHoy = esFechaHoy(fechaActividad);
-
       const batch = writeBatch(db);
       let operaciones = 0;
-
       estudiantes.forEach((est) => {
         const calificacion = calificaciones[est.id];
         if (
@@ -894,7 +874,6 @@ export default function Calificaciones() {
         if (estadoBloqueaNota(estadoEseDia) && actividadEsHoy) return;
         const notaNum = parseFloat(calificacion.nota);
         if (isNaN(notaNum) || notaNum < 0 || notaNum > 10) return;
-
         const existente = existentesMap.get(est.id);
         const datos = {
           estudianteId: est.id,
@@ -904,7 +883,6 @@ export default function Calificaciones() {
           refuerzo: calificacion.refuerzo || null,
           updatedAt: serverTimestamp(),
         };
-
         if (!existente) {
           const nuevoRef = doc(collection(db, "calificaciones"));
           batch.set(nuevoRef, {
@@ -930,7 +908,6 @@ export default function Calificaciones() {
         }
         operaciones++;
       });
-
       if (operaciones > 0) await batch.commit();
       mostrarToast(
         "success",
@@ -951,7 +928,6 @@ export default function Calificaciones() {
 
   const aplicarRefuerzo = async () => {
     if (!refuerzoEstudianteId || !selectedActividadId) return;
-
     if (!refuerzoForm.detalle.trim()) {
       mostrarToast(
         "warning",
@@ -960,7 +936,6 @@ export default function Calificaciones() {
       );
       return;
     }
-
     setIsSaving(true);
     try {
       const q = query(
@@ -969,7 +944,6 @@ export default function Calificaciones() {
         where("actividadId", "==", selectedActividadId),
       );
       const snap = await getDocs(q);
-
       if (snap.empty) {
         mostrarToast(
           "error",
@@ -979,7 +953,6 @@ export default function Calificaciones() {
         setIsSaving(false);
         return;
       }
-
       const refuerzoData: RefuerzoData = {
         nota: round2(refuerzoForm.nota),
         detalle: refuerzoForm.detalle.trim(),
@@ -987,12 +960,10 @@ export default function Calificaciones() {
         aplicadoPor: user?.uid || "",
         estrategiaElegida: refuerzoForm.estrategia,
       };
-
       await updateDoc(doc(db, "calificaciones", snap.docs[0].id), {
         refuerzo: refuerzoData,
         updatedAt: serverTimestamp(),
       });
-
       mostrarToast(
         "success",
         "Refuerzo aplicado",
@@ -1013,6 +984,176 @@ export default function Calificaciones() {
     }
   };
 
+  // ✅ Abrir ficha individual: 1 query de calificaciones + 1 de asistencias (acotadas al estudiante)
+  const abrirFichaEstudiante = async (estudianteId: string) => {
+    setFichaEstudianteId(estudianteId);
+    setShowFichaModal(true);
+    setFichaLoading(true);
+    setFichaNotas({});
+    setFichaBase({});
+    setFichaAsistencias({});
+    try {
+      const actividadIds = actividades
+        .map((a) => a.id)
+        .filter(Boolean) as string[];
+      if (actividadIds.length === 0) {
+        setFichaLoading(false);
+        return;
+      }
+
+      const snapCal = await getDocs(
+        query(
+          collection(db, "calificaciones"),
+          where("estudianteId", "==", estudianteId),
+        ),
+      );
+      const base: Record<string, FichaBaseEntry> = {};
+      snapCal.docs.forEach((d) => {
+        const data = d.data() as unknown as CalificacionData;
+        if (!actividadIds.includes(data.actividadId)) return;
+        base[data.actividadId] = {
+          calId: d.id,
+          notaGuardada:
+            typeof data.nota === "number"
+              ? String(round2(data.nota))
+              : String(data.nota ?? ""),
+          observacion: data.observacion || "",
+          refuerzo: data.refuerzo || null,
+          docenteId: data.docenteId,
+          notaOriginalPrevio: data.notaOriginal,
+        };
+      });
+
+      const fechas = Array.from(new Set(actividades.map((a) => a.fecha)));
+      const asis: Record<string, EstadoAsistencia | undefined> = {};
+      for (let i = 0; i < fechas.length; i += 30) {
+        const chunk = fechas.slice(i, i + 30);
+        const snapAs = await getDocs(
+          query(
+            collection(db, "asistencias"),
+            where("estudianteId", "==", estudianteId),
+            where("fecha", "in", chunk),
+          ),
+        );
+        snapAs.docs.forEach((d) => {
+          const data = d.data() as AsistenciaData;
+          asis[data.fecha] = normalizarEstado(data.estado, data.v2);
+        });
+      }
+
+      setFichaBase(base);
+      setFichaAsistencias(asis);
+
+      const notas: Record<string, string> = {};
+      actividades.forEach((a) => {
+        if (!a.id) return;
+        notas[a.id] = base[a.id]?.notaGuardada ?? "";
+      });
+      setFichaNotas(notas);
+    } catch (error) {
+      console.error("Error cargando ficha del estudiante:", error);
+      mostrarToast(
+        "error",
+        "Error al cargar",
+        "No se pudo cargar la ficha del estudiante.",
+      );
+    } finally {
+      setFichaLoading(false);
+    }
+  };
+
+  // ✅ Guardar ficha: SOLO las notas modificadas de ESE estudiante, en 1 batch
+  const guardarFichaEstudiante = async () => {
+    if (!fichaEstudianteId) return;
+
+    const cambios: { actividadId: string; nota: number }[] = [];
+    actividades.forEach((a) => {
+      if (!a.id) return;
+      const base = fichaBase[a.id];
+      const valor = (fichaNotas[a.id] ?? "").trim();
+      const valorBase = (base?.notaGuardada ?? "").trim();
+      if (valor === valorBase || valor === "") return;
+      const num = parseFloat(valor);
+      if (isNaN(num) || num < 0 || num > 10) return;
+      const estado = fichaAsistencias[a.fecha];
+      if (estadoBloqueaNota(estado) && esFechaHoy(a.fecha)) return;
+      cambios.push({ actividadId: a.id, nota: round2(num) });
+    });
+
+    if (cambios.length === 0) {
+      mostrarToast(
+        "info",
+        "Sin cambios",
+        "No hay notas modificadas para guardar.",
+      );
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      cambios.forEach((c) => {
+        const base = fichaBase[c.actividadId];
+        const datos = {
+          estudianteId: fichaEstudianteId,
+          actividadId: c.actividadId,
+          nota: c.nota,
+          observacion: base?.observacion || "",
+          refuerzo: base?.refuerzo || null,
+          updatedAt: serverTimestamp(),
+        };
+        if (base?.calId) {
+          const auditoria: Record<string, unknown> = {};
+          if (base.docenteId && base.docenteId !== user?.uid) {
+            auditoria.editadoPor = user?.uid || "";
+            auditoria.editadoEl = serverTimestamp();
+            if (
+              base.notaOriginalPrevio === undefined &&
+              base.notaGuardada !== ""
+            )
+              auditoria.notaOriginal = parseFloat(base.notaGuardada);
+          }
+          batch.update(doc(db, "calificaciones", base.calId), {
+            ...datos,
+            ...auditoria,
+          });
+        } else {
+          const nuevoRef = doc(collection(db, "calificaciones"));
+          batch.set(nuevoRef, {
+            ...datos,
+            docenteId: user?.uid || "",
+            createdAt: serverTimestamp(),
+          });
+        }
+      });
+      await batch.commit();
+
+      mostrarToast(
+        "success",
+        "Ficha guardada",
+        `Se guardaron ${cambios.length} nota(s) del estudiante.`,
+      );
+      setShowFichaModal(false);
+      setFichaEstudianteId(null);
+
+      if (
+        selectedActividadId &&
+        cambios.some((c) => c.actividadId === selectedActividadId)
+      ) {
+        await cargarCalificaciones(selectedActividadId);
+      }
+    } catch (error) {
+      console.error("Error guardando ficha:", error);
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudieron guardar las notas.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const actualizarAsistencia = (
     estudianteId: string,
     estado: EstadoAsistencia,
@@ -1021,7 +1162,6 @@ export default function Calificaciones() {
     if (actual?.esTutorOnly && !esTutorDelGradoActual) return;
     const config = estadoConfig(estado);
     if (config?.quien === "tutor" && !esTutorDelGradoActual) return;
-
     setAsistencias((prev) => ({
       ...prev,
       [estudianteId]: {
@@ -1036,7 +1176,6 @@ export default function Calificaciones() {
   const marcarTodosAsistencia = (estado: EstadoAsistencia) => {
     const config = estadoConfig(estado);
     if (config?.quien === "tutor") return;
-
     setAsistencias((prev) => {
       const nuevas: typeof prev = {};
       estudiantes.forEach((est) => {
@@ -1083,7 +1222,6 @@ export default function Calificaciones() {
     const estadoEseDia = asistenciasDiaActividad[estudianteId];
     const actividadEsHoy = esFechaHoy(actividadSeleccionada?.fecha || "");
     if (estadoBloqueaNota(estadoEseDia) && actividadEsHoy) return;
-
     if (valor === "") {
       setCalificaciones((prev) => ({
         ...prev,
@@ -1091,17 +1229,13 @@ export default function Calificaciones() {
       }));
       return;
     }
-
     const regex = /^\d*(\.\d{0,2})?$/;
     if (!regex.test(valor)) return;
-
     if (/^\d+(\.\d+)?$/.test(valor)) {
       const num = parseFloat(valor);
       if (num > 10) return;
     }
-
     if (valor.length > 5) return;
-
     setCalificaciones((prev) => ({
       ...prev,
       [estudianteId]: { ...prev[estudianteId], nota: valor },
@@ -1121,14 +1255,12 @@ export default function Calificaciones() {
   const aplicarNotaATodos = (nota: number) => {
     const fechaActividad = actividadSeleccionada?.fecha || "";
     const actividadEsHoy = esFechaHoy(fechaActividad);
-
     setCalificaciones((prev) => {
       const nuevas = { ...prev };
       estudiantes.forEach((est) => {
         const estadoEseDia = asistenciasDiaActividad[est.id];
         if (estadoBloqueaNota(estadoEseDia) && actividadEsHoy) return;
         if (calificaciones[est.id]?.refuerzo) return;
-
         nuevas[est.id] = {
           ...nuevas[est.id],
           nota: String(round2(nota)),
@@ -1167,14 +1299,12 @@ export default function Calificaciones() {
 
   useEffect(() => {
     if (!gradoEfectivoId) return;
-
     const cached = estudiantesCache.current.get(gradoEfectivoId);
     if (cached && cached.length > 0) {
       setEstudiantes(cached);
       setActiveTab("asistencia");
       return;
     }
-
     const fetchEstudiantes = async () => {
       try {
         const q = query(
@@ -1187,7 +1317,6 @@ export default function Calificaciones() {
         const data = snap.docs.map(
           (doc) => ({ id: doc.id, ...doc.data() }) as Estudiante,
         );
-
         estudiantesCache.current.set(gradoEfectivoId, data);
         setEstudiantes(data);
         setActiveTab("asistencia");
@@ -1195,13 +1324,11 @@ export default function Calificaciones() {
         console.error("Error cargando estudiantes:", error);
       }
     };
-
     fetchEstudiantes();
   }, [gradoEfectivoId]);
 
   useEffect(() => {
     if (!destrezaEfectivaId) return;
-
     const fetchActividades = async () => {
       try {
         const q = query(
@@ -1218,7 +1345,6 @@ export default function Calificaciones() {
         console.error("Error cargando actividades:", error);
       }
     };
-
     fetchActividades();
   }, [destrezaEfectivaId]);
 
@@ -1231,7 +1357,6 @@ export default function Calificaciones() {
       limpiar();
       return;
     }
-
     const fetchCalificaciones = async () => {
       try {
         const q = query(
@@ -1243,7 +1368,6 @@ export default function Calificaciones() {
           (doc) =>
             ({ id: doc.id, ...doc.data() }) as unknown as CalificacionData,
         );
-
         const calificacionesMap: Record<
           string,
           {
@@ -1266,26 +1390,21 @@ export default function Calificaciones() {
             editadoPor: calificacion.editadoPor,
           };
         });
-
         setCalificaciones(calificacionesMap);
       } catch (error) {
         console.error("Error cargando calificaciones:", error);
       }
     };
-
     fetchCalificaciones();
   }, [selectedActividadId]);
 
   useEffect(() => {
     if (activeTab !== "asistencia") return;
-
     if (!gradoEfectivoId || !fechaAsistencia) {
       return;
     }
-
     const gradoInicialActual = esGradoInicial(gradoEfectivoNombre);
     const gradoBachilleratoActual = esBachillerato(gradoEfectivoNombre);
-
     let ambitoIdParaBuscar: string;
     if (gradoInicialActual) {
       ambitoIdParaBuscar = "general";
@@ -1296,14 +1415,12 @@ export default function Calificaciones() {
       if (!ambitoEfectivoId) return;
       ambitoIdParaBuscar = ambitoEfectivoId;
     }
-
     const q = query(
       collection(db, "asistencias"),
       where("gradoId", "==", gradoEfectivoId),
       where("fecha", "==", fechaAsistencia),
       where("ambitoId", "==", ambitoIdParaBuscar),
     );
-
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
@@ -1337,7 +1454,6 @@ export default function Calificaciones() {
         console.error("Error escuchando asistencias:", error);
       },
     );
-
     return () => unsubscribe();
   }, [
     activeTab,
@@ -1350,7 +1466,6 @@ export default function Calificaciones() {
 
   useEffect(() => {
     if (activeTab !== "calificaciones") return;
-
     const actividad = actividades.find((a) => a.id === selectedActividadId);
     if (!actividad || !gradoEfectivoId || !selectedActividadId) {
       const limpiar = async () => {
@@ -1359,13 +1474,11 @@ export default function Calificaciones() {
       limpiar();
       return;
     }
-
     const ambitoIdActividad = esGradoInicialActual
       ? "general"
       : esGradoBachillerato
         ? actividad.destrezaId
         : actividad.ambitoId;
-
     if (!ambitoIdActividad) {
       const limpiar = async () => {
         setAsistenciasDiaActividad({});
@@ -1373,14 +1486,12 @@ export default function Calificaciones() {
       limpiar();
       return;
     }
-
     const q = query(
       collection(db, "asistencias"),
       where("gradoId", "==", gradoEfectivoId),
       where("fecha", "==", actividad.fecha),
       where("ambitoId", "==", ambitoIdActividad),
     );
-
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
@@ -1398,7 +1509,6 @@ export default function Calificaciones() {
         );
       },
     );
-
     return () => unsubscribe();
   }, [
     activeTab,
@@ -1456,15 +1566,28 @@ export default function Calificaciones() {
 
   const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
-
   const fechaActividad = actividadSeleccionada?.fecha || "";
   const actividadEsHoy = esFechaHoy(fechaActividad);
   const actividadEsAntigua = esFechaAnteriorAHoy(fechaActividad);
-
   const estrategiaEfectivaRefuerzo =
     refuerzoForm.estrategia ||
     actividadSeleccionada?.estrategiaNota ||
     "promediar";
+
+  // ✅ Contador de cambios pendientes en la ficha individual
+  const cambiosFichaCount = showFichaModal
+    ? actividades.filter((a) => {
+        if (!a.id) return false;
+        const valor = (fichaNotas[a.id] ?? "").trim();
+        const valorBase = (fichaBase[a.id]?.notaGuardada ?? "").trim();
+        if (valor === "" || valor === valorBase) return false;
+        const num = parseFloat(valor);
+        if (isNaN(num) || num < 0 || num > 10) return false;
+        const estado = fichaAsistencias[a.fecha];
+        if (estadoBloqueaNota(estado) && esFechaHoy(a.fecha)) return false;
+        return true;
+      }).length
+    : 0;
 
   return (
     <Layout>
@@ -1486,7 +1609,6 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
-
       {!docenteSinGrados && (
         <>
           {gradosFiltrados.length > 0 ? (
@@ -1643,7 +1765,6 @@ export default function Calificaciones() {
               </p>
             </div>
           )}
-
           {gradoEfectivoId &&
             !gradoTieneMateriasConfiguradas &&
             !esGradoInicialActual && (
@@ -1676,7 +1797,6 @@ export default function Calificaciones() {
                 </div>
               </div>
             )}
-
           {gradoEfectivoId &&
             (gradoTieneMateriasConfiguradas || esGradoInicialActual) && (
               <div className="bg-white rounded-xl shadow-sm border border-slate-200">
@@ -1706,7 +1826,6 @@ export default function Calificaciones() {
                         Calificaciones
                       </button>
                     </div>
-
                     {activeTab === "asistencia" ? (
                       <div className="grid grid-cols-2 gap-2">
                         {esGradoInicialActual ? (
@@ -1722,7 +1841,6 @@ export default function Calificaciones() {
                             onChange={(e) => {
                               const materiaId = e.target.value;
                               setSelectedMateriaId(materiaId);
-
                               if (materiaId) {
                                 const materia = materiasDelGradoDocente.find(
                                   (d) => d.id === materiaId,
@@ -1841,7 +1959,6 @@ export default function Calificaciones() {
                                 )?.nombre || ""}
                               </option>
                             </select>
-
                             <div className="col-span-2 flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
                               <FaBook className="text-purple-600 text-sm shrink-0" />
                               <div className="flex-1 min-w-0">
@@ -1901,7 +2018,6 @@ export default function Calificaciones() {
                     )}
                   </div>
                 </div>
-
                 <div
                   className={`p-4 ${mostrarBarraSticky || mostrarBarraStickyCalificaciones ? "pb-28" : ""}`}
                 >
@@ -1919,7 +2035,6 @@ export default function Calificaciones() {
                         </div>
                       </div>
                     )}
-
                   {estudiantes.length === 0 ? (
                     <div className="text-center py-12 text-slate-500">
                       <FaUserCheck className="text-4xl mx-auto mb-3 text-slate-300" />
@@ -1969,7 +2084,6 @@ export default function Calificaciones() {
                               </span>
                             )}
                           </button>
-
                           <button
                             onClick={() => setShowActividadesModal(true)}
                             className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all"
@@ -1981,7 +2095,6 @@ export default function Calificaciones() {
                           </button>
                         </div>
                       </div>
-
                       {!selectedActividadId || !actividadSeleccionada ? (
                         <div className="text-center py-10 text-slate-500">
                           <FaTasks className="text-3xl mx-auto mb-2 text-slate-300" />
@@ -2027,7 +2140,6 @@ export default function Calificaciones() {
                               </div>
                             </div>
                           )}
-
                           <div className="space-y-2">
                             {estudiantes.map((est, index) => {
                               const calificacion = calificaciones[est.id];
@@ -2055,7 +2167,6 @@ export default function Calificaciones() {
                                 : notaOriginal;
                               const estadoAsistencia =
                                 asistenciasDiaActividad[est.id];
-
                               const ausenciaQueBloquea =
                                 estadoBloqueaNota(estadoAsistencia);
                               const bloqueadoPorAusenciaHoy =
@@ -2063,7 +2174,6 @@ export default function Calificaciones() {
                               const ausenteAntiguo =
                                 estadoEsAusencia(estadoAsistencia) &&
                                 actividadEsAntigua;
-
                               const necesitaRefuerzo =
                                 !esGradoInicialActual &&
                                 notaOriginal !== undefined &&
@@ -2073,10 +2183,8 @@ export default function Calificaciones() {
                               const esDeOtroDocente =
                                 calificacion?.docenteId &&
                                 calificacion.docenteId !== user?.uid;
-
                               const configEstadoAsistencia =
                                 estadoConfig(estadoAsistencia);
-
                               return (
                                 <div
                                   key={est.id}
@@ -2110,7 +2218,8 @@ export default function Calificaciones() {
                                           <FaUserTimes className="text-[9px]" />
                                           {
                                             configEstadoAsistencia?.label
-                                          } el {actividadSeleccionada.fecha} —
+                                          }{" "}
+                                          el {actividadSeleccionada.fecha} —
                                           permite nota
                                         </div>
                                       )}
@@ -2150,6 +2259,18 @@ export default function Calificaciones() {
                                         )}
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
+                                      <button
+                                        onClick={() =>
+                                          abrirFichaEstudiante(est.id)
+                                        }
+                                        className="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded text-xs font-semibold transition-all"
+                                        title="Ver y calificar todas las actividades de este estudiante"
+                                      >
+                                        <FaListUl className="text-xs" />
+                                        <span className="hidden sm:inline">
+                                          Ficha
+                                        </span>
+                                      </button>
                                       {bloqueadoPorAusenciaHoy ? (
                                         <span
                                           className="px-3 py-1.5 rounded text-xs font-bold bg-red-100 border-2 border-red-300 text-red-700"
@@ -2329,7 +2450,6 @@ export default function Calificaciones() {
                           </button>
                         </div>
                       )}
-
                       {estudiantes.map((est) => {
                         const asistencia = asistencias[est.id];
                         const estado = asistencia?.estado;
@@ -2340,7 +2460,6 @@ export default function Calificaciones() {
                           !!asistencia?.esTutorOnly ||
                           (estado ? estadoEsTutorOnly(estado) : false);
                         const configEstado = estadoConfig(estado);
-
                         return (
                           <div
                             key={est.id}
@@ -2388,14 +2507,14 @@ export default function Calificaciones() {
                                       {asistencia?.editadoPor &&
                                         asistencia.editadoPor !==
                                           asistencia.registradoPor && (
-                                          <span>
-                                            {" "}
-                                            | Editó:{" "}
-                                            {nombreDocente(
-                                              asistencia.editadoPor,
-                                            )}
-                                          </span>
-                                        )}
+                                        <span>
+                                          {" "}
+                                          | Editó:{" "}
+                                          {nombreDocente(
+                                            asistencia.editadoPor,
+                                          )}
+                                        </span>
+                                      )}
                                     </div>
                                   )}
                               </div>
@@ -2409,7 +2528,6 @@ export default function Calificaciones() {
                                     esTutorOnly && !esTutorDelGradoActual;
                                   const disabled =
                                     esEstadoTutor || bloqueadoPorTutoria;
-
                                   return (
                                     <button
                                       key={estadoConf.value}
@@ -2523,7 +2641,6 @@ export default function Calificaciones() {
             )}
         </>
       )}
-
       {mostrarBarraSticky && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] p-3 z-40">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
@@ -2582,7 +2699,6 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
-
       {mostrarBarraStickyCalificaciones && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-40">
           <div className="border-b border-slate-100 px-3 py-2">
@@ -2671,7 +2787,6 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
-
       {/* ==================== MODAL LISTADO DE ACTIVIDADES ==================== */}
       {showActividadesModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -2697,7 +2812,6 @@ export default function Calificaciones() {
                 <FaTimes />
               </button>
             </div>
-
             <button
               onClick={() => {
                 setShowActividadesModal(false);
@@ -2714,7 +2828,6 @@ export default function Calificaciones() {
             >
               <FaPlus /> Nueva actividad
             </button>
-
             {actividades.length === 0 ? (
               <div className="p-6 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm text-slate-500">
                 No hay actividades aún. Crea la primera con el botón verde.
@@ -2807,7 +2920,6 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
-
       {showActividadModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
@@ -2825,7 +2937,6 @@ export default function Calificaciones() {
                 <FaTimes />
               </button>
             </div>
-
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -2845,7 +2956,6 @@ export default function Calificaciones() {
                   ))}
                 </select>
               </div>
-
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
                   Detalle *
@@ -2863,7 +2973,6 @@ export default function Calificaciones() {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
                   Fecha *
@@ -2880,7 +2989,6 @@ export default function Calificaciones() {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-
               {!esGradoInicialActual && (
                 <div>
                   <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -2909,7 +3017,6 @@ export default function Calificaciones() {
                 </div>
               )}
             </div>
-
             <div className="flex gap-2 mt-6">
               <button
                 onClick={guardarActividad}
@@ -2932,7 +3039,189 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+      {/* ==================== MODAL FICHA INDIVIDUAL ==================== */}
+      {showFichaModal && fichaEstudianteId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="bg-purple-100 p-2 rounded-lg">
+                  <FaListUl className="text-purple-600 text-xl" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {
+                      estudiantes.find((e) => e.id === fichaEstudianteId)
+                        ?.apellidos
+                    }{" "}
+                    {estudiantes.find((e) => e.id === fichaEstudianteId)?.nombres}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Todas las actividades de la destreza · edita y guarda de una
+                    vez
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowFichaModal(false);
+                  setFichaEstudianteId(null);
+                }}
+                disabled={isSaving}
+                className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+              >
+                <FaTimes />
+              </button>
+            </div>
 
+            {fichaLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <FaSpinner className="animate-spin text-3xl text-blue-600" />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {[...actividades]
+                  .sort((a, b) => a.fecha.localeCompare(b.fecha))
+                  .map((a) => {
+                    if (!a.id) return null;
+                    const base = fichaBase[a.id];
+                    const valor = fichaNotas[a.id] ?? "";
+                    const modificada =
+                      valor.trim() !== (base?.notaGuardada ?? "").trim();
+                    const estado = fichaAsistencias[a.fecha];
+                    const bloqueada =
+                      estadoBloqueaNota(estado) && esFechaHoy(a.fecha);
+                    const tieneRefuerzo = !!base?.refuerzo;
+                    const notaFinalRef = tieneRefuerzo
+                      ? calcularNotaFinal(
+                          parseFloat(base?.notaGuardada || "0") || 0,
+                          base?.refuerzo,
+                          a.estrategiaNota,
+                        )
+                      : null;
+
+                    return (
+                      <div
+                        key={a.id}
+                        className={`p-3 rounded-lg border-2 transition-all ${
+                          modificada
+                            ? "border-blue-400 bg-blue-50/50"
+                            : bloqueada
+                              ? "border-red-200 bg-red-50/40"
+                              : "border-slate-200"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-700">
+                                {a.tipo}
+                              </span>
+                              <span className="text-[10px] text-slate-500">
+                                {a.fecha}
+                              </span>
+                              {modificada && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold">
+                                  Modificada
+                                </span>
+                              )}
+                              {!modificada && base?.notaGuardada && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-bold">
+                                  Guardada
+                                </span>
+                              )}
+                              {!modificada && !base?.notaGuardada && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 font-bold">
+                                  Sin nota
+                                </span>
+                              )}
+                              {tieneRefuerzo && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 font-bold">
+                                  Con refuerzo
+                                </span>
+                              )}
+                              {bloqueada && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold">
+                                  Bloqueada (ausencia hoy)
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm font-medium text-slate-900 mt-1 truncate">
+                              {a.detalle}
+                            </div>
+                          </div>
+                          <div className="shrink-0 flex items-center gap-2">
+                            {bloqueada ? (
+                              <span className="px-2 py-1.5 rounded text-xs font-bold bg-red-100 border border-red-300 text-red-700">
+                                Sin nota
+                              </span>
+                            ) : tieneRefuerzo ? (
+                              <span
+                                className="px-3 py-1.5 rounded text-sm font-bold bg-orange-50 border border-orange-300 text-orange-700"
+                                title="Nota final con refuerzo (solo lectura)"
+                              >
+                                {round2(notaFinalRef ?? 0)}
+                              </span>
+                            ) : (
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                maxLength={5}
+                                value={valor}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  const regex = /^\d*(\.\d{0,2})?$/;
+                                  if (!regex.test(v)) return;
+                                  if (/^\d+(\.\d+)?$/.test(v)) {
+                                    const num = parseFloat(v);
+                                    if (num > 10) return;
+                                  }
+                                  if (v.length > 5) return;
+                                  setFichaNotas((prev) => ({
+                                    ...prev,
+                                    [a.id as string]: v,
+                                  }));
+                                }}
+                                placeholder="0-10"
+                                className="w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none border-slate-300 bg-white"
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-6">
+              <button
+                onClick={guardarFichaEstudiante}
+                disabled={isSaving || fichaLoading || cambiosFichaCount === 0}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {isSaving ? (
+                  <FaSpinner className="animate-spin" />
+                ) : (
+                  <FaSave />
+                )}
+                Guardar cambios
+                {cambiosFichaCount > 0 && ` (${cambiosFichaCount})`}
+              </button>
+              <button
+                onClick={() => {
+                  setShowFichaModal(false);
+                  setFichaEstudianteId(null);
+                }}
+                disabled={isSaving}
+                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showRefuerzoModal && refuerzoEstudianteId && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -2950,17 +3239,13 @@ export default function Calificaciones() {
                 <FaTimes />
               </button>
             </div>
-
             <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
               <p className="text-sm text-orange-800 font-semibold mb-1">
                 {
                   estudiantes.find((e) => e.id === refuerzoEstudianteId)
                     ?.apellidos
                 }{" "}
-                {
-                  estudiantes.find((e) => e.id === refuerzoEstudianteId)
-                    ?.nombres
-                }
+                {estudiantes.find((e) => e.id === refuerzoEstudianteId)?.nombres}
               </p>
               <p className="text-xs text-orange-700">
                 Nota original:{" "}
@@ -2969,7 +3254,6 @@ export default function Calificaciones() {
                 </strong>
               </p>
             </div>
-
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
@@ -3001,7 +3285,6 @@ export default function Calificaciones() {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
                   Estrategia de cálculo *{" "}
@@ -3026,7 +3309,6 @@ export default function Calificaciones() {
                   ))}
                 </select>
               </div>
-
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
                   Detalle del Refuerzo *
@@ -3044,7 +3326,6 @@ export default function Calificaciones() {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
                   Fecha del Refuerzo *
@@ -3058,7 +3339,6 @@ export default function Calificaciones() {
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-
               {actividadSeleccionada && (
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
                   <p className="font-semibold mb-1">Estrategia aplicada:</p>
@@ -3100,7 +3380,6 @@ export default function Calificaciones() {
                 </div>
               )}
             </div>
-
             <div className="flex gap-2 mt-6">
               <button
                 onClick={aplicarRefuerzo}
@@ -3129,7 +3408,6 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
-
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
@@ -3148,7 +3426,6 @@ export default function Calificaciones() {
                 </div>
               </div>
             </div>
-
             <div className="px-6 py-4 bg-slate-50 flex gap-3 justify-end">
               <button
                 onClick={confirmModal.onCancel}
@@ -3167,7 +3444,6 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
-
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
