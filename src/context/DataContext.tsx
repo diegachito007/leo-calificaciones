@@ -1,7 +1,4 @@
 /* eslint-disable react-refresh/only-export-components */
-// ⚠️ Este archivo es un Context: exporta el Provider (componente) Y el hook useData.
-// Es el patrón estándar de Context, por eso se desactiva la regla de react-refresh.
-
 import {
   createContext,
   useContext,
@@ -81,7 +78,14 @@ function writeCache(payload: Omit<CachePayload, "ts">) {
   }
 }
 
-// ==================== ESTADO INICIAL DESDE CACHÉ ====================
+function clearCache() {
+  try {
+    sessionStorage.removeItem(CACHE_KEY);
+  } catch {
+    // silencioso
+  }
+}
+
 function getInitialState() {
   const cached = readCache();
   return {
@@ -96,7 +100,6 @@ function getInitialState() {
 }
 
 // ==================== PROVIDER ====================
-
 export function DataProvider({ children }: { children: ReactNode }) {
   const initial = getInitialState();
 
@@ -207,27 +210,33 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const reload = useCallback(async () => {
-    try {
-      sessionStorage.removeItem(CACHE_KEY);
-    } catch {
-      // silencioso
-    }
+    clearCache();
     await cargarTodo(true);
   }, [cargarTodo]);
 
+  // ✅ Carga inicial
   useEffect(() => {
     let mounted = true;
-
     const cargar = async () => {
       if (!mounted) return;
       await cargarTodo();
     };
-
     cargar();
-
     return () => {
       mounted = false;
     };
+  }, [cargarTodo]);
+
+  // ✅ Listener del evento global de refresh
+  // Se dispara desde los módulos que escriben datos (Grados, Años Lectivos, etc.)
+  useEffect(() => {
+    const handler = () => {
+      console.log("🔄 DataContext: recibida señal de refresh, recargando...");
+      clearCache();
+      cargarTodo(true);
+    };
+    window.addEventListener("eduX:refreshData", handler);
+    return () => window.removeEventListener("eduX:refreshData", handler);
   }, [cargarTodo]);
 
   const anioActivo = aniosLectivos.find((a) => a.activo) || null;
