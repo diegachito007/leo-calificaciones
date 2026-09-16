@@ -216,7 +216,9 @@ export default function Estudiantes() {
         return;
       }
 
-      const cacheKey = gradoId ? `estudiantes_${gradoId}` : "estudiantes_todos";
+      const cacheKey = gradoId
+        ? `estudiantesTodos_${gradoId}`
+        : "estudiantesTodos_todos";
 
       // Intentar obtener del cache primero (si no es refresh forzado)
       if (!forceRefresh) {
@@ -266,19 +268,25 @@ export default function Estudiantes() {
   useEffect(() => {
     if (!ready) return;
 
-    // ✅ Envolver en async para evitar setState síncrono en el cuerpo del effect
     const ejecutar = async () => {
       await cargarEstudiantes(gradoEfectivoId);
     };
     ejecutar();
   }, [gradoEfectivoId, ready, cargarEstudiantes]);
 
-  // ✅ Función para invalidar cache y recargar (sin useCallback, el compiler la optimiza)
+  // ✅ Función para invalidar cache y recargar (sin useCallback)
   async function recargarEstudiantes() {
-    const cacheKey = gradoEfectivoId
-      ? `estudiantes_${gradoEfectivoId}`
-      : "estudiantes_todos";
-    cacheInvalidate(cacheKey);
+    // Invalidar cache de "todos" (este módulo)
+    const cacheKeyTodos = gradoEfectivoId
+      ? `estudiantesTodos_${gradoEfectivoId}`
+      : "estudiantesTodos_todos";
+    cacheInvalidate(cacheKeyTodos);
+
+    // Invalidar cache de "activos" (usado por Calificaciones)
+    if (gradoEfectivoId) {
+      cacheInvalidate(`estudiantesActivos_${gradoEfectivoId}`);
+    }
+
     await cargarEstudiantes(gradoEfectivoId, true);
 
     // Notificar al DataContext que los datos cambiaron
@@ -357,11 +365,7 @@ export default function Estudiantes() {
 
   async function guardarEstudiantesMasivos() {
     if (!anioActivo) {
-      mostrarToast(
-        "warning",
-        "Sin año lectivo",
-        "No hay un año lectivo activo.",
-      );
+      mostrarToast("warning", "Sin año lectivo", "No hay un año lectivo activo.");
       return;
     }
     if (!gradoEfectivoId) {
@@ -490,7 +494,6 @@ export default function Estudiantes() {
       setValidationErrors([]);
       setShowMassiveForm(false);
 
-      // ✅ Invalidar cache y recargar
       await recargarEstudiantes();
     } catch (error) {
       console.error("Error guardando estudiantes masivos:", error);
@@ -564,7 +567,6 @@ export default function Estudiantes() {
       }
       resetForm();
 
-      // ✅ Invalidar cache y recargar
       await recargarEstudiantes();
 
       mostrarToast(
@@ -642,7 +644,6 @@ export default function Estudiantes() {
         `"${estudiante.apellidos} ${estudiante.nombres}" fue desactivado correctamente.`,
       );
 
-      // ✅ Invalidar cache y recargar
       await recargarEstudiantes();
     } catch (error) {
       console.error("Error desactivando:", error);
@@ -676,7 +677,6 @@ export default function Estudiantes() {
         `"${estudiante.apellidos} ${estudiante.nombres}" ${estadoActual ? "fue desactivado" : "fue reactivado correctamente"}.`,
       );
 
-      // ✅ Invalidar cache y recargar
       await recargarEstudiantes();
     } catch (error) {
       console.error("Error actualizando estado:", error);

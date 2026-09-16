@@ -1311,7 +1311,7 @@ export default function Calificaciones() {
     if (!gradoEfectivoId) return;
     let mounted = true;
     const cargar = async () => {
-      const cacheKey = `estudiantes_${gradoEfectivoId}`;
+      const cacheKey = `estudiantesActivos_${gradoEfectivoId}`;
       const cached = cacheGet<Estudiante[]>(cacheKey, TTL_ESTUDIANTES);
       if (cached) {
         if (mounted) {
