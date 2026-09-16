@@ -293,6 +293,158 @@ export default function Estudiantes() {
     window.dispatchEvent(new Event("eduX:refreshData"));
   }
 
+  // ✅ IMPRIMIR NÓMINA DEL GRADO (activos + inactivos)
+  const handlePrintNomina = () => {
+    if (!gradoEfectivoId) {
+      mostrarToast("warning", "Sin grado", "Selecciona un grado para imprimir la nómina.");
+      return;
+    }
+    const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
+    if (!gradoActual) return;
+
+    // Ordenar: primero activos (alfabético), luego inactivos (alfabético)
+    const listaOrdenada = [...estudiantes].sort((a, b) => {
+      if (a.activo !== b.activo) return a.activo ? -1 : 1;
+      return a.apellidos.localeCompare(b.apellidos);
+    });
+
+    const activos = listaOrdenada.filter((e) => e.activo).length;
+    const inactivos = listaOrdenada.length - activos;
+    const fechaGen = new Date().toLocaleDateString("es-EC", {
+      day: "2-digit",
+      month: "long",
+      year: "numeric",
+    });
+    const responsable =
+      userData?.nombreDocumento || user?.displayName || "—";
+    const esTutor = tutorDeAnioActivo.includes(gradoEfectivoId);
+
+    const filas = listaOrdenada
+      .map(
+        (est, idx) => `
+        <tr>
+          <td class="num">${idx + 1}</td>
+          <td class="apellidos">${est.apellidos}</td>
+          <td class="nombres">${est.nombres}</td>
+          <td class="cedula">${est.cedula || "—"}</td>
+          <td class="estado ${est.activo ? "activo" : "inactivo"}">
+            ${est.activo ? "ACTIVO" : "INACTIVO"}
+          </td>
+        </tr>`,
+      )
+      .join("");
+
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Nómina - ${gradoActual.nombre} ${gradoActual.paralelo}</title>
+<style>
+  @page { size: letter portrait; margin: 2cm 1.5cm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1f2937; font-size: 11px; margin: 0; }
+  .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #1f2937; padding-bottom: 10px; }
+  .title { font-size: 16px; font-weight: bold; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 4px; }
+  .subtitle { font-size: 12px; margin-bottom: 2px; }
+  .meta { display: flex; justify-content: space-between; margin: 15px 0; font-size: 11px; }
+  .meta-box { border: 1px solid #d1d5db; padding: 6px 10px; border-radius: 4px; }
+  .meta-box .lbl { font-size: 9px; text-transform: uppercase; color: #6b7280; letter-spacing: 0.5px; }
+  .meta-box .val { font-weight: bold; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { border: 1px solid #6b7280; padding: 5px 7px; font-size: 10.5px; }
+  th { background: #1f2937; color: white; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.5px; text-align: left; }
+  th.num, td.num { width: 40px; text-align: center; }
+  th.cedula, td.cedula { width: 110px; text-align: center; }
+  th.estado, td.estado { width: 85px; text-align: center; font-weight: bold; font-size: 9.5px; }
+  tr:nth-child(even) { background: #f9fafb; }
+  tr.inactivo { background: #fef2f2 !important; }
+  .estado.activo { color: #15803d; }
+  .estado.inactivo { color: #b91c1c; }
+  .apellidos { font-weight: bold; }
+  .summary { margin-top: 15px; display: flex; gap: 15px; justify-content: flex-end; font-size: 11px; }
+  .summary .chip { padding: 4px 12px; border-radius: 12px; font-weight: bold; }
+  .chip.total { background: #e5e7eb; }
+  .chip.activos { background: #dcfce7; color: #15803d; }
+  .chip.inactivos { background: #fee2e2; color: #b91c1c; }
+  .signatures { margin-top: 60px; display: flex; justify-content: space-around; }
+  .sig { width: 220px; text-align: center; }
+  .sig-line { border-top: 1px solid #1f2937; padding-top: 5px; font-size: 10.5px; }
+  .sig-line .rol { font-weight: bold; }
+  .footer { margin-top: 20px; text-align: right; font-size: 9px; color: #6b7280; }
+  tr { page-break-inside: avoid; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">Nómina de Estudiantes</div>
+    <div class="subtitle">${anioActivo?.nombre || "Año Lectivo"}</div>
+  </div>
+  <div class="meta">
+    <div class="meta-box">
+      <div class="lbl">Grado</div>
+      <div class="val">${gradoActual.nombre} — Paralelo "${gradoActual.paralelo}"</div>
+    </div>
+    <div class="meta-box">
+      <div class="lbl">${esTutor ? "Tutor(a)" : "Responsable"}</div>
+      <div class="val">${responsable}</div>
+    </div>
+    <div class="meta-box">
+      <div class="lbl">Fecha de emisión</div>
+      <div class="val">${fechaGen}</div>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th class="num">N°</th>
+        <th>Apellidos</th>
+        <th>Nombres</th>
+        <th class="cedula">Cédula / Código</th>
+        <th class="estado">Estado</th>
+      </tr>
+    </thead>
+    <tbody>${filas}</tbody>
+  </table>
+  <div class="summary">
+    <span class="chip total">Total: ${listaOrdenada.length}</span>
+    <span class="chip activos">Activos: ${activos}</span>
+    <span class="chip inactivos">Inactivos: ${inactivos}</span>
+  </div>
+  <div class="signatures">
+    <div class="sig">
+      <div class="sig-line">
+        <div class="rol">${esTutor ? "Tutor(a) del Grado" : "Docente"}</div>
+        <div>${responsable}</div>
+      </div>
+    </div>
+    <div class="sig">
+      <div class="sig-line">
+        <div class="rol">Vicerrector(a)</div>
+        <div>&nbsp;</div>
+      </div>
+    </div>
+  </div>
+  <div class="footer">Documento generado el ${fechaGen} · ${responsable}</div>
+  <script>
+    window.onload = function () { setTimeout(function () { window.print(); }, 400); };
+  </script>
+</body>
+</html>`;
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) {
+      mostrarToast(
+        "warning",
+        "Ventana bloqueada",
+        "Permite las ventanas emergentes para poder imprimir la nómina.",
+      );
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+  };
+
   const parsearListaMasiva = (
     data: string,
   ): { students: EstudianteParseado[]; errors: string[] } => {
@@ -1103,17 +1255,33 @@ export default function Estudiantes() {
                   />
                 </div>
 
-                {puedeRegistrar && (
-                  <button
-                    onClick={() => {
-                      setShowMassiveForm(true);
-                      setValidationErrors([]);
-                    }}
-                    className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm"
-                  >
-                    <FaUpload className="text-sm" /> Registrar Estudiantes
-                  </button>
-                )}
+                <div className="flex gap-2 flex-wrap">
+                  {(puedeRegistrar || esAdmin) && estudiantes.length > 0 && (
+                    <button
+                      onClick={handlePrintNomina}
+                      className="inline-flex items-center gap-2 bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm"
+                      title="Imprimir nómina completa (activos e inactivos)"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 6 2 18 2 18 9" />
+                        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                        <rect x="6" y="14" width="12" height="8" />
+                      </svg>
+                      Imprimir Nómina
+                    </button>
+                  )}
+                  {puedeRegistrar && (
+                    <button
+                      onClick={() => {
+                        setShowMassiveForm(true);
+                        setValidationErrors([]);
+                      }}
+                      className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm"
+                    >
+                      <FaUpload className="text-sm" /> Registrar Estudiantes
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
