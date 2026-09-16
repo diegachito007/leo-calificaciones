@@ -19,6 +19,7 @@ import { useData } from "../context/DataContext";
 import { Link } from "react-router-dom";
 import type { Estudiante } from "../types";
 import Layout from "../components/Layout";
+import { cacheGet, cacheSet, cacheInvalidate } from "../utils/sessionCache";
 import {
   FaUserCheck,
   FaExclamationTriangle,
@@ -175,6 +176,11 @@ const ESTRATEGIAS_NOTA = [
   { value: "reemplazar", label: "Reemplazar (Refuerzo reemplaza Original)" },
   { value: "maxima", label: "Máxima (Mayor entre Original y Refuerzo)" },
 ];
+
+// ✅ TTLs del cache de sesión (sobrevive F5, evita re-lecturas)
+const TTL_ESTUDIANTES = 1000 * 60 * 30; // 30 min
+const TTL_ACTIVIDADES = 1000 * 60 * 15; // 15 min
+const TTL_CALIFICACIONES = 1000 * 60 * 5; // 5 min
 
 // ==================== FUNCIONES AUXILIARES ====================
 
@@ -345,7 +351,6 @@ export default function Calificaciones() {
   >({});
 
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  const estudiantesCache = useRef<Map<string, Estudiante[]>>(new Map());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
@@ -573,6 +578,7 @@ export default function Calificaciones() {
       const data = snap.docs.map(
         (doc) => ({ id: doc.id, ...doc.data() }) as ActividadData,
       );
+      cacheSet(`actividades_${destrezaId}`, data);
       setActividades(data);
     } catch (error) {
       console.error("Error cargando actividades:", error);
@@ -611,6 +617,7 @@ export default function Calificaciones() {
           editadoPor: calificacion.editadoPor,
         };
       });
+      cacheSet(`calificaciones_${actividadId}`, calificacionesMap);
       setCalificaciones(calificacionesMap);
     } catch (error) {
       console.error("Error cargando calificaciones:", error);
@@ -908,7 +915,10 @@ export default function Calificaciones() {
         }
         operaciones++;
       });
-      if (operaciones > 0) await batch.commit();
+      if (operaciones > 0) {
+        await batch.commit();
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
+      }
       mostrarToast(
         "success",
         "Calificaciones guardadas",
@@ -1299,13 +1309,17 @@ export default function Calificaciones() {
 
   useEffect(() => {
     if (!gradoEfectivoId) return;
-    const cached = estudiantesCache.current.get(gradoEfectivoId);
-    if (cached && cached.length > 0) {
-      setEstudiantes(cached);
-      setActiveTab("asistencia");
-      return;
-    }
-    const fetchEstudiantes = async () => {
+    let mounted = true;
+    const cargar = async () => {
+      const cacheKey = `estudiantes_${gradoEfectivoId}`;
+      const cached = cacheGet<Estudiante[]>(cacheKey, TTL_ESTUDIANTES);
+      if (cached) {
+        if (mounted) {
+          setEstudiantes(cached);
+          setActiveTab("asistencia");
+        }
+        return;
+      }
       try {
         const q = query(
           collection(db, "estudiantes"),
@@ -1317,19 +1331,31 @@ export default function Calificaciones() {
         const data = snap.docs.map(
           (doc) => ({ id: doc.id, ...doc.data() }) as Estudiante,
         );
-        estudiantesCache.current.set(gradoEfectivoId, data);
-        setEstudiantes(data);
-        setActiveTab("asistencia");
+        cacheSet(cacheKey, data);
+        if (mounted) {
+          setEstudiantes(data);
+          setActiveTab("asistencia");
+        }
       } catch (error) {
         console.error("Error cargando estudiantes:", error);
       }
     };
-    fetchEstudiantes();
+    cargar();
+    return () => {
+      mounted = false;
+    };
   }, [gradoEfectivoId]);
 
   useEffect(() => {
     if (!destrezaEfectivaId) return;
-    const fetchActividades = async () => {
+    let mounted = true;
+    const cargar = async () => {
+      const cacheKey = `actividades_${destrezaEfectivaId}`;
+      const cached = cacheGet<ActividadData[]>(cacheKey, TTL_ACTIVIDADES);
+      if (cached) {
+        if (mounted) setActividades(cached);
+        return;
+      }
       try {
         const q = query(
           collection(db, "actividades"),
@@ -1340,12 +1366,16 @@ export default function Calificaciones() {
         const data = snap.docs.map(
           (doc) => ({ id: doc.id, ...doc.data() }) as ActividadData,
         );
-        setActividades(data);
+        cacheSet(cacheKey, data);
+        if (mounted) setActividades(data);
       } catch (error) {
         console.error("Error cargando actividades:", error);
       }
     };
-    fetchActividades();
+    cargar();
+    return () => {
+      mounted = false;
+    };
   }, [destrezaEfectivaId]);
 
   useEffect(() => {
@@ -1357,7 +1387,25 @@ export default function Calificaciones() {
       limpiar();
       return;
     }
-    const fetchCalificaciones = async () => {
+    let mounted = true;
+    const cargar = async () => {
+      const cacheKey = `calificaciones_${selectedActividadId}`;
+      const cached = cacheGet<
+        Record<
+          string,
+          {
+            nota: string;
+            observacion: string;
+            refuerzo?: RefuerzoData | null;
+            docenteId?: string;
+            editadoPor?: string;
+          }
+        >
+      >(cacheKey, TTL_CALIFICACIONES);
+      if (cached) {
+        if (mounted) setCalificaciones(cached);
+        return;
+      }
       try {
         const q = query(
           collection(db, "calificaciones"),
@@ -1390,12 +1438,16 @@ export default function Calificaciones() {
             editadoPor: calificacion.editadoPor,
           };
         });
-        setCalificaciones(calificacionesMap);
+        cacheSet(cacheKey, calificacionesMap);
+        if (mounted) setCalificaciones(calificacionesMap);
       } catch (error) {
         console.error("Error cargando calificaciones:", error);
       }
     };
-    fetchCalificaciones();
+    cargar();
+    return () => {
+      mounted = false;
+    };
   }, [selectedActividadId]);
 
   useEffect(() => {
@@ -2218,8 +2270,7 @@ export default function Calificaciones() {
                                           <FaUserTimes className="text-[9px]" />
                                           {
                                             configEstadoAsistencia?.label
-                                          }{" "}
-                                          el {actividadSeleccionada.fecha} —
+                                          } el {actividadSeleccionada.fecha} —
                                           permite nota
                                         </div>
                                       )}
@@ -2507,14 +2558,14 @@ export default function Calificaciones() {
                                       {asistencia?.editadoPor &&
                                         asistencia.editadoPor !==
                                           asistencia.registradoPor && (
-                                        <span>
-                                          {" "}
-                                          | Editó:{" "}
-                                          {nombreDocente(
-                                            asistencia.editadoPor,
-                                          )}
-                                        </span>
-                                      )}
+                                          <span>
+                                            {" "}
+                                            | Editó:{" "}
+                                            {nombreDocente(
+                                              asistencia.editadoPor,
+                                            )}
+                                          </span>
+                                        )}
                                     </div>
                                   )}
                               </div>
@@ -3054,7 +3105,10 @@ export default function Calificaciones() {
                       estudiantes.find((e) => e.id === fichaEstudianteId)
                         ?.apellidos
                     }{" "}
-                    {estudiantes.find((e) => e.id === fichaEstudianteId)?.nombres}
+                    {
+                      estudiantes.find((e) => e.id === fichaEstudianteId)
+                        ?.nombres
+                    }
                   </h3>
                   <p className="text-xs text-slate-500">
                     Todas las actividades de la destreza · edita y guarda de una
@@ -3200,11 +3254,7 @@ export default function Calificaciones() {
                 disabled={isSaving || fichaLoading || cambiosFichaCount === 0}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                {isSaving ? (
-                  <FaSpinner className="animate-spin" />
-                ) : (
-                  <FaSave />
-                )}
+                {isSaving ? <FaSpinner className="animate-spin" /> : <FaSave />}
                 Guardar cambios
                 {cambiosFichaCount > 0 && ` (${cambiosFichaCount})`}
               </button>
@@ -3245,7 +3295,10 @@ export default function Calificaciones() {
                   estudiantes.find((e) => e.id === refuerzoEstudianteId)
                     ?.apellidos
                 }{" "}
-                {estudiantes.find((e) => e.id === refuerzoEstudianteId)?.nombres}
+                {
+                  estudiantes.find((e) => e.id === refuerzoEstudianteId)
+                    ?.nombres
+                }
               </p>
               <p className="text-xs text-orange-700">
                 Nota original:{" "}

@@ -35,6 +35,7 @@ import {
   FaExclamationTriangle,
   FaExchangeAlt,
   FaLock,
+  FaSync,
 } from "react-icons/fa";
 
 interface InstitutionData {
@@ -63,49 +64,40 @@ export default function Dashboard() {
     ambitos: 0,
     calificaciones: 0,
     solicitudesPendientes: 0,
-    estudiantesEnRiesgo: 0,
+    notasEnRiesgo: 0,
   });
+  const [statsLoading, setStatsLoading] = useState(false);
   const [institutionData, setInstitutionData] =
     useState<InstitutionData | null>(null);
   const [loadingInstitution, setLoadingInstitution] = useState(true);
 
-  // ✅ Estado del rol activo: decide qué módulos/stats mostrar
   const [activeRole, setActiveRole] = useState<ActiveRole | null>(null);
   const [showRoleDialog, setShowRoleDialog] = useState(false);
 
-  // ¿El usuario es super_admin?
   const isSuperAdmin = userData?.role === "super_admin";
-  // ¿El usuario tiene capacidades de docente? (grados asignados O es tutor)
   const hasDocenteCapabilities =
     (userData?.gradosAsignados && userData.gradosAsignados.length > 0) ||
     (userData?.tutorDe && userData.tutorDe.length > 0);
-  // ¿Tiene ambos roles? → debe elegir
   const hasDualRole = isSuperAdmin && hasDocenteCapabilities;
 
-  // ✅ Al cargar, decidir el rol activo
   useEffect(() => {
     if (!userData) return;
 
-    // ✅ Envolver en async para evitar setState síncrono en el cuerpo del effect
     const determinarRol = async () => {
-      // Caso 1: solo docente → forzar docente
       if (!isSuperAdmin) {
         setActiveRole("docente");
         return;
       }
 
-      // Caso 2: solo super_admin (sin capacidades docente) → forzar admin
       if (isSuperAdmin && !hasDocenteCapabilities) {
         setActiveRole("super_admin");
         return;
       }
 
-      // Caso 3: ambos roles → revisar localStorage
       const stored = localStorage.getItem(ACTIVE_ROLE_KEY) as ActiveRole | null;
       if (stored === "super_admin" || stored === "docente") {
         setActiveRole(stored);
       } else {
-        // No hay preferencia → mostrar diálogo
         setShowRoleDialog(true);
       }
     };
@@ -145,7 +137,6 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    // ✅ No cargar datos hasta que haya rol activo definido
     if (!activeRole) return;
 
     const cargarDatos = async () => {
@@ -164,7 +155,6 @@ export default function Dashboard() {
           const anioActivo = aniosData[0];
           let qGrados: Query;
 
-          // ✅ Si está como docente, filtrar por sus grados asignados
           if (
             activeRole === "docente" &&
             userData?.gradosAsignados &&
@@ -209,93 +199,64 @@ export default function Dashboard() {
     ? userData.nombreDocumento
     : user?.displayName || "Usuario";
 
+  // ✅ Stats optimizadas: TODAS usan getCountFromServer (1 lectura por query, no N docs)
   const cargarStats = useCallback(async () => {
     if (!activeRole) return;
 
+    setStatsLoading(true);
     try {
       const gradosAsignados: string[] = userData?.gradosAsignados ?? [];
-      // ✅ Solo usar filtro docente si el rol ACTIVO es docente
       const usarFiltroDocente =
         activeRole === "docente" && gradosAsignados.length > 0;
 
       const contar = (q: Query) =>
         getCountFromServer(q).then((s) => s.data().count);
 
-      let aniosCount = 0;
-      let gradosCount = 0;
-      let estudiantesCount = 0;
-      let ambitosCount = 0;
-      let calificacionesCount = 0;
-      let solicitudesCount = 0;
-      let estudiantesEnRiesgo = 0;
-
-      aniosCount = await contar(
-        query(collection(db, "aniosLectivos"), where("activo", "==", true)),
-      );
-
-      if (usarFiltroDocente) {
-        gradosCount = await contar(
-          query(
-            collection(db, "grados"),
-            where("activo", "==", true),
-            where("__name__", "in", gradosAsignados),
-          ),
-        );
-        estudiantesCount = await contar(
-          query(
-            collection(db, "estudiantes"),
-            where("activo", "==", true),
-            where("gradoId", "in", gradosAsignados),
-          ),
-        );
-        ambitosCount = await contar(
-          query(
-            collection(db, "ambitos"),
-            where("activo", "==", true),
-            where("gradoId", "in", gradosAsignados),
-          ),
-        );
-        calificacionesCount = await contar(
-          query(
-            collection(db, "calificaciones"),
-            where("gradoId", "in", gradosAsignados),
-          ),
-        );
-      } else {
-        gradosCount = await contar(
-          query(collection(db, "grados"), where("activo", "==", true)),
-        );
-        estudiantesCount = await contar(
-          query(collection(db, "estudiantes"), where("activo", "==", true)),
-        );
-        ambitosCount = await contar(
-          query(collection(db, "ambitos"), where("activo", "==", true)),
-        );
-        calificacionesCount = await contar(collection(db, "calificaciones"));
-      }
-
-      solicitudesCount = await contar(
-        query(
+      const [
+        aniosCount,
+        gradosCount,
+        estudiantesCount,
+        ambitosCount,
+        calificacionesCount,
+        solicitudesCount,
+        notasEnRiesgo,
+      ] = await Promise.all([
+        contar(query(collection(db, "aniosLectivos"), where("activo", "==", true))),
+        usarFiltroDocente
+          ? contar(query(
+              collection(db, "grados"),
+              where("activo", "==", true),
+              where("__name__", "in", gradosAsignados),
+            ))
+          : contar(query(collection(db, "grados"), where("activo", "==", true))),
+        usarFiltroDocente
+          ? contar(query(
+              collection(db, "estudiantes"),
+              where("activo", "==", true),
+              where("gradoId", "in", gradosAsignados),
+            ))
+          : contar(query(collection(db, "estudiantes"), where("activo", "==", true))),
+        usarFiltroDocente
+          ? contar(query(
+              collection(db, "ambitos"),
+              where("activo", "==", true),
+              where("gradoId", "in", gradosAsignados),
+            ))
+          : contar(query(collection(db, "ambitos"), where("activo", "==", true))),
+        usarFiltroDocente
+          ? contar(query(
+              collection(db, "calificaciones"),
+              where("gradoId", "in", gradosAsignados),
+            ))
+          : contar(collection(db, "calificaciones")),
+        contar(query(
           collection(db, "solicitudesMatriculas"),
           where("estado", "==", "pendiente"),
-        ),
-      );
-
-      try {
-        const set = new Set<string>();
-        const snap = await getDocs(
-          query(collection(db, "calificaciones"), where("nota", "<=", 6)),
-        );
-        snap.docs.forEach((d) => {
-          const data = d.data();
-          if (!usarFiltroDocente || gradosAsignados.includes(data.gradoId)) {
-            set.add(data.estudianteId);
-          }
-        });
-        estudiantesEnRiesgo = set.size;
-      } catch (e) {
-        console.error("Error contando estudiantes en riesgo:", e);
-      }
+        )),
+        // ✅ OPTIMIZACIÓN: contar DOCUMENTOS con nota baja (no estudiantes únicos)
+        // Esto es 1 lectura en vez de N (antes descargaba todos los docs)
+        contar(query(collection(db, "calificaciones"), where("nota", "<", 7))),
+      ]);
 
       startTransition(() => {
         setStats({
@@ -305,20 +266,25 @@ export default function Dashboard() {
           ambitos: ambitosCount,
           calificaciones: calificacionesCount,
           solicitudesPendientes: solicitudesCount,
-          estudiantesEnRiesgo,
+          notasEnRiesgo,
         });
       });
     } catch (error) {
       console.error("Error cargando estadísticas:", error);
+    } finally {
+      setStatsLoading(false);
     }
   }, [userData, activeRole]);
 
-  useEffect(() => {
-    cargarStats();
+    useEffect(() => {
+    // ✅ Envolver en async para evitar setState síncrono en el cuerpo del effect
+    const ejecutar = async () => {
+      await cargarStats();
+    };
+    ejecutar();
   }, [cargarStats]);
 
   const modules = [
-    // ========== MÓDULOS SOLO SUPER_ADMIN ==========
     {
       path: "/configuracion-institucional",
       name: "Configuración Institucional",
@@ -389,7 +355,6 @@ export default function Dashboard() {
       badge: "TUTOR",
       roles: ["super_admin", "docente"] as ActiveRole[],
     },
-    // ========== MÓDULOS SOLO DOCENTE ==========
     {
       path: "/calificaciones",
       name: "Registro Asistencia Notas",
@@ -415,8 +380,8 @@ export default function Dashboard() {
       name: "Reporte Notas",
       icon: FaExclamationTriangle,
       color: "from-amber-500 to-amber-600",
-      desc: "Estudiantes con notas menores a 7 en riesgo académico",
-      stats: `${stats.estudiantesEnRiesgo} en riesgo`,
+      desc: "Calificaciones menores a 7 que requieren refuerzo",
+      stats: `${stats.notasEnRiesgo} nota${stats.notasEnRiesgo !== 1 ? "s" : ""}`,
       badge: "TUTOR/DOCENTE",
       roles: ["docente"] as ActiveRole[],
     },
@@ -432,14 +397,12 @@ export default function Dashboard() {
     },
   ];
 
-  // ✅ Filtrar módulos por rol ACTIVO (permite que algunos aparezcan en ambos)
   const filteredModules = modules.filter(
     (mod) => activeRole && mod.roles.includes(activeRole),
   );
 
   const esTutor = tutorDeAnioActivo.length > 0;
 
-  // ✅ Pantalla de carga mientras se decide el rol
   if (activeRole === null) {
     return (
       <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex items-center justify-center">
@@ -453,7 +416,6 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex flex-col">
-      {/* ==================== MODAL SELECTOR DE ROL ==================== */}
       {showRoleDialog && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-200 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in zoom-in-95 duration-200">
@@ -537,7 +499,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Header */}
       <header className="bg-white shadow-lg border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
           <div className="flex flex-col md:flex-row justify-between items-center gap-4">
@@ -556,7 +517,6 @@ export default function Dashboard() {
             </div>
 
             <div className="flex items-center gap-2">
-              {/* ✅ Badge de rol activo (visible + clickeable si tiene dual role) */}
               {hasDualRole ? (
                 <button
                   onClick={cambiarRol}
@@ -629,10 +589,7 @@ export default function Dashboard() {
                       <div className="px-4 py-3 border-b border-slate-100">
                         <div className="flex items-center gap-3">
                           <img
-                            src={
-                              user?.photoURL ||
-                              "https://via.placeholder.com/150"
-                            }
+                            src={user?.photoURL || "https://via.placeholder.com/150"}
                             alt="avatar"
                             className="w-14 h-14 rounded-full border-2 border-blue-500"
                           />
@@ -682,7 +639,6 @@ export default function Dashboard() {
                             </p>
                           </div>
                         </button>
-                        {/* ✅ Botón para cambiar de rol (solo si tiene dual role) */}
                         {hasDualRole && (
                           <button
                             onClick={cambiarRol}
@@ -726,7 +682,6 @@ export default function Dashboard() {
       </header>
 
       <main className="grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8">
-        {/* Banner de advertencia de config solo si está como super_admin */}
         {activeRole === "super_admin" &&
           loadingInstitution === false &&
           !institutionData && (
@@ -801,7 +756,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ✅ Encabezado contextual según el rol activo */}
         <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">
@@ -817,6 +771,16 @@ export default function Dashboard() {
                 : "Bienvenido a tu espacio de trabajo diario"}
             </p>
           </div>
+          {/* ✅ Botón para refrescar stats manualmente */}
+          <button
+            onClick={cargarStats}
+            disabled={statsLoading}
+            className="inline-flex items-center gap-2 px-3 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 transition-colors disabled:opacity-50"
+            title="Actualizar estadísticas"
+          >
+            <FaSync className={`text-sm ${statsLoading ? "animate-spin" : ""}`} />
+            {statsLoading ? "Actualizando..." : "Refrescar stats"}
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
