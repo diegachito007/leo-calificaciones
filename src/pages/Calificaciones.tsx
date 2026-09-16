@@ -178,7 +178,6 @@ const ESTRATEGIAS_NOTA = [
 ];
 
 // ✅ TTLs del cache de sesión (sobrevive F5, evita re-lecturas)
-const TTL_ESTUDIANTES = 1000 * 60 * 30; // 30 min
 const TTL_ACTIVIDADES = 1000 * 60 * 15; // 15 min
 const TTL_CALIFICACIONES = 1000 * 60 * 5; // 5 min
 
@@ -1079,8 +1078,11 @@ export default function Calificaciones() {
     nota: number;
     observacion: string;
   }[] => {
-    const cambios: { actividadId: string; nota: number; observacion: string }[] =
-      [];
+    const cambios: {
+      actividadId: string;
+      nota: number;
+      observacion: string;
+    }[] = [];
     actividades.forEach((a) => {
       if (!a.id) return;
       const base = fichaBase[a.id];
@@ -1330,43 +1332,39 @@ export default function Calificaciones() {
 
   // ==================== EFFECTS ====================
 
+  // ✅ ESTUDIANTES EN VIVO (onSnapshot): altas, bajas y ediciones hechas por el
+  // tutor/admin en Estudiantes.tsx se reflejan aquí al instante (~1s), sin
+  // esperar cache y sin importar el dispositivo. Mientras no haya cambios,
+  // el listener no genera lecturas; al montar lee 1 vez por estudiante.
   useEffect(() => {
     if (!gradoEfectivoId) return;
-    let mounted = true;
-    const cargar = async () => {
-      const cacheKey = `estudiantes_${gradoEfectivoId}`;
-      const cached = cacheGet<Estudiante[]>(cacheKey, TTL_ESTUDIANTES);
-      if (cached) {
-        if (mounted) {
-          setEstudiantes(cached);
-          setActiveTab("asistencia");
-        }
-        return;
-      }
-      try {
-        const q = query(
-          collection(db, "estudiantes"),
-          where("gradoId", "==", gradoEfectivoId),
-          where("activo", "==", true),
-          orderBy("apellidos", "asc"),
-        );
-        const snap = await getDocs(q);
-        const data = snap.docs.map(
+    const q = query(
+      collection(db, "estudiantes"),
+      where("gradoId", "==", gradoEfectivoId),
+      where("activo", "==", true),
+      orderBy("apellidos", "asc"),
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const data = snapshot.docs.map(
           (doc) => ({ id: doc.id, ...doc.data() }) as Estudiante,
         );
-        cacheSet(cacheKey, data);
-        if (mounted) {
-          setEstudiantes(data);
-          setActiveTab("asistencia");
-        }
-      } catch (error) {
-        console.error("Error cargando estudiantes:", error);
-      }
+        setEstudiantes(data);
+      },
+      (error) => {
+        console.error("Error escuchando estudiantes:", error);
+      },
+    );
+    return () => unsubscribe();
+  }, [gradoEfectivoId]);
+
+  // ✅ Al cambiar de grado, volver a la pestaña de asistencia (comportamiento previo)
+  useEffect(() => {
+    const reset = async () => {
+      setActiveTab("asistencia");
     };
-    cargar();
-    return () => {
-      mounted = false;
-    };
+    reset();
   }, [gradoEfectivoId]);
 
   useEffect(() => {
@@ -2281,8 +2279,7 @@ export default function Calificaciones() {
                                           <FaUserTimes className="text-[9px]" />
                                           {
                                             configEstadoAsistencia?.label
-                                          }{" "}
-                                          el {actividadSeleccionada.fecha} —
+                                          } el {actividadSeleccionada.fecha} —
                                           permite nota
                                         </div>
                                       )}
@@ -3162,8 +3159,7 @@ export default function Calificaciones() {
                       estadoBloqueaNota(estado) && esFechaHoy(a.fecha);
                     const tieneRefuerzo = !!base?.refuerzo;
                     const notaNumerica = parseFloat(valor);
-                    const esNotaBaja =
-                      !isNaN(notaNumerica) && notaNumerica < 7;
+                    const esNotaBaja = !isNaN(notaNumerica) && notaNumerica < 7;
                     const notaFinalRef = tieneRefuerzo
                       ? calcularNotaFinal(
                           parseFloat(base?.notaGuardada || "0") || 0,
@@ -3576,5 +3572,4 @@ export default function Calificaciones() {
         })}
       </div>
     </Layout>
-  );
-}
+  );}
