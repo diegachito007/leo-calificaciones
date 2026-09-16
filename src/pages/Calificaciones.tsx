@@ -266,7 +266,6 @@ export default function Calificaciones() {
     nombresDocentes,
     ready,
   } = useData();
-
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [actividades, setActividades] = useState<ActividadData[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -335,7 +334,6 @@ export default function Calificaciones() {
     fecha: new Date().toISOString().split("T")[0],
     estrategia: "promediar" as EstrategiaNota,
   });
-
   // ✅ Ficha individual: calificar varias actividades de un estudiante a la vez
   const [showFichaModal, setShowFichaModal] = useState(false);
   const [fichaEstudianteId, setFichaEstudianteId] = useState<string | null>(
@@ -343,13 +341,16 @@ export default function Calificaciones() {
   );
   const [fichaLoading, setFichaLoading] = useState(false);
   const [fichaNotas, setFichaNotas] = useState<Record<string, string>>({});
+  // ✅ NUEVO: observaciones editables por actividad dentro de la ficha
+  const [fichaObservaciones, setFichaObservaciones] = useState<
+    Record<string, string>
+  >({});
   const [fichaBase, setFichaBase] = useState<Record<string, FichaBaseEntry>>(
     {},
   );
   const [fichaAsistencias, setFichaAsistencias] = useState<
     Record<string, EstadoAsistencia | undefined>
   >({});
-
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
@@ -1000,6 +1001,7 @@ export default function Calificaciones() {
     setShowFichaModal(true);
     setFichaLoading(true);
     setFichaNotas({});
+    setFichaObservaciones({});
     setFichaBase({});
     setFichaAsistencias({});
     try {
@@ -1010,7 +1012,6 @@ export default function Calificaciones() {
         setFichaLoading(false);
         return;
       }
-
       const snapCal = await getDocs(
         query(
           collection(db, "calificaciones"),
@@ -1033,7 +1034,6 @@ export default function Calificaciones() {
           notaOriginalPrevio: data.notaOriginal,
         };
       });
-
       const fechas = Array.from(new Set(actividades.map((a) => a.fecha)));
       const asis: Record<string, EstadoAsistencia | undefined> = {};
       for (let i = 0; i < fechas.length; i += 30) {
@@ -1050,16 +1050,17 @@ export default function Calificaciones() {
           asis[data.fecha] = normalizarEstado(data.estado, data.v2);
         });
       }
-
       setFichaBase(base);
       setFichaAsistencias(asis);
-
       const notas: Record<string, string> = {};
+      const obs: Record<string, string> = {};
       actividades.forEach((a) => {
         if (!a.id) return;
         notas[a.id] = base[a.id]?.notaGuardada ?? "";
+        obs[a.id] = base[a.id]?.observacion ?? "";
       });
       setFichaNotas(notas);
+      setFichaObservaciones(obs);
     } catch (error) {
       console.error("Error cargando ficha del estudiante:", error);
       mostrarToast(
@@ -1072,33 +1073,57 @@ export default function Calificaciones() {
     }
   };
 
-  // ✅ Guardar ficha: SOLO las notas modificadas de ESE estudiante, en 1 batch
-  const guardarFichaEstudiante = async () => {
-    if (!fichaEstudianteId) return;
-
-    const cambios: { actividadId: string; nota: number }[] = [];
+  // ✅ Calcular cambios pendientes en la ficha (nota y/o observación)
+  const calcularCambiosFicha = (): {
+    actividadId: string;
+    nota: number;
+    observacion: string;
+  }[] => {
+    const cambios: { actividadId: string; nota: number; observacion: string }[] =
+      [];
     actividades.forEach((a) => {
       if (!a.id) return;
       const base = fichaBase[a.id];
-      const valor = (fichaNotas[a.id] ?? "").trim();
-      const valorBase = (base?.notaGuardada ?? "").trim();
-      if (valor === valorBase || valor === "") return;
-      const num = parseFloat(valor);
-      if (isNaN(num) || num < 0 || num > 10) return;
       const estado = fichaAsistencias[a.fecha];
       if (estadoBloqueaNota(estado) && esFechaHoy(a.fecha)) return;
-      cambios.push({ actividadId: a.id, nota: round2(num) });
+      const valorNota = (fichaNotas[a.id] ?? "").trim();
+      const valorNotaBase = (base?.notaGuardada ?? "").trim();
+      const valorObs = (fichaObservaciones[a.id] ?? "").trim();
+      const valorObsBase = (base?.observacion ?? "").trim();
+      // Sin nota previa ni nueva: nada que guardar
+      if (valorNota === "" && valorNotaBase === "") return;
+      let notaFinal: number;
+      if (valorNota !== "") {
+        const num = parseFloat(valorNota);
+        if (isNaN(num) || num < 0 || num > 10) return;
+        notaFinal = round2(num);
+      } else {
+        notaFinal = parseFloat(valorNotaBase) || 0;
+      }
+      const notaCambiada = valorNota !== valorNotaBase;
+      const obsCambiada = valorObs !== valorObsBase;
+      if (!notaCambiada && !obsCambiada) return;
+      cambios.push({
+        actividadId: a.id,
+        nota: notaFinal,
+        observacion: valorObs,
+      });
     });
+    return cambios;
+  };
 
+  // ✅ Guardar ficha: SOLO los cambios de ESE estudiante (notas y/o observaciones), en 1 batch
+  const guardarFichaEstudiante = async () => {
+    if (!fichaEstudianteId) return;
+    const cambios = calcularCambiosFicha();
     if (cambios.length === 0) {
       mostrarToast(
         "info",
         "Sin cambios",
-        "No hay notas modificadas para guardar.",
+        "No hay notas u observaciones modificadas para guardar.",
       );
       return;
     }
-
     setIsSaving(true);
     try {
       const batch = writeBatch(db);
@@ -1108,7 +1133,7 @@ export default function Calificaciones() {
           estudianteId: fichaEstudianteId,
           actividadId: c.actividadId,
           nota: c.nota,
-          observacion: base?.observacion || "",
+          observacion: c.observacion,
           refuerzo: base?.refuerzo || null,
           updatedAt: serverTimestamp(),
         };
@@ -1137,15 +1162,13 @@ export default function Calificaciones() {
         }
       });
       await batch.commit();
-
       mostrarToast(
         "success",
         "Ficha guardada",
-        `Se guardaron ${cambios.length} nota(s) del estudiante.`,
+        `Se guardaron ${cambios.length} registro(s) del estudiante (notas y/o observaciones).`,
       );
       setShowFichaModal(false);
       setFichaEstudianteId(null);
-
       if (
         selectedActividadId &&
         cambios.some((c) => c.actividadId === selectedActividadId)
@@ -1157,7 +1180,7 @@ export default function Calificaciones() {
       mostrarToast(
         "error",
         "Error al guardar",
-        "No se pudieron guardar las notas.",
+        "No se pudieron guardar los cambios.",
       );
     } finally {
       setIsSaving(false);
@@ -1311,7 +1334,7 @@ export default function Calificaciones() {
     if (!gradoEfectivoId) return;
     let mounted = true;
     const cargar = async () => {
-      const cacheKey = `estudiantesActivos_${gradoEfectivoId}`;
+      const cacheKey = `estudiantes_${gradoEfectivoId}`;
       const cached = cacheGet<Estudiante[]>(cacheKey, TTL_ESTUDIANTES);
       if (cached) {
         if (mounted) {
@@ -1626,20 +1649,8 @@ export default function Calificaciones() {
     actividadSeleccionada?.estrategiaNota ||
     "promediar";
 
-  // ✅ Contador de cambios pendientes en la ficha individual
-  const cambiosFichaCount = showFichaModal
-    ? actividades.filter((a) => {
-        if (!a.id) return false;
-        const valor = (fichaNotas[a.id] ?? "").trim();
-        const valorBase = (fichaBase[a.id]?.notaGuardada ?? "").trim();
-        if (valor === "" || valor === valorBase) return false;
-        const num = parseFloat(valor);
-        if (isNaN(num) || num < 0 || num > 10) return false;
-        const estado = fichaAsistencias[a.fecha];
-        if (estadoBloqueaNota(estado) && esFechaHoy(a.fecha)) return false;
-        return true;
-      }).length
-    : 0;
+  // ✅ Contador de cambios pendientes en la ficha individual (notas y/o observaciones)
+  const cambiosFichaCount = showFichaModal ? calcularCambiosFicha().length : 0;
 
   return (
     <Layout>
@@ -2270,7 +2281,8 @@ export default function Calificaciones() {
                                           <FaUserTimes className="text-[9px]" />
                                           {
                                             configEstadoAsistencia?.label
-                                          } el {actividadSeleccionada.fecha} —
+                                          }{" "}
+                                          el {actividadSeleccionada.fecha} —
                                           permite nota
                                         </div>
                                       )}
@@ -3090,7 +3102,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
-      {/* ==================== MODAL FICHA INDIVIDUAL ==================== */}
+      {/* ==================== MODAL FICHA INDIVIDUAL (con observaciones) ==================== */}
       {showFichaModal && fichaEstudianteId && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -3111,8 +3123,8 @@ export default function Calificaciones() {
                     }
                   </h3>
                   <p className="text-xs text-slate-500">
-                    Todas las actividades de la destreza · edita y guarda de una
-                    vez
+                    Notas y observaciones de todas las actividades · guarda todo
+                    de una vez
                   </p>
                 </div>
               </div>
@@ -3127,7 +3139,6 @@ export default function Calificaciones() {
                 <FaTimes />
               </button>
             </div>
-
             {fichaLoading ? (
               <div className="flex items-center justify-center py-12">
                 <FaSpinner className="animate-spin text-3xl text-blue-600" />
@@ -3140,12 +3151,19 @@ export default function Calificaciones() {
                     if (!a.id) return null;
                     const base = fichaBase[a.id];
                     const valor = fichaNotas[a.id] ?? "";
+                    const obsActual = fichaObservaciones[a.id] ?? "";
+                    const obsModificada =
+                      obsActual.trim() !== (base?.observacion ?? "").trim();
                     const modificada =
-                      valor.trim() !== (base?.notaGuardada ?? "").trim();
+                      valor.trim() !== (base?.notaGuardada ?? "").trim() ||
+                      obsModificada;
                     const estado = fichaAsistencias[a.fecha];
                     const bloqueada =
                       estadoBloqueaNota(estado) && esFechaHoy(a.fecha);
                     const tieneRefuerzo = !!base?.refuerzo;
+                    const notaNumerica = parseFloat(valor);
+                    const esNotaBaja =
+                      !isNaN(notaNumerica) && notaNumerica < 7;
                     const notaFinalRef = tieneRefuerzo
                       ? calcularNotaFinal(
                           parseFloat(base?.notaGuardada || "0") || 0,
@@ -3153,7 +3171,6 @@ export default function Calificaciones() {
                           a.estrategiaNota,
                         )
                       : null;
-
                     return (
                       <div
                         key={a.id}
@@ -3242,12 +3259,39 @@ export default function Calificaciones() {
                             )}
                           </div>
                         </div>
+                        {/* ✅ NUEVO: Observación por actividad (visible si hay nota) */}
+                        {(valor !== "" || !!base?.notaGuardada) &&
+                          !bloqueada && (
+                            <div className="mt-2">
+                              <input
+                                type="text"
+                                value={obsActual}
+                                onChange={(e) =>
+                                  setFichaObservaciones((prev) => ({
+                                    ...prev,
+                                    [a.id as string]: e.target.value,
+                                  }))
+                                }
+                                placeholder={
+                                  esNotaBaja
+                                    ? "Nota baja: indica el motivo..."
+                                    : "Observación (opcional)..."
+                                }
+                                className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
+                                  esNotaBaja
+                                    ? "border-amber-400 bg-amber-50"
+                                    : obsModificada
+                                      ? "border-blue-400 bg-blue-50"
+                                      : "border-slate-300"
+                                }`}
+                              />
+                            </div>
+                          )}
                       </div>
                     );
                   })}
               </div>
             )}
-
             <div className="flex gap-2 mt-6">
               <button
                 onClick={guardarFichaEstudiante}
