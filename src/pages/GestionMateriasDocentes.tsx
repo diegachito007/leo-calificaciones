@@ -69,6 +69,7 @@ interface AsignacionConInfo extends AsignaturaDocente {
   gradoParalelo: string;
   destrezaNombre: string;
   ambitoNombre: string;
+  huerfana: boolean;
 }
 
 export default function GestionMateriasDocentes() {
@@ -95,6 +96,7 @@ export default function GestionMateriasDocentes() {
   const [isTransferring, setIsTransferring] = useState(false);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
+
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
     title: "",
@@ -157,7 +159,6 @@ export default function GestionMateriasDocentes() {
   // ==================== CARGA DE DATOS ====================
   useEffect(() => {
     if (!ready || !anioActivo?.id) return;
-
     const cargarDatos = async () => {
       setLoading(true);
       try {
@@ -191,7 +192,6 @@ export default function GestionMateriasDocentes() {
         setLoading(false);
       }
     };
-
     cargarDatos();
   }, [ready, anioActivo?.id, mostrarToast]);
 
@@ -203,6 +203,12 @@ export default function GestionMateriasDocentes() {
       const destreza = destrezas.find((d) => d.id === asig.destrezaId);
       const ambito = ambitos.find((a) => a.id === destreza?.ambitoId);
 
+      // ✅ Huérfana: docente activo con materias en un grado que YA NO tiene asignado
+      const huerfana =
+        !!docente &&
+        docente.status === "active" &&
+        !(docente.gradosAsignados || []).includes(asig.gradoId);
+
       return {
         ...asig,
         docenteNombre: docente?.displayName || "Desconocido",
@@ -211,9 +217,16 @@ export default function GestionMateriasDocentes() {
         gradoParalelo: grado?.paralelo || "",
         destrezaNombre: destreza?.nombre || "—",
         ambitoNombre: ambito?.nombre || "—",
+        huerfana,
       };
     });
   }, [asignaciones, users, grados, destrezas, ambitos]);
+
+  // ✅ Asignaciones huérfanas (grado removido al docente)
+  const asignacionesHuerfanas = useMemo(
+    () => asignacionesConInfo.filter((a) => a.huerfana),
+    [asignacionesConInfo],
+  );
 
   // ==================== FILTROS ====================
   const asignacionesFiltradas = useMemo(() => {
@@ -330,6 +343,43 @@ export default function GestionMateriasDocentes() {
     } catch (error) {
       console.error("Error quitando materias:", error);
       mostrarToast("error", "Error", "No se pudieron quitar las materias.");
+    }
+  }
+
+  // ✅ LIMPIAR HUÉRFANAS: desactiva en lote todas las asignaciones de grados removidos
+  async function limpiarHuerfanas() {
+    if (asignacionesHuerfanas.length === 0) return;
+    const confirmado = await confirmar(
+      "Limpiar asignaciones huérfanas",
+      `Se desactivarán ${asignacionesHuerfanas.length} asignación(es) de materias en grados que los docentes YA NO tienen asignados.\n\nEsto liberará esas materias para que otros docentes puedan asignarlas en Mi Horario. El historial de notas NO se toca.`,
+      {
+        confirmText: "Sí, limpiar",
+        cancelText: "Cancelar",
+        confirmColor: "bg-amber-600 hover:bg-amber-700",
+        icon: FaTrash,
+      },
+    );
+    if (!confirmado) return;
+
+    try {
+      const batch = writeBatch(db);
+      asignacionesHuerfanas.forEach((a) => {
+        batch.update(doc(db, "asignaturasDocente", a.id), { activo: false });
+      });
+      await batch.commit();
+
+      setAsignaciones((prev) =>
+        prev.filter((a) => !asignacionesHuerfanas.some((h) => h.id === a.id)),
+      );
+      mostrarToast(
+        "success",
+        "Limpieza completada",
+        `${asignacionesHuerfanas.length} asignación(es) huérfana(s) desactivada(s). Las materias quedaron libres.`,
+        6000,
+      );
+    } catch (error) {
+      console.error("Error limpiando huérfanas:", error);
+      mostrarToast("error", "Error al limpiar", "No se pudieron desactivar las asignaciones.");
     }
   }
 
@@ -461,7 +511,6 @@ export default function GestionMateriasDocentes() {
     const totalDocentes = new Set(asignaciones.map((a) => a.docenteId)).size;
     const totalGrados = new Set(asignaciones.map((a) => a.gradoId)).size;
     const totalMaterias = new Set(asignaciones.map((a) => a.destrezaId)).size;
-
     return { totalAsignaciones, totalDocentes, totalGrados, totalMaterias };
   }, [asignaciones]);
 
@@ -579,6 +628,32 @@ export default function GestionMateriasDocentes() {
         </div>
       </div>
 
+      {/* ✅ AVISO DE ASIGNACIONES HUÉRFANAS */}
+      {asignacionesHuerfanas.length > 0 && (
+        <div className="mb-4 bg-amber-50 border-l-4 border-amber-400 p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <FaExclamationTriangle className="text-amber-600 text-xl mt-0.5 shrink-0" />
+            <div>
+              <h3 className="font-semibold text-amber-900">
+                {asignacionesHuerfanas.length} asignación(es) huérfana(s)
+                detectada(s)
+              </h3>
+              <p className="text-sm text-amber-700 mt-1">
+                Docentes con materias activas en grados que ya no tienen
+                asignados. Estas materias quedan bloqueadas para otros docentes
+                hasta limpiarlas.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={limpiarHuerfanas}
+            className="shrink-0 inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+          >
+            <FaTrash /> Limpiar huérfanas
+          </button>
+        </div>
+      )}
+
       {/* Filtros */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -669,7 +744,7 @@ export default function GestionMateriasDocentes() {
           {Object.entries(agrupadoPorDocente).map(([docenteId, materias]) => {
             const docente = users.find((u) => u.uid === docenteId);
             if (!docente) return null;
-
+            const huerfanasDelDocente = materias.filter((m) => m.huerfana).length;
             return (
               <div
                 key={docenteId}
@@ -696,6 +771,11 @@ export default function GestionMateriasDocentes() {
                       <p className="text-white/80 text-xs">
                         {docente.email} · {materias.length} materia
                         {materias.length !== 1 ? "s" : ""}
+                        {huerfanasDelDocente > 0 && (
+                          <span className="ml-1 text-amber-300 font-semibold">
+                            · {huerfanasDelDocente} huérfana(s)
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -722,13 +802,20 @@ export default function GestionMateriasDocentes() {
                   {materias.map((asig) => (
                     <div
                       key={asig.id}
-                      className="px-5 py-3 flex items-center justify-between gap-3 hover:bg-slate-50"
+                      className={`px-5 py-3 flex items-center justify-between gap-3 hover:bg-slate-50 ${
+                        asig.huerfana ? "bg-amber-50/60" : ""
+                      }`}
                     >
                       <div className="flex items-center gap-3 flex-1 min-w-0">
                         <FaBook className="text-purple-500 text-sm shrink-0" />
                         <div className="min-w-0">
-                          <p className="font-medium text-slate-900 text-sm truncate">
+                          <p className="font-medium text-slate-900 text-sm truncate flex items-center gap-2">
                             {asig.destrezaNombre}
+                            {asig.huerfana && (
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300 font-bold shrink-0">
+                                ⚠️ Grado removido
+                              </span>
+                            )}
                           </p>
                           <p className="text-xs text-slate-500">
                             {asig.ambitoNombre} · {asig.gradoNombre} -{" "}

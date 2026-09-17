@@ -7,6 +7,7 @@ import {
   query,
   orderBy,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -204,14 +205,48 @@ export default function GestionUsuarios() {
     }
   }
 
+  // ✅ GUARDAR ASIGNACIÓN CON CASCADA: al quitar un grado, se desactivan
+  // automáticamente sus materias en "asignaturasDocente"
   async function guardarAsignacion() {
     if (!selectedUserForGrados) return;
     try {
+      // Detectar grados que se están QUITANDO en esta edición
+      const gradosPrevios = selectedUserForGrados.gradosAsignados || [];
+      const gradosRemovidos = gradosPrevios.filter(
+        (g) => !gradosSeleccionados.includes(g),
+      );
+
       await updateDoc(doc(db, "usuarios", selectedUserForGrados.uid), {
         gradosAsignados: gradosSeleccionados,
         tutorDe: tutorDe,
       });
-      mostrarToast("success", "Asignación guardada", "Los grados y tutorías se actualizaron correctamente.");
+
+      // ✅ CASCADA: desactivar las materias de los grados removidos
+      let materiasDesasignadas = 0;
+      if (gradosRemovidos.length > 0) {
+        const q = query(
+          collection(db, "asignaturasDocente"),
+          where("docenteId", "==", selectedUserForGrados.uid),
+          where("activo", "==", true),
+        );
+        const snap = await getDocs(q);
+        const batch = writeBatch(db);
+        snap.docs.forEach((d) => {
+          if (gradosRemovidos.includes(d.data().gradoId)) {
+            batch.update(d.ref, { activo: false });
+            materiasDesasignadas++;
+          }
+        });
+        if (materiasDesasignadas > 0) await batch.commit();
+      }
+
+      mostrarToast(
+        "success",
+        "Asignación guardada",
+        materiasDesasignadas > 0
+          ? `Grados y tutorías actualizados. Se desasignaron ${materiasDesasignadas} materia(s) de los grados removidos.`
+          : "Los grados y tutorías se actualizaron correctamente.",
+      );
       setShowGradosModal(false);
       setSelectedUserForGrados(null);
       setGradosSeleccionados([]);
@@ -254,12 +289,12 @@ export default function GestionUsuarios() {
         where("activo", "==", true),
       );
       const snap = await getDocs(q);
-      let count = 0;
-      for (const d of snap.docs) {
-        await updateDoc(doc(db, "asignaturasDocente", d.id), { activo: false });
-        count++;
-      }
-      return count;
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => {
+        batch.update(d.ref, { activo: false });
+      });
+      if (snap.docs.length > 0) await batch.commit();
+      return snap.docs.length;
     } catch (error) {
       console.error("Error desactivando materias:", error);
       return 0;
@@ -597,6 +632,30 @@ export default function GestionUsuarios() {
                   <p className="text-sm text-yellow-800">⚠️ Si no seleccionas ningún grado, el usuario no podrá ver nada en su panel.</p>
                 </div>
               )}
+
+              {gradosSeleccionados.length > 0 &&
+                (selectedUserForGrados.gradosAsignados || []).some(
+                  (g) => !gradosSeleccionados.includes(g),
+                ) && (
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-sm text-amber-800">
+                      ⚠️ Al guardar, las materias asignadas en{" "}
+                      <strong>
+                        {selectedUserForGrados.gradosAsignados?.filter(
+                          (g) => !gradosSeleccionados.includes(g),
+                        )
+                          .map(
+                            (gid) =>
+                              grados.find((g) => g.id === gid)?.nombre +
+                              " " +
+                              (grados.find((g) => g.id === gid)?.paralelo || ""),
+                          )
+                          .join(", ")}
+                      </strong>{" "}
+                      se desasignarán automáticamente de su horario.
+                    </p>
+                  </div>
+                )}
             </div>
             <div className="border-t border-gray-200 px-6 py-4 flex gap-3">
               <button onClick={guardarAsignacion} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium">
