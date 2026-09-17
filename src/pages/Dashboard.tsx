@@ -221,38 +221,56 @@ export default function Dashboard() {
         solicitudesCount,
         notasEnRiesgo,
       ] = await Promise.all([
-        contar(query(collection(db, "aniosLectivos"), where("activo", "==", true))),
+        contar(
+          query(collection(db, "aniosLectivos"), where("activo", "==", true)),
+        ),
         usarFiltroDocente
-          ? contar(query(
-              collection(db, "grados"),
-              where("activo", "==", true),
-              where("__name__", "in", gradosAsignados),
-            ))
-          : contar(query(collection(db, "grados"), where("activo", "==", true))),
+          ? contar(
+              query(
+                collection(db, "grados"),
+                where("activo", "==", true),
+                where("__name__", "in", gradosAsignados),
+              ),
+            )
+          : contar(
+              query(collection(db, "grados"), where("activo", "==", true)),
+            ),
         usarFiltroDocente
-          ? contar(query(
-              collection(db, "estudiantes"),
-              where("activo", "==", true),
-              where("gradoId", "in", gradosAsignados),
-            ))
-          : contar(query(collection(db, "estudiantes"), where("activo", "==", true))),
+          ? contar(
+              query(
+                collection(db, "estudiantes"),
+                where("activo", "==", true),
+                where("gradoId", "in", gradosAsignados),
+              ),
+            )
+          : contar(
+              query(collection(db, "estudiantes"), where("activo", "==", true)),
+            ),
         usarFiltroDocente
-          ? contar(query(
-              collection(db, "ambitos"),
-              where("activo", "==", true),
-              where("gradoId", "in", gradosAsignados),
-            ))
-          : contar(query(collection(db, "ambitos"), where("activo", "==", true))),
+          ? contar(
+              query(
+                collection(db, "ambitos"),
+                where("activo", "==", true),
+                where("gradoId", "in", gradosAsignados),
+              ),
+            )
+          : contar(
+              query(collection(db, "ambitos"), where("activo", "==", true)),
+            ),
         usarFiltroDocente
-          ? contar(query(
-              collection(db, "calificaciones"),
-              where("gradoId", "in", gradosAsignados),
-            ))
+          ? contar(
+              query(
+                collection(db, "calificaciones"),
+                where("gradoId", "in", gradosAsignados),
+              ),
+            )
           : contar(collection(db, "calificaciones")),
-        contar(query(
-          collection(db, "solicitudesMatriculas"),
-          where("estado", "==", "pendiente"),
-        )),
+        contar(
+          query(
+            collection(db, "solicitudesMatriculas"),
+            where("estado", "==", "pendiente"),
+          ),
+        ),
         // ✅ OPTIMIZACIÓN: contar DOCUMENTOS con nota baja (no estudiantes únicos)
         // Esto es 1 lectura en vez de N (antes descargaba todos los docs)
         contar(query(collection(db, "calificaciones"), where("nota", "<", 7))),
@@ -276,7 +294,7 @@ export default function Dashboard() {
     }
   }, [userData, activeRole]);
 
-    useEffect(() => {
+  useEffect(() => {
     // ✅ Envolver en async para evitar setState síncrono en el cuerpo del effect
     const ejecutar = async () => {
       await cargarStats();
@@ -346,18 +364,8 @@ export default function Dashboard() {
       roles: ["super_admin"] as ActiveRole[],
     },
     {
-      path: "/estudiantes",
-      name: "Estudiantes",
-      icon: FaUsers,
-      color: "from-green-500 to-green-600",
-      desc: "Matrícula de alumnos",
-      stats: `${stats.estudiantesActivos} activo${stats.estudiantesActivos !== 1 ? "s" : ""}`,
-      badge: "TUTOR",
-      roles: ["super_admin", "docente"] as ActiveRole[],
-    },
-    {
       path: "/calificaciones",
-      name: "Registro Asistencia Notas",
+      name: "Asistencia - Notas",
       icon: FaChartBar,
       color: "from-orange-500 to-orange-600",
       desc: "Registro de asistencia y notas",
@@ -394,6 +402,16 @@ export default function Dashboard() {
       stats: "Configurar",
       badge: "DOCENTE",
       roles: ["docente"] as ActiveRole[],
+    },
+    {
+      path: "/estudiantes",
+      name: "Estudiantes",
+      icon: FaUsers,
+      color: "from-green-500 to-green-600",
+      desc: "Listado de alumnos",
+      stats: `${stats.estudiantesActivos} activo${stats.estudiantesActivos !== 1 ? "s" : ""}`,
+      badge: "TUTOR",
+      roles: ["super_admin", "docente"] as ActiveRole[],
     },
   ];
 
@@ -589,7 +607,10 @@ export default function Dashboard() {
                       <div className="px-4 py-3 border-b border-slate-100">
                         <div className="flex items-center gap-3">
                           <img
-                            src={user?.photoURL || "https://via.placeholder.com/150"}
+                            src={
+                              user?.photoURL ||
+                              "https://via.placeholder.com/150"
+                            }
                             alt="avatar"
                             className="w-14 h-14 rounded-full border-2 border-blue-500"
                           />
@@ -778,7 +799,9 @@ export default function Dashboard() {
             className="inline-flex items-center gap-2 px-3 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium text-slate-700 transition-colors disabled:opacity-50"
             title="Actualizar estadísticas"
           >
-            <FaSync className={`text-sm ${statsLoading ? "animate-spin" : ""}`} />
+            <FaSync
+              className={`text-sm ${statsLoading ? "animate-spin" : ""}`}
+            />
             {statsLoading ? "Actualizando..." : "Refrescar stats"}
           </button>
         </div>

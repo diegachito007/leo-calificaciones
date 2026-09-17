@@ -7,6 +7,7 @@ import {
   updateDoc,
   doc,
   serverTimestamp,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -27,7 +28,6 @@ import {
   FaSyncAlt,
   FaTimes,
 } from "react-icons/fa";
-import { cacheGet, cacheSet, cacheInvalidate } from "../utils/sessionCache";
 
 // ==================== INTERFACES ====================
 
@@ -39,6 +39,7 @@ interface ActividadData {
   destrezaId: string;
   ambitoId: string;
   gradoId: string;
+  periodoId?: string;
   estrategiaNota?: string;
 }
 
@@ -66,7 +67,8 @@ interface AsignaturaDocente {
   activo: boolean;
 }
 
-interface RegistroEnRiesgo {
+// Para vista tutor: registro lineal de nota < 7
+interface RegistroRiesgo {
   calificacionId: string;
   estudianteId: string;
   estudianteNombre: string;
@@ -75,11 +77,8 @@ interface RegistroEnRiesgo {
   gradoNombre: string;
   gradoParalelo: string;
   destrezaId: string;
-  ambitoId: string;
   materiaNombre: string;
   ambitoNombre: string;
-  unidadId: string;
-  unidadNombre: string;
   actividadDetalle: string;
   actividadTipo: string;
   actividadFecha: string;
@@ -88,6 +87,14 @@ interface RegistroEnRiesgo {
   notaFinal: number;
   tieneRefuerzo: boolean;
   observacion?: string;
+}
+
+// Para vista docente: sección de materia
+interface UnidadSeccion {
+  id: string;
+  nombre: string;
+  ambitoNombre: string;
+  actividades: ActividadData[];
 }
 
 type ModoVista = "tutor" | "docente";
@@ -127,32 +134,34 @@ const calcularNotaFinalRefuerzo = (
   }
 };
 
-// ✅ TTL del cache para reporte de notas (15 minutos)
-const TTL_NOTAS = 1000 * 60 * 15;
-
 // ==================== COMPONENTE ====================
 
 export default function ReporteNotas() {
   const { user, userData } = useAuth();
-  const { grados, ambitos, destrezas, anioActivo, ready } = useData();
+  const { grados, ambitos, destrezas, anioActivo, periodoActual, ready } =
+    useData();
 
   const [asignaturasDocente, setAsignaturasDocente] = useState<
     AsignaturaDocente[]
   >([]);
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [actividades, setActividades] = useState<ActividadData[]>([]);
-  const [calificacionesBajas, setCalificacionesBajas] = useState<
-    CalificacionData[]
-  >([]);
+  const [calificaciones, setCalificaciones] = useState<CalificacionData[]>([]);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [modoVista, setModoVista] = useState<ModoVista>("tutor");
   const [gradoTutorSel, setGradoTutorSel] = useState<string>("");
   const [gradoDocenteSel, setGradoDocenteSel] = useState<string>("");
 
-  // ✅ Modal de refuerzo
+  // Modal de refuerzo (compartido por ambas vistas)
   const [showRefuerzoModal, setShowRefuerzoModal] = useState(false);
-  const [refuerzoRegistro, setRefuerzoRegistro] =
-    useState<RegistroEnRiesgo | null>(null);
+  const [refuerzoRegistro, setRefuerzoRegistro] = useState<{
+    calificacionId: string;
+    estudianteNombre: string;
+    materiaNombre: string;
+    actividadDetalle: string;
+    notaOriginal: number;
+    estrategiaActividad: string;
+  } | null>(null);
   const [refuerzoForm, setRefuerzoForm] = useState({
     nota: 7,
     detalle: "",
@@ -261,7 +270,7 @@ export default function ReporteNotas() {
 
   const loading = shouldLoadData && loadedKey !== loadKey;
 
-  // ==================== CARGA DE DATOS ====================
+  // ==================== CARGA DE ASIGNATURAS ====================
 
   useEffect(() => {
     if (!user?.uid || esAdmin || !anioActivo?.id) return;
@@ -286,26 +295,65 @@ export default function ReporteNotas() {
     fetchAsignaturas();
   }, [user?.uid, anioActivo?.id, esAdmin]);
 
+  // ==================== LISTENER EN TIEMPO REAL PARA ESTUDIANTES ====================
+  useEffect(() => {
+    if (!shouldLoadData) return;
+    const gradoIds = gradosDisponibles.map((g) => g.id);
+    if (gradoIds.length === 0) return;
+
+    const unsubscribers: (() => void)[] = [];
+    const estudiantesMap = new Map<string, Estudiante>();
+
+    for (let i = 0; i < gradoIds.length; i += 10) {
+      const lote = gradoIds.slice(i, i + 10);
+      const q = query(
+        collection(db, "estudiantes"),
+        where("activo", "==", true),
+        where("gradoId", "in", lote),
+      );
+
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "removed") {
+              estudiantesMap.delete(change.doc.id);
+            } else {
+              estudiantesMap.set(change.doc.id, {
+                id: change.doc.id,
+                ...change.doc.data(),
+              } as Estudiante);
+            }
+          });
+
+          const todos = Array.from(estudiantesMap.values()).sort((a, b) =>
+            a.apellidos.localeCompare(b.apellidos),
+          );
+          setEstudiantes(todos);
+        },
+        (error) => {
+          console.error("Error escuchando estudiantes:", error);
+        },
+      );
+      unsubscribers.push(unsubscribe);
+    }
+
+    return () => {
+      unsubscribers.forEach((u) => u());
+    };
+  }, [shouldLoadData, gradosDisponibles]);
+
+  const estudiantesFiltrados = useMemo(() => {
+    const gradoIds = new Set(gradosDisponibles.map((g) => g.id));
+    return estudiantes.filter((e) => gradoIds.has(e.gradoId));
+  }, [estudiantes, gradosDisponibles]);
+
+  // ==================== CARGA DE ACTIVIDADES Y CALIFICACIONES ====================
+
   useEffect(() => {
     if (!shouldLoadData || loadedKey === loadKey) return;
 
     const cargarReporte = async () => {
-      // ✅ Intentar obtener del cache primero
-      const cacheKey = `reporteNotas_${loadKey}`;
-      const cached = cacheGet<{
-        actividades: ActividadData[];
-        calificaciones: CalificacionData[];
-        estudiantes: Estudiante[];
-      }>(cacheKey, TTL_NOTAS);
-
-      if (cached) {
-        setActividades(cached.actividades);
-        setCalificacionesBajas(cached.calificaciones);
-        setEstudiantes(cached.estudiantes);
-        setLoadedKey(loadKey);
-        return;
-      }
-
       try {
         const gradoIds = gradosDisponibles.map((g) => g.id);
         const tutorIds = new Set(userData?.tutorDe || []);
@@ -313,8 +361,19 @@ export default function ReporteNotas() {
         const myDestrezaIds = Array.from(
           new Set(asignaturasDocente.map((a) => a.destrezaId)),
         );
+        const periodoIdActivo = periodoActual?.id;
 
         const actividadesMap = new Map<string, ActividadData>();
+        const agregarSiAplica = (act: ActividadData) => {
+          if (!gradoIds.includes(act.gradoId)) return;
+          if (
+            periodoIdActivo &&
+            act.periodoId &&
+            act.periodoId !== periodoIdActivo
+          )
+            return;
+          actividadesMap.set(act.id, act);
+        };
 
         if (esAdmin) {
           for (let i = 0; i < gradoIds.length; i += 10) {
@@ -326,10 +385,7 @@ export default function ReporteNotas() {
               ),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, {
-                id: d.id,
-                ...d.data(),
-              } as ActividadData),
+              agregarSiAplica({ id: d.id, ...d.data() } as ActividadData),
             );
           }
         } else {
@@ -342,10 +398,7 @@ export default function ReporteNotas() {
               ),
             );
             snap.docs.forEach((d) =>
-              actividadesMap.set(d.id, {
-                id: d.id,
-                ...d.data(),
-              } as ActividadData),
+              agregarSiAplica({ id: d.id, ...d.data() } as ActividadData),
             );
           }
           for (let i = 0; i < myDestrezaIds.length; i += 30) {
@@ -356,12 +409,9 @@ export default function ReporteNotas() {
                 where("destrezaId", "in", lote),
               ),
             );
-            snap.docs.forEach((d) => {
-              const act = { id: d.id, ...d.data() } as ActividadData;
-              if (gradoIds.includes(act.gradoId)) {
-                actividadesMap.set(act.id, act);
-              }
-            });
+            snap.docs.forEach((d) =>
+              agregarSiAplica({ id: d.id, ...d.data() } as ActividadData),
+            );
           }
         }
 
@@ -370,14 +420,12 @@ export default function ReporteNotas() {
 
         const actividadIds = actividadesBatch.map((a) => a.id);
         const calificacionesBatch: CalificacionData[] = [];
-
         for (let i = 0; i < actividadIds.length; i += 30) {
           const lote = actividadIds.slice(i, i + 30);
           const snap = await getDocs(
             query(
               collection(db, "calificaciones"),
               where("actividadId", "in", lote),
-              where("nota", "<=", 6),
             ),
           );
           snap.docs.forEach((d) =>
@@ -387,40 +435,13 @@ export default function ReporteNotas() {
             } as CalificacionData),
           );
         }
-
-        setCalificacionesBajas(calificacionesBatch);
-
-        const estudianteIds = Array.from(
-          new Set(calificacionesBatch.map((c) => c.estudianteId)),
-        );
-        const estudiantesBatch: Estudiante[] = [];
-
-        for (let i = 0; i < estudianteIds.length; i += 30) {
-          const lote = estudianteIds.slice(i, i + 30);
-          const snap = await getDocs(
-            query(collection(db, "estudiantes"), where("__name__", "in", lote)),
-          );
-          snap.docs.forEach((d) =>
-            estudiantesBatch.push({ id: d.id, ...d.data() } as Estudiante),
-          );
-        }
-
-        estudiantesBatch.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
-        setEstudiantes(estudiantesBatch);
-
-        // ✅ Guardar en cache antes de terminar
-        cacheSet(cacheKey, {
-          actividades: actividadesBatch,
-          calificaciones: calificacionesBatch,
-          estudiantes: estudiantesBatch,
-        });
+        setCalificaciones(calificacionesBatch);
       } catch (error) {
         console.error("Error cargando reporte:", error);
       } finally {
         setLoadedKey(loadKey);
       }
     };
-
     cargarReporte();
   }, [
     shouldLoadData,
@@ -430,48 +451,51 @@ export default function ReporteNotas() {
     asignaturasDocente,
     esAdmin,
     userData,
+    periodoActual,
   ]);
 
-  // ==================== DATOS CONSOLIDADOS ====================
+  // ==================== MAPA DE CALIFICACIONES (para vista docente) ====================
 
-  const registrosEnRiesgo = useMemo((): RegistroEnRiesgo[] => {
-    if (calificacionesBajas.length === 0) return [];
+  const calMap = useMemo(() => {
+    const map = new Map<string, CalificacionData>();
+    calificaciones.forEach((c) => {
+      map.set(`${c.estudianteId}|${c.actividadId}`, c);
+    });
+    return map;
+  }, [calificaciones]);
 
-    const estudiantesMap = new Map(estudiantes.map((e) => [e.id, e]));
+  const notaFinalDe = (c: CalificacionData): number => {
+    if (c.refuerzo) {
+      return calcularNotaFinalRefuerzo(
+        c.nota,
+        c.refuerzo.nota,
+        c.refuerzo.estrategiaElegida || "promediar",
+      );
+    }
+    return c.nota;
+  };
+
+  // ==================== VISTA TUTOR: REGISTROS DE RIESGO (< 7) ====================
+
+  const registrosRiesgo = useMemo((): RegistroRiesgo[] => {
+    if (!gradoTutorEfectivo) return [];
+    const estudiantesMap = new Map(estudiantesFiltrados.map((e) => [e.id, e]));
     const actividadesMap = new Map(actividades.map((a) => [a.id, a]));
     const gradosMap = new Map(grados.map((g) => [g.id, g]));
     const destrezasMap = new Map(destrezas.map((d) => [d.id, d]));
     const ambitosMap = new Map(ambitos.map((a) => [a.id, a]));
 
-    const registros: RegistroEnRiesgo[] = [];
-
-    calificacionesBajas.forEach((cal) => {
+    const registros: RegistroRiesgo[] = [];
+    calificaciones.forEach((cal) => {
+      const nf = notaFinalDe(cal);
+      if (nf >= 7) return; // ✅ Solo menores a 7
       const estudiante = estudiantesMap.get(cal.estudianteId);
       const actividad = actividadesMap.get(cal.actividadId);
       if (!estudiante || !actividad) return;
-
+      if (estudiante.gradoId !== gradoTutorEfectivo) return;
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
-      const ambito = ambitosMap.get(
-        actividad.ambitoId || destreza?.ambitoId || "",
-      );
-      const esInicialGrado = esGradoInicial(grado?.nombre || "");
-      const unidadId = esInicialGrado
-        ? ambito?.id || ""
-        : destreza?.id || actividad.destrezaId;
-      const unidadNombre = esInicialGrado
-        ? ambito?.nombre || "—"
-        : destreza?.nombre || "—";
-
-      let notaFinal = cal.nota;
-      if (cal.refuerzo) {
-        const estrategia = cal.refuerzo.estrategiaElegida || "promediar";
-        notaFinal = calcularNotaFinalRefuerzo(
-          cal.nota,
-          cal.refuerzo.nota,
-          estrategia,
-        );
-      }
+      const ambito = ambitosMap.get(actividad.ambitoId || destreza?.ambitoId || "");
 
       registros.push({
         calificacionId: cal.id,
@@ -482,63 +506,39 @@ export default function ReporteNotas() {
         gradoNombre: grado?.nombre || "—",
         gradoParalelo: grado?.paralelo || "",
         destrezaId: actividad.destrezaId,
-        ambitoId: ambito?.id || "",
         materiaNombre: destreza?.nombre || "—",
         ambitoNombre: ambito?.nombre || "—",
-        unidadId,
-        unidadNombre,
         actividadDetalle: actividad.detalle,
         actividadTipo: actividad.tipo,
         actividadFecha: actividad.fecha,
         estrategiaActividad: actividad.estrategiaNota || "promediar",
         notaOriginal: cal.nota,
-        notaFinal,
+        notaFinal: nf,
         tieneRefuerzo: !!cal.refuerzo,
         observacion: cal.observacion,
       });
     });
-
     registros.sort((a, b) => {
       if (a.notaFinal !== b.notaFinal) return a.notaFinal - b.notaFinal;
       return a.estudianteNombre.localeCompare(b.estudianteNombre);
     });
-
     return registros;
   }, [
-    calificacionesBajas,
-    estudiantes,
+    gradoTutorEfectivo,
+    estudiantesFiltrados,
     actividades,
+    calificaciones,
     grados,
     destrezas,
     ambitos,
   ]);
 
-  // ==================== FILTRO POR MODO + GRADO ====================
-
-  const registrosFiltrados = useMemo(() => {
-    if (modoEfectivo === "tutor") {
-      return registrosEnRiesgo.filter((r) => r.gradoId === gradoTutorEfectivo);
-    }
-    return registrosEnRiesgo.filter(
-      (r) =>
-        r.gradoId === gradoDocenteEfectivo &&
-        misUnidadesDelGrado.has(r.unidadId),
-    );
-  }, [
-    registrosEnRiesgo,
-    modoEfectivo,
-    gradoTutorEfectivo,
-    gradoDocenteEfectivo,
-    misUnidadesDelGrado,
-  ]);
-
   const estudiantesUnicosEnRiesgo = useMemo(() => {
     const map = new Map<
       string,
-      { estudiante: RegistroEnRiesgo; conteo: number; materias: Set<string> }
+      { estudiante: RegistroRiesgo; conteo: number; materias: Set<string> }
     >();
-
-    registrosFiltrados.forEach((r) => {
+    registrosRiesgo.forEach((r) => {
       if (!map.has(r.estudianteId)) {
         map.set(r.estudianteId, {
           estudiante: r,
@@ -550,15 +550,88 @@ export default function ReporteNotas() {
       entry.conteo++;
       entry.materias.add(r.materiaNombre);
     });
-
     return Array.from(map.values()).sort((a, b) => b.conteo - a.conteo);
-  }, [registrosFiltrados]);
+  }, [registrosRiesgo]);
 
-  // ==================== REFUERZO ====================
+  // ==================== VISTA DOCENTE: SECCIONES (MATRIZ) ====================
 
-  const abrirRefuerzo = (r: RegistroEnRiesgo) => {
+  const seccionesDocente = useMemo((): UnidadSeccion[] => {
+    if (!gradoDocenteEfectivo) return [];
+    const esInicial = esInicialDocente;
+
+    const unidades: { id: string; nombre: string; ambitoNombre: string }[] =
+      (() => {
+        return Array.from(misUnidadesDelGrado).map((id) => {
+          if (esInicial) {
+            const a = ambitos.find((x) => x.id === id);
+            return {
+              id,
+              nombre: a?.nombre || "—",
+              ambitoNombre: a?.nombre || "—",
+            };
+          }
+          const d = destrezas.find((x) => x.id === id);
+          const a = ambitos.find((x) => x.id === (d?.ambitoId || ""));
+          return {
+            id,
+            nombre: d?.nombre || "—",
+            ambitoNombre: a?.nombre || "—",
+          };
+        });
+      })();
+    unidades.sort((a, b) => a.nombre.localeCompare(b.nombre));
+
+    return unidades
+      .map((u) => {
+        const acts = actividades
+          .filter(
+            (a) =>
+              a.gradoId === gradoDocenteEfectivo &&
+              (esInicial ? a.ambitoId || "" === u.id : a.destrezaId === u.id),
+          )
+          .sort(
+            (a, b) =>
+              a.fecha.localeCompare(b.fecha) ||
+              a.detalle.localeCompare(b.detalle),
+          );
+        return { ...u, actividades: acts };
+      })
+      .filter((s) => s.actividades.length > 0);
+  }, [
+    gradoDocenteEfectivo,
+    esInicialDocente,
+    misUnidadesDelGrado,
+    ambitos,
+    destrezas,
+    actividades,
+  ]);
+
+  const estudiantesDelGradoDocente = useMemo(() => {
+    return estudiantesFiltrados
+      .filter((e) => e.gradoId === gradoDocenteEfectivo)
+      .sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+  }, [estudiantesFiltrados, gradoDocenteEfectivo]);
+
+  // ==================== REFUERZO (compartido) ====================
+
+  const abrirRefuerzo = (r: {
+    calificacionId: string;
+    estudianteNombre: string;
+    materiaNombre: string;
+    actividadDetalle: string;
+    notaOriginal: number;
+    destrezaId: string;
+    estrategiaActividad: string;
+  }) => {
     if (!misDestrezasTodas.has(r.destrezaId)) return;
-    setRefuerzoRegistro(r);
+    setRefuerzoRegistro({
+      calificacionId: r.calificacionId,
+      estudianteNombre: r.estudianteNombre,
+      materiaNombre: r.materiaNombre,
+      actividadDetalle: r.actividadDetalle,
+      notaOriginal: r.notaOriginal,
+      estrategiaActividad: r.estrategiaActividad,
+    });
     setRefuerzoForm({
       nota: 7,
       detalle: "",
@@ -570,10 +643,7 @@ export default function ReporteNotas() {
 
   const aplicarRefuerzo = async () => {
     if (!refuerzoRegistro) return;
-    if (!refuerzoForm.detalle.trim()) {
-      return;
-    }
-
+    if (!refuerzoForm.detalle.trim()) return;
     setIsGuardandoRefuerzo(true);
     try {
       const refuerzoData = {
@@ -583,27 +653,17 @@ export default function ReporteNotas() {
         aplicadoPor: user?.uid || "",
         estrategiaElegida: refuerzoForm.estrategia,
       };
-
-      await updateDoc(
-        doc(db, "calificaciones", refuerzoRegistro.calificacionId),
-        {
-          refuerzo: refuerzoData,
-          updatedAt: serverTimestamp(),
-        },
-      );
-
-      // ✅ Actualizar local para reflejar inmediato sin recargar todo
-      setCalificacionesBajas((prev) =>
+      await updateDoc(doc(db, "calificaciones", refuerzoRegistro.calificacionId), {
+        refuerzo: refuerzoData,
+        updatedAt: serverTimestamp(),
+      });
+      setCalificaciones((prev) =>
         prev.map((c) =>
           c.id === refuerzoRegistro.calificacionId
             ? { ...c, refuerzo: refuerzoData }
             : c,
         ),
       );
-
-      // ✅ Invalidar cache para que la próxima carga sea fresca
-      cacheInvalidate(`reporteNotas_${loadKey}`);
-
       setShowRefuerzoModal(false);
       setRefuerzoRegistro(null);
     } catch (error) {
@@ -627,76 +687,156 @@ export default function ReporteNotas() {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
-    const grado =
-      modoEfectivo === "tutor" ? gradoTutorActual : gradoDocenteActual;
-    const tituloModo =
-      modoEfectivo === "tutor"
-        ? `Vista Tutor — Grado ${grado?.nombre} "${grado?.paralelo}" (todas las unidades)`
-        : `Vista Docente — Grado ${grado?.nombre} "${grado?.paralelo}" (${
-            esInicialDocente ? "ámbitos" : "mis materias"
-          }: ${misUnidadesNombres.join(", ")})`;
+    if (modoEfectivo === "tutor") {
+      // Impresión lineal (tabla simple)
+      const filas = registrosRiesgo
+        .map(
+          (r) => `
+          <tr>
+            <td>${r.estudianteNombre}${r.estudianteCedula ? `<br><small>CI: ${r.estudianteCedula}</small>` : ""}</td>
+            <td>${r.materiaNombre}<br><small>${r.ambitoNombre}</small></td>
+            <td>${r.actividadTipo}: ${r.actividadDetalle}</td>
+            <td>${r.actividadFecha}</td>
+            <td class="nota">${r.notaOriginal}${r.tieneRefuerzo ? `<br><span class="ref">→ ${r.notaFinal} (ref.)</span>` : ""}</td>
+            <td>${r.tieneRefuerzo ? "Reforzada" : "Pendiente"}</td>
+          </tr>`,
+        )
+        .join("");
 
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Reporte de Notas - Estudiantes en Riesgo</title>
-        <style>
-          body { font-family: Arial, sans-serif; padding: 30px; color: #333; line-height: 1.5; }
-          h1 { text-align: center; color: #d97706; font-size: 24px; margin-bottom: 5px; }
-          h2 { text-align: center; color: #555; font-size: 16px; margin-bottom: 10px; font-weight: normal; }
-          .modo { text-align: center; font-size: 12px; color: #666; margin-bottom: 20px; font-style: italic; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 11px; }
-          th { background-color: #fbbf24; color: #78350f; padding: 8px; text-align: left; border: 1px solid #d97706; }
-          td { padding: 6px 8px; border: 1px solid #ddd; vertical-align: top; }
-          tr:nth-child(even) { background-color: #fef3c7; }
-          .nota { font-weight: bold; color: #dc2626; text-align: center; }
-          .refuerzo { color: #16a34a; font-size: 10px; }
-          .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #777; border-top: 1px solid #ccc; padding-top: 15px; }
-          @media print { body { padding: 0; } }
-        </style>
-      </head>
-      <body>
-        <h1>⚠️ Reporte de Estudiantes en Riesgo Académico</h1>
-        <h2>Estudiantes con notas menores a 7</h2>
-        <p class="modo">${tituloModo}</p>
-        <p><strong>Total:</strong> ${registrosFiltrados.length} registro(s) | ${estudiantesUnicosEnRiesgo.length} estudiante(s)</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Estudiante</th>
-              <th>Grado</th>
-              <th>Materia / Destreza</th>
-              <th>Actividad</th>
-              <th>Fecha</th>
-              <th>Nota</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${registrosFiltrados
-              .map(
-                (r) => `
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Estudiantes en Riesgo</title>
+          <style>
+            @page { size: letter portrait; margin: 2cm; }
+            body { font-family: Arial, sans-serif; color: #1f2937; font-size: 10px; }
+            h1 { text-align: center; font-size: 14px; margin: 0 0 5px 0; }
+            h2 { text-align: center; font-size: 11px; font-weight: normal; color: #374151; margin: 0 0 15px 0; }
+            table { width: 100%; border-collapse: collapse; font-size: 10px; }
+            th, td { border: 1px solid #6b7280; padding: 4px 6px; vertical-align: top; }
+            th { background: #fbbf24; color: #78350f; text-align: left; }
+            tr:nth-child(even) { background: #fef3c7; }
+            .nota { font-weight: bold; color: #b91c1c; text-align: center; }
+            .ref { color: #166534; font-size: 9px; }
+            .footer { margin-top: 20px; text-align: right; font-size: 8.5px; color: #6b7280; }
+          </style>
+        </head>
+        <body>
+          <h1>ESTUDIANTES EN RIESGO ACADÉMICO</h1>
+          <h2>Vista Tutor — ${gradoTutorActual?.nombre} "${gradoTutorActual?.paralelo}" · Notas &lt; 7</h2>
+          <p><strong>Total:</strong> ${registrosRiesgo.length} registros · ${estudiantesUnicosEnRiesgo.length} estudiantes</p>
+          <table>
+            <thead>
               <tr>
-                <td>${r.estudianteNombre}${r.estudianteCedula ? `<br><small>CI: ${r.estudianteCedula}</small>` : ""}</td>
-                <td>${r.gradoNombre} - ${r.gradoParalelo}</td>
-                <td>${r.materiaNombre}<br><small>${r.ambitoNombre}</small></td>
-                <td>${r.actividadTipo}: ${r.actividadDetalle}</td>
-                <td>${r.actividadFecha}</td>
-                <td class="nota">${r.notaOriginal}${r.tieneRefuerzo ? `<br><span class="refuerzo">→ ${r.notaFinal} (ref.)</span>` : ""}</td>
+                <th>Estudiante</th>
+                <th>Materia</th>
+                <th>Actividad</th>
+                <th>Fecha</th>
+                <th>Nota</th>
+                <th>Estado</th>
               </tr>
-            `,
-              )
-              .join("")}
-          </tbody>
-        </table>
-        <div class="footer">
-          <p>Generado: ${new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
-          <p>Documento interno de seguimiento académico.</p>
-        </div>
-      </body>
-      </html>`;
+            </thead>
+            <tbody>${filas}</tbody>
+          </table>
+          <div class="footer">Generado: ${new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+        </body>
+        </html>`;
+      printWindow.document.write(html);
+    } else {
+      // Impresión matriz (vista docente)
+      const seccionesHtml = seccionesDocente
+        .map((sec) => {
+          const encabezados = sec.actividades
+            .map(
+              (a) =>
+                `<th class="act">${a.tipo}<br/><span class="det">${a.detalle}</span><br/><span class="fecha">${a.fecha}</span></th>`,
+            )
+            .join("");
+          const filas = estudiantesDelGradoDocente
+            .map((est, idx) => {
+              let suma = 0;
+              let conteo = 0;
+              const celdas = sec.actividades
+                .map((a) => {
+                  const cal = calMap.get(`${est.id}|${a.id}`);
+                  if (!cal) return `<td class="sin">—</td>`;
+                  const nf = notaFinalDe(cal);
+                  suma += nf;
+                  conteo++;
+                  const cls = nf >= 7 ? "ok" : nf >= 5 ? "warn" : "bad";
+                  const ref = cal.refuerzo
+                    ? `<br/><span class="ref">de ${cal.nota}</span>`
+                    : "";
+                  return `<td class="${cls}">${round2(nf)}${ref}</td>`;
+                })
+                .join("");
+              const prom = conteo > 0 ? round2(suma / conteo) : 0;
+              return `<tr>
+                <td class="num">${idx + 1}</td>
+                <td class="name">${est.apellidos} ${est.nombres}</td>
+                ${celdas}
+                <td class="${prom >= 7 ? "ok" : "bad"}"><strong>${conteo > 0 ? prom : "—"}</strong></td>
+              </tr>`;
+            })
+            .join("");
+          return `
+            <div class="seccion">
+              <h3 class="sec-title">${sec.nombre} <small>(${sec.ambitoNombre})</small></h3>
+              <table class="grid">
+                <thead>
+                  <tr>
+                    <th class="num">#</th>
+                    <th class="name">Estudiante</th>
+                    ${encabezados}
+                    <th>Prom</th>
+                  </tr>
+                </thead>
+                <tbody>${filas}</tbody>
+              </table>
+            </div>`;
+        })
+        .join("");
 
-    printWindow.document.write(html);
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Consolidado de Calificaciones</title>
+          <style>
+            @page { size: letter landscape; margin: 1.5cm 1cm; }
+            body { font-family: Arial, sans-serif; color: #1f2937; font-size: 10px; margin: 0; }
+            h1 { text-align: center; font-size: 14px; letter-spacing: 1px; margin: 0 0 3px 0; }
+            h2 { text-align: center; font-size: 11px; font-weight: normal; color: #374151; margin: 0 0 10px 0; }
+            .seccion { margin-bottom: 18px; page-break-inside: avoid; }
+            .sec-title { font-size: 11px; font-weight: bold; margin: 8px 0 4px 0; border-bottom: 2px solid #06b6d4; padding-bottom: 2px; }
+            .sec-title small { font-weight: normal; color: #6b7280; }
+            table.grid { width: 100%; border-collapse: collapse; }
+            th, td { border: 1px solid #6b7280; padding: 3px 4px; text-align: center; vertical-align: middle; }
+            th { background: #f3f4f6; font-size: 8.5px; text-transform: uppercase; }
+            th.act { min-width: 70px; }
+            th .det { text-transform: none; font-weight: normal; color: #374151; }
+            th .fecha { font-weight: normal; color: #6b7280; }
+            td.name { text-align: left; font-size: 9.5px; min-width: 140px; }
+            td.num { width: 22px; color: #6b7280; }
+            td.sin { color: #d1d5db; }
+            td.ok { color: #166534; font-weight: bold; background: #f0fdf4; }
+            td.warn { color: #92400e; font-weight: bold; background: #fffbeb; }
+            td.bad { color: #991b1b; font-weight: bold; background: #fef2f2; }
+            .ref { color: #6b7280; font-weight: normal; font-size: 8px; }
+            tr { page-break-inside: avoid; }
+            .footer { margin-top: 12px; font-size: 8.5px; color: #6b7280; text-align: right; }
+          </style>
+        </head>
+        <body>
+          <h1>CONSOLIDADO DE CALIFICACIONES</h1>
+          <h2>Vista Docente — ${gradoDocenteActual?.nombre} "${gradoDocenteActual?.paralelo}" · ${periodoActual?.nombre || "Trimestre activo"}</h2>
+          ${seccionesHtml || "<p>Sin actividades registradas.</p>"}
+          <div class="footer">Generado: ${new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+        </body>
+        </html>`;
+      printWindow.document.write(html);
+    }
     printWindow.document.close();
     setTimeout(() => printWindow.print(), 400);
   };
@@ -715,7 +855,7 @@ export default function ReporteNotas() {
 
   return (
     <Layout>
-      {/* TABS DE MODO */}
+      {/* TABS DE MODO + IMPRIMIR */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
         <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
           <div className="flex gap-2 flex-1">
@@ -748,7 +888,11 @@ export default function ReporteNotas() {
           </div>
           <button
             onClick={handlePrint}
-            disabled={registrosFiltrados.length === 0}
+            disabled={
+              modoEfectivo === "tutor"
+                ? registrosRiesgo.length === 0
+                : seccionesDocente.length === 0
+            }
             className="inline-flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all"
           >
             <FaPrint /> Imprimir
@@ -760,130 +904,63 @@ export default function ReporteNotas() {
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
         <label className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
           <FaGraduationCap className="text-blue-600" />
-          {modoEfectivo === "tutor"
-            ? "Grado que tutoras"
-            : "Grado donde dictas"}
+          {modoEfectivo === "tutor" ? "Grado que tutoras" : "Grado donde dictas"}
         </label>
         <div className="flex flex-wrap gap-2">
-          {(modoEfectivo === "tutor"
-            ? gradosTutorizados
-            : gradosDocenteMios
-          ).map((g) => {
-            const sel =
-              modoEfectivo === "tutor"
-                ? gradoTutorEfectivo === g.id
-                : gradoDocenteEfectivo === g.id;
-            return (
-              <button
-                key={g.id}
-                onClick={() =>
-                  modoEfectivo === "tutor"
-                    ? setGradoTutorSel(g.id)
-                    : setGradoDocenteSel(g.id)
-                }
-                className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
-                  sel
-                    ? modoEfectivo === "tutor"
-                      ? "bg-purple-600 text-white border-purple-600"
-                      : "bg-cyan-600 text-white border-cyan-600"
-                    : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
-                }`}
-              >
-                {g.nombre} - {g.paralelo}
-              </button>
-            );
-          })}
+          {(modoEfectivo === "tutor" ? gradosTutorizados : gradosDocenteMios).map(
+            (g) => {
+              const sel =
+                modoEfectivo === "tutor"
+                  ? gradoTutorEfectivo === g.id
+                  : gradoDocenteEfectivo === g.id;
+              return (
+                <button
+                  key={g.id}
+                  onClick={() =>
+                    modoEfectivo === "tutor"
+                      ? setGradoTutorSel(g.id)
+                      : setGradoDocenteSel(g.id)
+                  }
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                    sel
+                      ? modoEfectivo === "tutor"
+                        ? "bg-purple-600 text-white border-purple-600"
+                        : "bg-cyan-600 text-white border-cyan-600"
+                      : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
+                  }`}
+                >
+                  {g.nombre} - {g.paralelo}
+                </button>
+              );
+            },
+          )}
         </div>
         <div className="mt-3 text-xs text-slate-600 bg-slate-50 rounded-lg p-3 border border-slate-200">
           <FaInfoCircle className="inline mr-1 text-blue-600" />
           {modoEfectivo === "tutor" ? (
             <>
-              <strong>Vista Tutor:</strong> estudiantes de{" "}
+              <strong>Vista Tutor:</strong> solo calificaciones{" "}
+              <strong className="text-red-600">menores a 7</strong> de{" "}
               <strong>
                 {gradoTutorActual?.nombre} {gradoTutorActual?.paralelo}
               </strong>{" "}
-              con notas &lt; 7 en{" "}
-              {esGradoInicial(gradoTutorActual?.nombre || "") ? (
-                <>
-                  sus <strong>ámbitos</strong>
-                </>
-              ) : (
-                <>
-                  <strong>todas las materias</strong>
-                </>
-              )}{" "}
-              del grado.
+              en todas las materias del grado.
             </>
           ) : (
             <>
-              <strong>Vista Docente:</strong> estudiantes de{" "}
+              <strong>Vista Docente:</strong> tus materias en{" "}
               <strong>
                 {gradoDocenteActual?.nombre} {gradoDocenteActual?.paralelo}
-              </strong>{" "}
-              con notas &lt; 7 en{" "}
-              {esInicialDocente ? (
-                <>
-                  tus <strong>ámbitos</strong>:{" "}
-                  <strong>{misUnidadesNombres.join(", ") || "—"}</strong>
-                </>
-              ) : (
-                <>
-                  tus <strong>materias</strong>:{" "}
-                  <strong>{misUnidadesNombres.join(", ") || "—"}</strong>
-                </>
-              )}
-              .
+              </strong>
+              : <strong>{misUnidadesNombres.join(", ") || "—"}</strong>.
             </>
           )}
-        </div>
-      </div>
-
-      {/* Resumen en tarjetas */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="bg-red-100 p-3 rounded-lg">
-              <FaExclamationTriangle className="text-red-600 text-xl" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-500 font-semibold uppercase">
-                Registros
-              </p>
-              <p className="text-2xl font-bold text-slate-800">
-                {registrosFiltrados.length}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="bg-amber-100 p-3 rounded-lg">
-              <FaUserGraduate className="text-amber-600 text-xl" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-500 font-semibold uppercase">
-                Estudiantes en riesgo
-              </p>
-              <p className="text-2xl font-bold text-slate-800">
-                {estudiantesUnicosEnRiesgo.length}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="bg-green-100 p-3 rounded-lg">
-              <FaCheckCircle className="text-green-600 text-xl" />
-            </div>
-            <div>
-              <p className="text-xs text-slate-500 font-semibold uppercase">
-                Con refuerzo aplicado
-              </p>
-              <p className="text-2xl font-bold text-slate-800">
-                {registrosFiltrados.filter((r) => r.tieneRefuerzo).length}
-              </p>
-            </div>
-          </div>
+          {periodoActual && (
+            <>
+              {" "}
+              · Trimestre activo: <strong>{periodoActual.nombre}</strong>
+            </>
+          )}
         </div>
       </div>
 
@@ -891,67 +968,107 @@ export default function ReporteNotas() {
         <div className="text-center py-16">
           <FaSpinner className="animate-spin text-4xl text-amber-500 mx-auto mb-3" />
           <p className="text-slate-600 text-sm font-medium">
-            Cargando reporte...
+            Cargando consolidado...
           </p>
         </div>
-      ) : registrosFiltrados.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
-          <div className="bg-green-100 rounded-full p-5 mb-4 inline-block">
-            <FaCheckCircle className="text-4xl text-green-500" />
+      ) : modoEfectivo === "tutor" ? (
+        // ==================== VISTA TUTOR: SOLO NOTAS < 7 (LINEAL) ====================
+        registrosRiesgo.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+            <div className="bg-green-100 rounded-full p-5 mb-4 inline-block">
+              <FaCheckCircle className="text-4xl text-green-500" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-800 mb-2">
+              ¡Excelente! No hay estudiantes en riesgo
+            </h3>
+            <p className="text-slate-600 text-sm">
+              No se encontraron calificaciones menores a 7 en{" "}
+              <strong>
+                {gradoTutorActual?.nombre} {gradoTutorActual?.paralelo}
+              </strong>
+              .
+            </p>
           </div>
-          <h3 className="text-lg font-bold text-slate-800 mb-2">
-            ¡Excelente! No hay estudiantes en riesgo
-          </h3>
-          <p className="text-slate-600 text-sm">
-            No se encontraron calificaciones menores a 7 en el grado y modo
-            seleccionados.
-          </p>
-        </div>
-      ) : (
-        <>
-          {/* Resumen por estudiante */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden mb-6">
-            <div
-              className={`px-5 py-4 flex items-center gap-3 ${
-                modoEfectivo === "tutor"
-                  ? "bg-linear-to-r from-purple-500 to-purple-600"
-                  : "bg-linear-to-r from-cyan-500 to-cyan-600"
-              }`}
-            >
-              <FaUserGraduate className="text-white text-xl" />
-              <div>
-                <h3 className="text-white font-semibold">
-                  Resumen por Estudiante
-                </h3>
-                <p className="text-white/80 text-xs">
-                  {estudiantesUnicosEnRiesgo.length} estudiante(s) con notas
-                  menores a 7
-                </p>
+        ) : (
+          <div className="space-y-6">
+            {/* Tarjetas resumen */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <div className="flex items-center gap-3">
+                  <div className="bg-red-100 p-3 rounded-lg">
+                    <FaExclamationTriangle className="text-red-600 text-xl" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 font-semibold uppercase">
+                      Registros &lt; 7
+                    </p>
+                    <p className="text-2xl font-bold text-slate-800">
+                      {registrosRiesgo.length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <div className="flex items-center gap-3">
+                  <div className="bg-amber-100 p-3 rounded-lg">
+                    <FaUserGraduate className="text-amber-600 text-xl" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 font-semibold uppercase">
+                      Estudiantes en riesgo
+                    </p>
+                    <p className="text-2xl font-bold text-slate-800">
+                      {estudiantesUnicosEnRiesgo.length}
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
+                <div className="flex items-center gap-3">
+                  <div className="bg-green-100 p-3 rounded-lg">
+                    <FaCheckCircle className="text-green-600 text-xl" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-slate-500 font-semibold uppercase">
+                      Con refuerzo
+                    </p>
+                    <p className="text-2xl font-bold text-slate-800">
+                      {registrosRiesgo.filter((r) => r.tieneRefuerzo).length}
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="divide-y divide-slate-100">
-              {estudiantesUnicosEnRiesgo.map(
-                ({ estudiante, conteo, materias }) => (
-                  <div
-                    key={estudiante.estudianteId}
-                    className="p-4 hover:bg-slate-50"
-                  >
+
+            {/* Resumen por estudiante */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="bg-linear-to-r from-purple-600 to-purple-700 px-5 py-4 flex items-center gap-3">
+                <FaUserGraduate className="text-white text-xl" />
+                <div>
+                  <h3 className="text-white font-semibold">
+                    Resumen por Estudiante
+                  </h3>
+                  <p className="text-white/80 text-xs">
+                    {estudiantesUnicosEnRiesgo.length} estudiante(s) con notas
+                    menores a 7
+                  </p>
+                </div>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {estudiantesUnicosEnRiesgo.map(({ estudiante, conteo, materias }) => (
+                  <div key={estudiante.estudianteId} className="p-4 hover:bg-slate-50">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <h4 className="font-semibold text-slate-900 text-sm">
                             {estudiante.estudianteNombre}
                           </h4>
-                          <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
-                            {estudiante.gradoNombre} -{" "}
-                            {estudiante.gradoParalelo}
-                          </span>
+                          {estudiante.estudianteCedula && (
+                            <span className="text-[10px] text-slate-500">
+                              CI: {estudiante.estudianteCedula}
+                            </span>
+                          )}
                         </div>
-                        {estudiante.estudianteCedula && (
-                          <p className="text-xs text-slate-500 mb-1">
-                            CI: {estudiante.estudianteCedula}
-                          </p>
-                        )}
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {Array.from(materias)
                             .slice(0, 4)
@@ -970,154 +1087,337 @@ export default function ReporteNotas() {
                           )}
                         </div>
                       </div>
-                      <div className="flex flex-col items-end">
-                        <span
-                          className={`px-3 py-1 rounded-full text-sm font-bold ${
-                            conteo >= 5
-                              ? "bg-red-100 text-red-700 border border-red-300"
-                              : conteo >= 3
-                                ? "bg-orange-100 text-orange-700 border border-orange-300"
-                                : "bg-amber-100 text-amber-700 border border-amber-300"
-                          }`}
-                        >
-                          {conteo} {conteo === 1 ? "nota" : "notas"} {"< 7"}
-                        </span>
-                        <span className="text-[10px] text-slate-500 mt-1">
-                          {materias.size}{" "}
-                          {materias.size === 1 ? "materia" : "materias"}
-                        </span>
-                      </div>
+                      <span
+                        className={`px-3 py-1 rounded-full text-sm font-bold shrink-0 ${
+                          conteo >= 5
+                            ? "bg-red-100 text-red-700 border border-red-300"
+                            : conteo >= 3
+                              ? "bg-orange-100 text-orange-700 border border-orange-300"
+                              : "bg-amber-100 text-amber-700 border border-amber-300"
+                        }`}
+                      >
+                        {conteo} {conteo === 1 ? "nota" : "notas"} &lt; 7
+                      </span>
                     </div>
                   </div>
-                ),
-              )}
-            </div>
-          </div>
-
-          {/* Tabla detallada con botón de Refuerzo */}
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-            <div className="bg-linear-to-r from-red-500 to-red-600 px-5 py-4 flex items-center gap-3">
-              <FaExclamationTriangle className="text-white text-xl" />
-              <div>
-                <h3 className="text-white font-semibold">
-                  Detalle de Calificaciones Bajas
-                </h3>
-                <p className="text-white/80 text-xs">
-                  {registrosFiltrados.length} registro(s) con nota menor a 7
-                </p>
+                ))}
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 border-b border-slate-200">
-                  <tr>
-                    <th className="text-left px-4 py-2.5 font-semibold text-slate-700 text-xs">
-                      Estudiante
-                    </th>
-                    <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                      Materia / Destreza
-                    </th>
-                    <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                      Actividad
-                    </th>
-                    <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                      Fecha
-                    </th>
-                    <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                      Nota
-                    </th>
-                    <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                      Acción
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {registrosFiltrados.map((r, idx) => (
-                    <tr
-                      key={`${r.estudianteId}-${r.destrezaId}-${r.actividadDetalle}-${idx}`}
-                      className="hover:bg-slate-50"
-                    >
-                      <td className="px-4 py-2.5">
-                        <p className="font-medium text-slate-900 text-xs">
-                          {r.estudianteNombre}
-                        </p>
-                        {r.estudianteCedula && (
-                          <p className="text-[10px] text-slate-500">
-                            CI: {r.estudianteCedula}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <p className="text-xs font-medium text-slate-900 flex items-center gap-1">
-                          <FaBook className="text-purple-500 text-[10px]" />
-                          {r.materiaNombre}
-                        </p>
-                        <p className="text-[10px] text-slate-500">
-                          {r.ambitoNombre}
-                        </p>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <p className="text-xs font-medium text-slate-900">
-                          {r.actividadDetalle}
-                        </p>
-                        <p className="text-[10px] text-slate-500">
-                          {r.actividadTipo}
-                        </p>
-                      </td>
-                      <td className="px-3 py-2.5 text-center text-xs text-slate-600">
-                        {r.actividadFecha}
-                      </td>
-                      <td className="px-3 py-2.5 text-center">
-                        <span
-                          className={`inline-block px-2 py-1 rounded text-xs font-bold ${
-                            r.notaFinal < 5
-                              ? "bg-red-100 text-red-700 border border-red-300"
-                              : "bg-amber-100 text-amber-700 border border-amber-300"
-                          }`}
-                        >
-                          {r.notaOriginal}
-                        </span>
-                        {r.tieneRefuerzo && (
-                          <p className="text-[10px] text-green-600 mt-1 font-semibold">
-                            → {r.notaFinal} (ref.)
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-center">
-                        {misDestrezasTodas.has(r.destrezaId) ? (
-                          !r.tieneRefuerzo ? (
-                            <button
-                              onClick={() => abrirRefuerzo(r)}
-                              className="inline-flex items-center gap-1 bg-orange-100 hover:bg-orange-200 text-orange-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
-                              title="Aplicar refuerzo a esta calificación"
-                            >
-                              <FaSyncAlt className="text-[10px]" />
-                              Refuerzo
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-green-600 font-semibold">
-                              Refuerzo aplicado
-                            </span>
-                          )
-                        ) : (
-                          <span
-                            className="text-[10px] text-slate-400"
-                            title="Materia de otro docente: solo él puede aplicar refuerzo"
-                          >
-                            —
-                          </span>
-                        )}
-                      </td>
+
+            {/* Tabla lineal detallada */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              <div className="bg-linear-to-r from-red-500 to-red-600 px-5 py-4 flex items-center gap-3">
+                <FaExclamationTriangle className="text-white text-xl" />
+                <div>
+                  <h3 className="text-white font-semibold">
+                    Detalle de Calificaciones Bajas
+                  </h3>
+                  <p className="text-white/80 text-xs">
+                    {registrosRiesgo.length} registro(s) con nota menor a 7
+                  </p>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 font-semibold text-slate-700 text-xs">
+                        Estudiante
+                      </th>
+                      <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                        Materia
+                      </th>
+                      <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                        Actividad
+                      </th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                        Fecha
+                      </th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                        Nota
+                      </th>
+                      <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                        Acción
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {registrosRiesgo.map((r, idx) => (
+                      <tr
+                        key={`${r.estudianteId}-${r.calificacionId}-${idx}`}
+                        className="hover:bg-slate-50"
+                      >
+                        <td className="px-4 py-2.5">
+                          <p className="font-medium text-slate-900 text-xs">
+                            {r.estudianteNombre}
+                          </p>
+                          {r.estudianteCedula && (
+                            <p className="text-[10px] text-slate-500">
+                              CI: {r.estudianteCedula}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-xs font-medium text-slate-900 flex items-center gap-1">
+                            <FaBook className="text-purple-500 text-[10px]" />
+                            {r.materiaNombre}
+                          </p>
+                          <p className="text-[10px] text-slate-500">
+                            {r.ambitoNombre}
+                          </p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <p className="text-xs font-medium text-slate-900">
+                            {r.actividadDetalle}
+                          </p>
+                          <p className="text-[10px] text-slate-500">
+                            {r.actividadTipo}
+                          </p>
+                        </td>
+                        <td className="px-3 py-2.5 text-center text-xs text-slate-600">
+                          {r.actividadFecha}
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          <span
+                            className={`inline-block px-2 py-1 rounded text-xs font-bold ${
+                              r.notaFinal < 5
+                                ? "bg-red-100 text-red-700 border border-red-300"
+                                : "bg-amber-100 text-amber-700 border border-amber-300"
+                            }`}
+                          >
+                            {r.notaOriginal}
+                          </span>
+                          {r.tieneRefuerzo && (
+                            <p className="text-[10px] text-green-600 mt-1 font-semibold">
+                              → {r.notaFinal} (ref.)
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-center">
+                          {misDestrezasTodas.has(r.destrezaId) ? (
+                            !r.tieneRefuerzo ? (
+                              <button
+                                onClick={() =>
+                                  abrirRefuerzo({
+                                    calificacionId: r.calificacionId,
+                                    estudianteNombre: r.estudianteNombre,
+                                    materiaNombre: r.materiaNombre,
+                                    actividadDetalle: r.actividadDetalle,
+                                    notaOriginal: r.notaOriginal,
+                                    destrezaId: r.destrezaId,
+                                    estrategiaActividad: r.estrategiaActividad,
+                                  })
+                                }
+                                className="inline-flex items-center gap-1 bg-orange-100 hover:bg-orange-200 text-orange-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                                title="Aplicar refuerzo"
+                              >
+                                <FaSyncAlt className="text-[10px]" />
+                                Refuerzo
+                              </button>
+                            ) : (
+                              <span className="text-[10px] text-green-600 font-semibold">
+                                Refuerzo aplicado
+                              </span>
+                            )
+                          ) : (
+                            <span
+                              className="text-[10px] text-slate-400"
+                              title="Materia de otro docente"
+                            >
+                              —
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </>
+        )
+      ) : (
+        // ==================== VISTA DOCENTE: MATRIZ (SIN CAMBIOS) ====================
+        seccionesDocente.length === 0 ? (
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+            <div className="bg-slate-100 rounded-full p-5 mb-4 inline-block">
+              <FaBook className="text-4xl text-slate-400" />
+            </div>
+            <h3 className="text-lg font-bold text-slate-800 mb-2">
+              Sin actividades registradas
+            </h3>
+            <p className="text-slate-600 text-sm">
+              Aún no hay actividades con calificaciones en tus materias de este
+              grado y trimestre.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {seccionesDocente.map((sec) => (
+              <div
+                key={sec.id}
+                className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden"
+              >
+                <div className="bg-linear-to-r from-cyan-600 to-cyan-700 px-5 py-3 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FaBook className="text-white text-lg" />
+                    <div>
+                      <h3 className="text-white font-semibold">{sec.nombre}</h3>
+                      <p className="text-white/80 text-xs">{sec.ambitoNombre}</p>
+                    </div>
+                  </div>
+                  <span className="text-white/90 text-xs bg-white/20 px-2 py-1 rounded-full">
+                    {sec.actividades.length} actividad(es)
+                  </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 border-b border-slate-200">
+                      <tr>
+                        <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-10">
+                          #
+                        </th>
+                        <th className="text-left px-3 py-2 font-semibold text-slate-700 text-xs min-w-45 sticky left-0 bg-slate-50">
+                          Estudiante
+                        </th>
+                        {sec.actividades.map((a) => (
+                          <th
+                            key={a.id}
+                            className="text-center px-2 py-2 font-semibold text-slate-700 text-xs min-w-28"
+                          >
+                            <div className="text-[11px] font-bold text-slate-800">
+                              {a.tipo}
+                            </div>
+                            <div
+                              className="text-[10px] font-normal text-slate-600 truncate max-w-30"
+                              title={a.detalle}
+                            >
+                              {a.detalle}
+                            </div>
+                            <div className="text-[10px] font-normal text-slate-500">
+                              {a.fecha}
+                            </div>
+                          </th>
+                        ))}
+                        <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-16">
+                          Prom
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {estudiantesDelGradoDocente.map((est, idx) => {
+                        let suma = 0;
+                        let conteo = 0;
+                        return (
+                          <tr key={est.id} className="hover:bg-slate-50">
+                            <td className="px-2 py-2 text-center text-xs text-slate-500">
+                              {idx + 1}
+                            </td>
+                            <td className="px-3 py-2 sticky left-0 bg-white">
+                              <div className="font-medium text-slate-900 text-xs truncate">
+                                {est.apellidos} {est.nombres}
+                              </div>
+                              {est.cedula && (
+                                <div className="text-[10px] text-slate-500">
+                                  CI: {est.cedula}
+                                </div>
+                              )}
+                            </td>
+                            {sec.actividades.map((a) => {
+                              const cal = calMap.get(`${est.id}|${a.id}`);
+                              if (!cal) {
+                                return (
+                                  <td
+                                    key={a.id}
+                                    className="px-2 py-2 text-center text-slate-300 text-xs"
+                                  >
+                                    —
+                                  </td>
+                                );
+                              }
+                              const nf = notaFinalDe(cal);
+                              suma += nf;
+                              conteo++;
+                              const puedeRefuerzo =
+                                !cal.refuerzo &&
+                                cal.nota < 7 &&
+                                misDestrezasTodas.has(a.destrezaId);
+                              const cls =
+                                nf >= 9
+                                  ? "bg-green-100 text-green-800 border-green-300"
+                                  : nf >= 7
+                                    ? "bg-blue-100 text-blue-800 border-blue-300"
+                                    : nf >= 5
+                                      ? "bg-amber-100 text-amber-800 border-amber-300"
+                                      : "bg-red-100 text-red-800 border-red-300";
+                              return (
+                                <td key={a.id} className="px-2 py-2 text-center">
+                                  {puedeRefuerzo ? (
+                                    <button
+                                      onClick={() =>
+                                        abrirRefuerzo({
+                                          calificacionId: cal.id,
+                                          estudianteNombre: `${est.apellidos} ${est.nombres}`,
+                                          materiaNombre: sec.nombre,
+                                          actividadDetalle: a.detalle,
+                                          notaOriginal: cal.nota,
+                                          destrezaId: a.destrezaId,
+                                          estrategiaActividad:
+                                            a.estrategiaNota || "promediar",
+                                        })
+                                      }
+                                      className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls} hover:ring-2 hover:ring-orange-400 cursor-pointer`}
+                                      title="Aplicar refuerzo"
+                                    >
+                                      {round2(nf)}
+                                    </button>
+                                  ) : (
+                                    <span
+                                      className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls}`}
+                                      title={
+                                        cal.refuerzo
+                                          ? `Refuerzo de ${cal.nota} → ${round2(nf)}`
+                                          : undefined
+                                      }
+                                    >
+                                      {round2(nf)}
+                                      {cal.refuerzo && (
+                                        <span className="block text-[9px] font-normal text-slate-500">
+                                          de {cal.nota}
+                                        </span>
+                                      )}
+                                    </span>
+                                  )}
+                                </td>
+                              );
+                            })}
+                            <td className="px-2 py-2 text-center">
+                              <span
+                                className={`inline-block px-2 py-1 rounded text-xs font-bold ${
+                                  conteo === 0
+                                    ? "text-slate-400"
+                                    : suma / conteo >= 7
+                                      ? "bg-green-100 text-green-800"
+                                      : "bg-red-100 text-red-800"
+                                }`}
+                              >
+                                {conteo > 0 ? round2(suma / conteo) : "—"}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
       )}
 
-      {/* ==================== MODAL REFUERZO ==================== */}
+      {/* ==================== MODAL REFUERZO (compartido) ==================== */}
       {showRefuerzoModal && refuerzoRegistro && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
