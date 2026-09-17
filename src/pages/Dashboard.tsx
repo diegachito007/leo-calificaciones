@@ -324,6 +324,16 @@ export default function Dashboard() {
       roles: ["super_admin"] as ActiveRole[],
     },
     {
+      path: "/gestion-materias",
+      name: "Gestión de Materias",
+      icon: FaChalkboardTeacher,
+      color: "from-teal-500 to-teal-600",
+      desc: "Administrar asignaciones de materias a docentes, transferir y quitar materias",
+      stats: "Admin",
+      badge: "ADMIN",
+      roles: ["super_admin"] as ActiveRole[],
+    },
+    {
       path: "/anios-lectivos",
       name: "Años Lectivos",
       icon: FaCalendarAlt,
