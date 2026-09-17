@@ -24,7 +24,7 @@ import ReporteAsistencias from "./pages/ReporteAsistencias";
 import ReporteNotas from "./pages/ReporteNotas";
 import ArchivedAccount from "./pages/ArchivedAccount";
 import MigracionAsistencia from "./pages/MigracionAsistencia";
-import EnMantenimiento from "./pages/EnMantenimiento"; // ✅ NUEVO
+import EnMantenimiento from "./pages/EnMantenimiento";
 import GestionMateriasDocentes from "./pages/GestionMateriasDocentes";
 
 // Formulario público y Panel de administración
