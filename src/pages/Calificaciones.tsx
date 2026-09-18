@@ -2307,10 +2307,22 @@ export default function Calificaciones() {
                           <FaTable className="text-[10px]" /> Matriz
                         </button>
                         {vistaCalificaciones === "matriz" && (
-                          <span className="text-[10px] text-slate-500">
-                            Solo lectura · para editar usa Lista o la Ficha del
-                            estudiante
-                          </span>
+                          <button
+                            onClick={() => {
+                              setEditingActividadId(null);
+                              setActividadForm({
+                                tipo: "Tarea",
+                                detalle: "",
+                                fecha: new Date().toISOString().split("T")[0],
+                                estrategiaNota: "promediar",
+                              });
+                              setShowActividadModal(true);
+                            }}
+                            className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-all"
+                            title="Crear una nueva actividad"
+                          >
+                            <FaPlus className="text-[10px]" /> Nueva actividad
+                          </button>
                         )}
                       </div>
 
@@ -2696,27 +2708,6 @@ export default function Calificaciones() {
 
                       {vistaCalificaciones === "matriz" && (
                         <>
-                          <div className="flex items-center gap-2 mb-3">
-                            <button
-                              onClick={() => {
-                                setEditingActividadId(null);
-                                setActividadForm({
-                                  tipo: "Tarea",
-                                  detalle: "",
-                                  fecha: new Date().toISOString().split("T")[0],
-                                  estrategiaNota: "promediar",
-                                });
-                                setShowActividadModal(true);
-                              }}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-all"
-                            >
-                              <FaPlus className="text-[10px]" /> Nueva actividad
-                            </button>
-                            <span className="text-[10px] text-slate-500">
-                              Haz clic en una celda para editar · clic en nota
-                              &lt;7 para refuerzo
-                            </span>
-                          </div>
                           <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
                             {loadingMatriz ? (
                               <div className="flex items-center justify-center py-12">
