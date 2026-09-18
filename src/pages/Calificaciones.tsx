@@ -1847,7 +1847,13 @@ export default function Calificaciones() {
                     return (
                       <div
                         key={est.id}
-                        className={`border rounded-lg p-3 transition-colors ${estado === "J" ? "border-green-300 bg-green-50/40" : esTutorOnly ? "border-blue-300 bg-blue-50/50" : "border-slate-200 hover:border-blue-300"}`}
+                        className={`border rounded-lg p-3 transition-colors ${
+                          estado === "J"
+                            ? "border-green-300 bg-green-50/30"
+                            : esTutorOnly
+                              ? "border-blue-300 bg-blue-50/30"
+                              : "border-slate-200 bg-white hover:border-blue-300"
+                        }`}
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex-1 min-w-0">
