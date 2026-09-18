@@ -46,6 +46,7 @@ import {
   FaChevronDown,
   FaLock,
   FaListUl,
+  FaTable,
 } from "react-icons/fa";
 import {
   type EstadoAsistencia,
@@ -265,6 +266,7 @@ export default function Calificaciones() {
     nombresDocentes,
     ready,
   } = useData();
+
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [actividades, setActividades] = useState<ActividadData[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -312,6 +314,23 @@ export default function Calificaciones() {
   const [asistenciasDiaActividad, setAsistenciasDiaActividad] = useState<
     Record<string, EstadoAsistencia | undefined>
   >({});
+  // ✅ Vista conmutable en Calificaciones: lista de tarjetas o matriz tipo Reporte Notas
+  const [vistaCalificaciones, setVistaCalificaciones] = useState<
+    "lista" | "matriz"
+  >("lista");
+  const [calificacionesMatriz, setCalificacionesMatriz] = useState<
+    Record<string, CalificacionData>
+  >({});
+  const [loadingMatriz, setLoadingMatriz] = useState(false);
+  // ✅ Edición inline en matriz: celda activa y valores temporales
+  const [celdaActiva, setCeldaActiva] = useState<{
+    estudianteId: string;
+    actividadId: string;
+  } | null>(null);
+  const [notaTemporal, setNotaTemporal] = useState("");
+  const [, setGuardandoCelda] = useState(false);
+  // ✅ UX: observación de asistencia colapsada por defecto
+  const [obsExpandida, setObsExpandida] = useState<Record<string, boolean>>({});
   const [showActividadModal, setShowActividadModal] = useState(false);
   const [showActividadesModal, setShowActividadesModal] = useState(false);
   const [editingActividadId, setEditingActividadId] = useState<string | null>(
@@ -340,7 +359,7 @@ export default function Calificaciones() {
   );
   const [fichaLoading, setFichaLoading] = useState(false);
   const [fichaNotas, setFichaNotas] = useState<Record<string, string>>({});
-  // ✅ NUEVO: observaciones editables por actividad dentro de la ficha
+  // ✅ observaciones editables por actividad dentro de la ficha
   const [fichaObservaciones, setFichaObservaciones] = useState<
     Record<string, string>
   >({});
@@ -378,19 +397,15 @@ export default function Calificaciones() {
   const gradoEfectivoNombre =
     selectedGradoNombre ||
     (gradosFiltrados.length > 0 ? gradosFiltrados[0].nombre : "");
-
   const docenteSinGrados =
     userData?.role === "docente" &&
     (!userData?.gradosAsignados || userData.gradosAsignados.length === 0);
-
   const esGradoBachillerato = esBachillerato(gradoEfectivoNombre);
   const esGradoInicialActual = esGradoInicial(gradoEfectivoNombre);
   const esTutorDelGradoActual = gradoEfectivoId
     ? (userData?.tutorDe || []).includes(gradoEfectivoId)
     : false;
-
   const estadosVisibles = useMemo(() => ESTADOS_ASISTENCIA, []);
-
   const nombreDocente = (uid?: string) =>
     uid ? nombresDocentes[uid] || "Docente" : "";
 
@@ -459,11 +474,9 @@ export default function Calificaciones() {
   })();
 
   const gradoTieneMateriasConfiguradas = materiasDelGradoDocente.length > 0;
-
   const materiaSeleccionadaEfectiva = esGradoBachillerato
     ? materiaEfectivaId
     : ambitoEfectivoId;
-
   const actividadSeleccionada = actividades.find(
     (a) => a.id === selectedActividadId,
   );
@@ -472,11 +485,9 @@ export default function Calificaciones() {
     estudiantes.length > 0 &&
     (esGradoInicialActual || materiaSeleccionadaEfectiva !== "") &&
     estudiantes.every((est) => asistencias[est.id]?.estado);
-
   const asistenciasRegistradas = Object.keys(asistencias).filter(
     (key) => asistencias[key].estado,
   ).length;
-
   const calificacionesRegistradas = estudiantes.filter((est) => {
     const cal = calificaciones[est.id];
     return cal && cal.nota && cal.nota.trim() !== "";
@@ -487,9 +498,9 @@ export default function Calificaciones() {
     gradoEfectivoId &&
     estudiantes.length > 0 &&
     (esGradoInicialActual || materiaSeleccionadaEfectiva !== "");
-
   const mostrarBarraStickyCalificaciones =
     activeTab === "calificaciones" &&
+    vistaCalificaciones === "lista" &&
     gradoEfectivoId &&
     estudiantes.length > 0 &&
     !!destrezaEfectivaId &&
@@ -918,6 +929,7 @@ export default function Calificaciones() {
       if (operaciones > 0) {
         await batch.commit();
         cacheInvalidate(`calificaciones_${selectedActividadId}`);
+        cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
       }
       mostrarToast(
         "success",
@@ -981,6 +993,7 @@ export default function Calificaciones() {
       );
       setShowRefuerzoModal(false);
       setRefuerzoEstudianteId(null);
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
       await cargarCalificaciones(selectedActividadId);
     } catch (error) {
       console.error("Error aplicando refuerzo:", error);
@@ -991,6 +1004,79 @@ export default function Calificaciones() {
       );
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // ✅ Guardar nota editada inline en la matriz
+  const guardarNotaMatriz = async () => {
+    if (!celdaActiva) return;
+    const { estudianteId, actividadId } = celdaActiva;
+    const notaNum = parseFloat(notaTemporal);
+    if (isNaN(notaNum) || notaNum < 0 || notaNum > 10) {
+      setCeldaActiva(null);
+      setNotaTemporal("");
+      return;
+    }
+    setGuardandoCelda(true);
+    try {
+      const key = `${estudianteId}|${actividadId}`;
+      const calExistente = calificacionesMatriz[key];
+      const actividad = actividadesMatriz.find((a) => a.id === actividadId);
+      if (!actividad) return;
+
+      // Verificar bloqueo por ausencia
+      const estadoAsistencia = asistenciasDiaActividad[estudianteId];
+      const actividadEsHoy = esFechaHoy(actividad.fecha);
+      if (estadoBloqueaNota(estadoAsistencia) && actividadEsHoy) {
+        mostrarToast(
+          "warning",
+          "Bloqueado por ausencia",
+          "No se puede calificar: estudiante ausente sin justificar.",
+        );
+        setGuardandoCelda(false);
+        setCeldaActiva(null);
+        setNotaTemporal("");
+        return;
+      }
+
+      if (calExistente?.id) {
+        await updateDoc(doc(db, "calificaciones", calExistente.id), {
+          nota: round2(notaNum),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        const nuevoRef = doc(collection(db, "calificaciones"));
+        await updateDoc(nuevoRef, {
+          estudianteId,
+          actividadId,
+          nota: round2(notaNum),
+          docenteId: user?.uid || "",
+          createdAt: serverTimestamp(),
+        });
+      }
+
+      // Actualizar estado local
+      const nuevaCal: CalificacionData = {
+        ...calExistente,
+        estudianteId,
+        actividadId,
+        nota: round2(notaNum),
+      };
+      setCalificacionesMatriz((prev) => ({ ...prev, [key]: nuevaCal }));
+      cacheInvalidate(`calificaciones_${actividadId}`);
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+
+      setCeldaActiva(null);
+      setNotaTemporal("");
+    } catch (error) {
+      console.error("Error guardando nota en matriz:", error);
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo guardar la calificación.",
+      );
+    } finally {
+      setGuardandoCelda(false);
     }
   };
 
@@ -1092,7 +1178,6 @@ export default function Calificaciones() {
       const valorNotaBase = (base?.notaGuardada ?? "").trim();
       const valorObs = (fichaObservaciones[a.id] ?? "").trim();
       const valorObsBase = (base?.observacion ?? "").trim();
-      // Sin nota previa ni nueva: nada que guardar
       if (valorNota === "" && valorNotaBase === "") return;
       let notaFinal: number;
       if (valorNota !== "") {
@@ -1164,6 +1249,7 @@ export default function Calificaciones() {
         }
       });
       await batch.commit();
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
       mostrarToast(
         "success",
         "Ficha guardada",
@@ -1471,6 +1557,72 @@ export default function Calificaciones() {
     };
   }, [selectedActividadId]);
 
+  // ✅ MATRIZ: carga calificaciones de TODAS las actividades de la destreza actual
+  useEffect(() => {
+    if (activeTab !== "calificaciones" || vistaCalificaciones !== "matriz")
+      return;
+    if (!destrezaEfectivaId || actividades.length === 0) {
+      return;
+    }
+    let mounted = true;
+    const cargar = async () => {
+      const cacheKey = `calificacionesMatriz_${destrezaEfectivaId}`;
+      const cached = cacheGet<Record<string, CalificacionData>>(
+        cacheKey,
+        TTL_CALIFICACIONES,
+      );
+      if (cached) {
+        if (mounted) setCalificacionesMatriz(cached);
+        return;
+      }
+      setLoadingMatriz(true);
+      try {
+        const ids = actividades.map((a) => a.id).filter(Boolean) as string[];
+        const map: Record<string, CalificacionData> = {};
+        for (let i = 0; i < ids.length; i += 30) {
+          const lote = ids.slice(i, i + 30);
+          const snap = await getDocs(
+            query(
+              collection(db, "calificaciones"),
+              where("actividadId", "in", lote),
+            ),
+          );
+          snap.docs.forEach((d) => {
+            const data = d.data() as unknown as CalificacionData;
+            map[`${data.estudianteId}|${data.actividadId}`] = {
+              id: d.id,
+              ...data,
+            };
+          });
+        }
+        cacheSet(cacheKey, map);
+        if (mounted) setCalificacionesMatriz(map);
+      } catch (error) {
+        console.error("Error cargando matriz de calificaciones:", error);
+      } finally {
+        if (mounted) setLoadingMatriz(false);
+      }
+    };
+    cargar();
+    return () => {
+      mounted = false;
+    };
+  }, [activeTab, vistaCalificaciones, destrezaEfectivaId, actividades]);
+
+  // ✅ Actividades ordenadas por fecha para las columnas de la matriz
+  // (sin useMemo: el sort es barato y el React Compiler no puede preservar
+  // memoización sobre arrays mutables)
+  const actividadesMatriz = [...actividades]
+    .filter((a): a is ActividadData & { id: string } => !!a.id)
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+  // ✅ Estado derivado: la matriz queda vacía automáticamente cuando no hay
+  // destreza o actividades. Evita el setState síncrono dentro del effect
+  // (lint react-hooks/set-state-in-effect).
+  // Operación barata: no requiere useMemo
+  const calificacionesMatrizEfectiva =
+    !destrezaEfectivaId || actividades.length === 0 ? {} : calificacionesMatriz;
+
   useEffect(() => {
     if (activeTab !== "asistencia") return;
     if (!gradoEfectivoId || !fechaAsistencia) {
@@ -1646,7 +1798,6 @@ export default function Calificaciones() {
     refuerzoForm.estrategia ||
     actividadSeleccionada?.estrategiaNota ||
     "promediar";
-
   // ✅ Contador de cambios pendientes en la ficha individual (notas y/o observaciones)
   const cambiosFichaCount = showFichaModal ? calcularCambiosFicha().length : 0;
 
@@ -1670,6 +1821,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       {!docenteSinGrados && (
         <>
           {gradosFiltrados.length > 0 ? (
@@ -1749,6 +1901,7 @@ export default function Calificaciones() {
                             setSelectedMateriaId("");
                             setSelectedAmbitoId("");
                             setSelectedDestrezaId("");
+                            setObsExpandida({});
                             setGradosExpanded(false);
                           }}
                           className={`p-3 rounded-lg border-2 transition-all duration-200 text-left text-sm ${
@@ -1826,6 +1979,7 @@ export default function Calificaciones() {
               </p>
             </div>
           )}
+
           {gradoEfectivoId &&
             !gradoTieneMateriasConfiguradas &&
             !esGradoInicialActual && (
@@ -1858,6 +2012,7 @@ export default function Calificaciones() {
                 </div>
               </div>
             )}
+
           {gradoEfectivoId &&
             (gradoTieneMateriasConfiguradas || esGradoInicialActual) && (
               <div className="bg-white rounded-xl shadow-sm border border-slate-200">
@@ -2079,6 +2234,7 @@ export default function Calificaciones() {
                     )}
                   </div>
                 </div>
+
                 <div
                   className={`p-4 ${mostrarBarraSticky || mostrarBarraStickyCalificaciones ? "pb-28" : ""}`}
                 >
@@ -2096,6 +2252,7 @@ export default function Calificaciones() {
                         </div>
                       </div>
                     )}
+
                   {estudiantes.length === 0 ? (
                     <div className="text-center py-12 text-slate-500">
                       <FaUserCheck className="text-4xl mx-auto mb-3 text-slate-300" />
@@ -2124,365 +2281,750 @@ export default function Calificaciones() {
                     </div>
                   ) : activeTab === "calificaciones" && destrezaEfectivaId ? (
                     <>
-                      <div className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-white/95 backdrop-blur border-b border-slate-200 mb-3">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => setShowActividadesModal(true)}
-                            className="flex-1 min-w-0 border border-slate-300 rounded-lg px-3 py-2.5 text-xs font-medium focus:ring-2 focus:ring-blue-500 bg-white text-left flex items-center gap-2 hover:border-blue-400 transition-all"
-                          >
-                            <FaTasks className="text-blue-600 shrink-0" />
-                            {actividadSeleccionada ? (
-                              <span className="truncate text-slate-900 font-semibold">
-                                {actividadSeleccionada.tipo} ·{" "}
-                                {actividadSeleccionada.detalle} ·{" "}
-                                {actividadSeleccionada.fecha}
-                              </span>
-                            ) : (
-                              <span className="truncate text-slate-500">
-                                {actividades.length === 0
-                                  ? "Sin actividades — crea la primera"
-                                  : "Ninguna actividad seleccionada"}
-                              </span>
-                            )}
-                          </button>
-                          <button
-                            onClick={() => setShowActividadesModal(true)}
-                            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all"
-                          >
-                            <FaSyncAlt className="text-[10px]" />
-                            {actividadSeleccionada
-                              ? "Cambiar actividad"
-                              : "Seleccionar actividad"}
-                          </button>
-                        </div>
+                      {/* ✅ Toggle de vista: Lista (editable) o Matriz (panorámica) */}
+                      <div className="flex items-center gap-2 mb-3 flex-wrap">
+                        <span className="text-xs font-semibold text-slate-700">
+                          Vista:
+                        </span>
+                        <button
+                          onClick={() => setVistaCalificaciones("lista")}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                            vistaCalificaciones === "lista"
+                              ? "bg-blue-600 text-white shadow"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          }`}
+                        >
+                          <FaListUl className="text-[10px]" /> Lista
+                        </button>
+                        <button
+                          onClick={() => setVistaCalificaciones("matriz")}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                            vistaCalificaciones === "matriz"
+                              ? "bg-blue-600 text-white shadow"
+                              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                          }`}
+                        >
+                          <FaTable className="text-[10px]" /> Matriz
+                        </button>
+                        {vistaCalificaciones === "matriz" && (
+                          <span className="text-[10px] text-slate-500">
+                            Solo lectura · para editar usa Lista o la Ficha del
+                            estudiante
+                          </span>
+                        )}
                       </div>
-                      {!selectedActividadId || !actividadSeleccionada ? (
-                        <div className="text-center py-10 text-slate-500">
-                          <FaTasks className="text-3xl mx-auto mb-2 text-slate-300" />
-                          <p className="font-medium text-sm">
-                            Selecciona una actividad del selector de arriba
-                          </p>
-                          <p className="text-xs mt-1">
-                            o crea una nueva con el botón verde ＋
-                          </p>
-                        </div>
-                      ) : (
+
+                      {vistaCalificaciones === "lista" && (
                         <>
-                          {actividadSeleccionada && (
-                            <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
-                              <div className="flex items-start gap-2">
-                                <FaInfoCircle className="text-blue-600 mt-0.5 shrink-0" />
-                                <p className="text-xs text-blue-800">
-                                  {actividadEsHoy ? (
-                                    <>
-                                      La actividad es <strong>de hoy</strong>.
-                                      Los estudiantes con inasistencia
-                                      injustificada o fuga{" "}
-                                      <strong>NO podrán recibir nota</strong>{" "}
-                                      hasta que el tutor justifique su falta.
-                                    </>
-                                  ) : actividadEsAntigua ? (
-                                    <>
-                                      La actividad es{" "}
-                                      <strong>de un día anterior</strong>.
-                                      Puedes asignar notas{" "}
-                                      <strong>
-                                        aunque el estudiante haya estado ausente
-                                      </strong>{" "}
-                                      (recuperaciones, trabajos extra, etc.).
-                                    </>
-                                  ) : (
-                                    <>
-                                      Actividad programada para una fecha
-                                      futura.
-                                    </>
-                                  )}
-                                </p>
-                              </div>
+                          <div className="sticky top-0 z-30 -mx-4 px-4 py-2 bg-white/95 backdrop-blur border-b border-slate-200 mb-3">
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => setShowActividadesModal(true)}
+                                className="flex-1 min-w-0 border border-slate-300 rounded-lg px-3 py-2.5 text-xs font-medium focus:ring-2 focus:ring-blue-500 bg-white text-left flex items-center gap-2 hover:border-blue-400 transition-all"
+                              >
+                                <FaTasks className="text-blue-600 shrink-0" />
+                                {actividadSeleccionada ? (
+                                  <span className="truncate text-slate-900 font-semibold">
+                                    {actividadSeleccionada.tipo} ·{" "}
+                                    {actividadSeleccionada.detalle} ·{" "}
+                                    {actividadSeleccionada.fecha}
+                                  </span>
+                                ) : (
+                                  <span className="truncate text-slate-500">
+                                    {actividades.length === 0
+                                      ? "Sin actividades — crea la primera"
+                                      : "Ninguna actividad seleccionada"}
+                                  </span>
+                                )}
+                              </button>
+                              <button
+                                onClick={() => setShowActividadesModal(true)}
+                                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all"
+                              >
+                                <FaSyncAlt className="text-[10px]" />
+                                {actividadSeleccionada
+                                  ? "Cambiar actividad"
+                                  : "Seleccionar actividad"}
+                              </button>
                             </div>
-                          )}
-                          <div className="space-y-2">
-                            {estudiantes.map((est, index) => {
-                              const calificacion = calificaciones[est.id];
-                              const notaStr = calificacion?.nota || "";
-                              const notaNum = parseFloat(notaStr);
-                              const notaOriginal = !isNaN(notaNum)
-                                ? notaNum
-                                : undefined;
-                              const notaFinal = calcularNotaFinal(
-                                notaOriginal || 0,
-                                calificacion?.refuerzo,
-                                actividadSeleccionada?.estrategiaNota ||
-                                  "promediar",
-                              );
-                              const letra =
-                                notaOriginal !== undefined
-                                  ? notaALetra(notaFinal)
-                                  : "";
-                              const tieneRefuerzo = !!calificacion?.refuerzo;
-                              const notaMostrada = tieneRefuerzo
-                                ? String(round2(notaFinal))
-                                : notaStr;
-                              const notaParaColor = tieneRefuerzo
-                                ? notaFinal
-                                : notaOriginal;
-                              const estadoAsistencia =
-                                asistenciasDiaActividad[est.id];
-                              const ausenciaQueBloquea =
-                                estadoBloqueaNota(estadoAsistencia);
-                              const bloqueadoPorAusenciaHoy =
-                                ausenciaQueBloquea && actividadEsHoy;
-                              const ausenteAntiguo =
-                                estadoEsAusencia(estadoAsistencia) &&
-                                actividadEsAntigua;
-                              const necesitaRefuerzo =
-                                !esGradoInicialActual &&
-                                notaOriginal !== undefined &&
-                                notaOriginal < 7 &&
-                                !calificacion?.refuerzo &&
-                                !bloqueadoPorAusenciaHoy;
-                              const esDeOtroDocente =
-                                calificacion?.docenteId &&
-                                calificacion.docenteId !== user?.uid;
-                              const configEstadoAsistencia =
-                                estadoConfig(estadoAsistencia);
-                              return (
-                                <div
-                                  key={est.id}
-                                  className={`border rounded-lg p-3 transition-colors ${
-                                    bloqueadoPorAusenciaHoy
-                                      ? "border-red-300 bg-red-50/40"
-                                      : ausenteAntiguo
-                                        ? "border-amber-300 bg-amber-50/30"
-                                        : "border-slate-200 hover:border-blue-300"
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div className="flex-1 min-w-0">
-                                      <div className="font-semibold text-slate-900 text-sm truncate">
-                                        {est.apellidos} {est.nombres}
-                                      </div>
-                                      {est.cedula && (
-                                        <div className="text-slate-500 text-xs mt-0.5">
-                                          CI: {est.cedula}
-                                        </div>
-                                      )}
-                                      {bloqueadoPorAusenciaHoy && (
-                                        <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-red-100 border border-red-300 text-red-700 rounded text-[10px] font-bold">
-                                          <FaUserTimes className="text-[9px]" />
-                                          {configEstadoAsistencia?.label} — sin
-                                          nota hasta justificar
-                                        </div>
-                                      )}
-                                      {ausenteAntiguo && (
-                                        <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 border border-amber-300 text-amber-800 rounded text-[10px] font-bold">
-                                          <FaUserTimes className="text-[9px]" />
-                                          {
-                                            configEstadoAsistencia?.label
-                                          } el {actividadSeleccionada.fecha} —
-                                          permite nota
-                                        </div>
-                                      )}
-                                      {estadoAsistencia &&
-                                        estadoEsTutorOnly(estadoAsistencia) &&
-                                        !bloqueadoPorAusenciaHoy && (
-                                          <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
-                                            <FaUserCheck className="text-[9px]" />
-                                            {configEstadoAsistencia?.label}
-                                          </div>
-                                        )}
-                                      {(esDeOtroDocente ||
-                                        calificacion?.editadoPor) &&
-                                        !bloqueadoPorAusenciaHoy && (
-                                          <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
-                                            <FaUserEdit className="text-[9px]" />
-                                            {esDeOtroDocente && (
-                                              <span>
-                                                Registró:{" "}
-                                                {nombreDocente(
-                                                  calificacion?.docenteId,
-                                                )}
-                                              </span>
-                                            )}
-                                            {calificacion?.editadoPor &&
-                                              calificacion.editadoPor !==
-                                                calificacion.docenteId && (
-                                                <span>
-                                                  {" "}
-                                                  | Editó:{" "}
-                                                  {nombreDocente(
-                                                    calificacion.editadoPor,
-                                                  )}
-                                                </span>
-                                              )}
-                                          </div>
-                                        )}
-                                    </div>
-                                    <div className="flex items-center gap-2 shrink-0">
-                                      <button
-                                        onClick={() =>
-                                          abrirFichaEstudiante(est.id)
-                                        }
-                                        className="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded text-xs font-semibold transition-all"
-                                        title="Ver y calificar todas las actividades de este estudiante"
-                                      >
-                                        <FaListUl className="text-xs" />
-                                        <span className="hidden sm:inline">
-                                          Ficha
-                                        </span>
-                                      </button>
-                                      {bloqueadoPorAusenciaHoy ? (
-                                        <span
-                                          className="px-3 py-1.5 rounded text-xs font-bold bg-red-100 border-2 border-red-300 text-red-700"
-                                          title="Estudiante con inasistencia/fuga hoy: no puede recibir nota hasta que el tutor justifique"
-                                        >
-                                          Sin nota
-                                        </span>
+                          </div>
+                          {!selectedActividadId || !actividadSeleccionada ? (
+                            <div className="text-center py-10 text-slate-500">
+                              <FaTasks className="text-3xl mx-auto mb-2 text-slate-300" />
+                              <p className="font-medium text-sm">
+                                Selecciona una actividad del selector de arriba
+                              </p>
+                              <p className="text-xs mt-1">
+                                o crea una nueva con el botón verde ＋
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              {actividadSeleccionada && (
+                                <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3">
+                                  <div className="flex items-start gap-2">
+                                    <FaInfoCircle className="text-blue-600 mt-0.5 shrink-0" />
+                                    <p className="text-xs text-blue-800">
+                                      {actividadEsHoy ? (
+                                        <>
+                                          La actividad es{" "}
+                                          <strong>de hoy</strong>. Los
+                                          estudiantes con inasistencia
+                                          injustificada o fuga{" "}
+                                          <strong>
+                                            NO podrán recibir nota
+                                          </strong>{" "}
+                                          hasta que el tutor justifique su
+                                          falta.
+                                        </>
+                                      ) : actividadEsAntigua ? (
+                                        <>
+                                          La actividad es{" "}
+                                          <strong>de un día anterior</strong>.
+                                          Puedes asignar notas{" "}
+                                          <strong>
+                                            aunque el estudiante haya estado
+                                            ausente
+                                          </strong>{" "}
+                                          (recuperaciones, trabajos extra,
+                                          etc.).
+                                        </>
                                       ) : (
                                         <>
-                                          {letra && (
-                                            <div
-                                              className={`px-2 py-1 rounded text-xs font-bold ${
-                                                notaFinal >= 7
-                                                  ? "bg-green-100 border border-green-300 text-green-800"
-                                                  : "bg-red-100 border border-red-300 text-red-800"
-                                              }`}
-                                            >
-                                              {letra}
+                                          Actividad programada para una fecha
+                                          futura.
+                                        </>
+                                      )}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="space-y-2">
+                                {estudiantes.map((est, index) => {
+                                  const calificacion = calificaciones[est.id];
+                                  const notaStr = calificacion?.nota || "";
+                                  const notaNum = parseFloat(notaStr);
+                                  const notaOriginal = !isNaN(notaNum)
+                                    ? notaNum
+                                    : undefined;
+                                  const notaFinal = calcularNotaFinal(
+                                    notaOriginal || 0,
+                                    calificacion?.refuerzo,
+                                    actividadSeleccionada?.estrategiaNota ||
+                                      "promediar",
+                                  );
+                                  const letra =
+                                    notaOriginal !== undefined
+                                      ? notaALetra(notaFinal)
+                                      : "";
+                                  const tieneRefuerzo =
+                                    !!calificacion?.refuerzo;
+                                  const notaMostrada = tieneRefuerzo
+                                    ? String(round2(notaFinal))
+                                    : notaStr;
+                                  const notaParaColor = tieneRefuerzo
+                                    ? notaFinal
+                                    : notaOriginal;
+                                  const estadoAsistencia =
+                                    asistenciasDiaActividad[est.id];
+                                  const ausenciaQueBloquea =
+                                    estadoBloqueaNota(estadoAsistencia);
+                                  const bloqueadoPorAusenciaHoy =
+                                    ausenciaQueBloquea && actividadEsHoy;
+                                  const ausenteAntiguo =
+                                    estadoEsAusencia(estadoAsistencia) &&
+                                    actividadEsAntigua;
+                                  const necesitaRefuerzo =
+                                    !esGradoInicialActual &&
+                                    notaOriginal !== undefined &&
+                                    notaOriginal < 7 &&
+                                    !calificacion?.refuerzo &&
+                                    !bloqueadoPorAusenciaHoy;
+                                  const esDeOtroDocente =
+                                    calificacion?.docenteId &&
+                                    calificacion.docenteId !== user?.uid;
+                                  const configEstadoAsistencia =
+                                    estadoConfig(estadoAsistencia);
+                                  return (
+                                    <div
+                                      key={est.id}
+                                      className={`border rounded-lg p-3 transition-colors ${
+                                        bloqueadoPorAusenciaHoy
+                                          ? "border-red-300 bg-red-50/40"
+                                          : ausenteAntiguo
+                                            ? "border-amber-300 bg-amber-50/30"
+                                            : "border-slate-200 hover:border-blue-300"
+                                      }`}
+                                    >
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="flex-1 min-w-0">
+                                          <div className="font-semibold text-slate-900 text-sm truncate">
+                                            {est.apellidos} {est.nombres}
+                                          </div>
+                                          {bloqueadoPorAusenciaHoy && (
+                                            <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-red-100 border border-red-300 text-red-700 rounded text-[10px] font-bold">
+                                              <FaUserTimes className="text-[9px]" />
+                                              {configEstadoAsistencia?.label} —
+                                              sin nota hasta justificar
                                             </div>
                                           )}
+                                          {ausenteAntiguo && (
+                                            <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 border border-amber-300 text-amber-800 rounded text-[10px] font-bold">
+                                              <FaUserTimes className="text-[9px]" />
+                                              {configEstadoAsistencia?.label} el{" "}
+                                              {actividadSeleccionada.fecha} —
+                                              permite nota
+                                            </div>
+                                          )}
+                                          {estadoAsistencia &&
+                                            estadoEsTutorOnly(
+                                              estadoAsistencia,
+                                            ) &&
+                                            !bloqueadoPorAusenciaHoy && (
+                                              <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
+                                                <FaUserCheck className="text-[9px]" />
+                                                {configEstadoAsistencia?.label}
+                                              </div>
+                                            )}
+                                          {(esDeOtroDocente ||
+                                            calificacion?.editadoPor) &&
+                                            !bloqueadoPorAusenciaHoy && (
+                                              <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
+                                                <FaUserEdit className="text-[9px]" />
+                                                {esDeOtroDocente && (
+                                                  <span>
+                                                    Registró:{" "}
+                                                    {nombreDocente(
+                                                      calificacion?.docenteId,
+                                                    )}
+                                                  </span>
+                                                )}
+                                                {calificacion?.editadoPor &&
+                                                  calificacion.editadoPor !==
+                                                    calificacion.docenteId && (
+                                                    <span>
+                                                      {" "}
+                                                      | Editó:{" "}
+                                                      {nombreDocente(
+                                                        calificacion.editadoPor,
+                                                      )}
+                                                    </span>
+                                                  )}
+                                              </div>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <button
+                                            onClick={() =>
+                                              abrirFichaEstudiante(est.id)
+                                            }
+                                            className="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded text-xs font-semibold transition-all"
+                                            title="Ver y calificar todas las actividades de este estudiante"
+                                          >
+                                            <FaListUl className="text-xs" />
+                                            <span className="hidden sm:inline">
+                                              Ficha
+                                            </span>
+                                          </button>
+                                          {bloqueadoPorAusenciaHoy ? (
+                                            <span
+                                              className="px-3 py-1.5 rounded text-xs font-bold bg-red-100 border-2 border-red-300 text-red-700"
+                                              title="Estudiante con inasistencia/fuga hoy: no puede recibir nota hasta que el tutor justifique"
+                                            >
+                                              Sin nota
+                                            </span>
+                                          ) : (
+                                            <>
+                                              {letra && (
+                                                <div
+                                                  className={`px-2 py-1 rounded text-xs font-bold ${
+                                                    notaFinal >= 7
+                                                      ? "bg-green-100 border border-green-300 text-green-800"
+                                                      : "bg-red-100 border border-red-300 text-red-800"
+                                                  }`}
+                                                >
+                                                  {letra}
+                                                </div>
+                                              )}
+                                              <input
+                                                ref={(el) => {
+                                                  notaInputRefs.current[index] =
+                                                    el;
+                                                }}
+                                                type="text"
+                                                inputMode="decimal"
+                                                maxLength={5}
+                                                value={notaMostrada}
+                                                readOnly={tieneRefuerzo}
+                                                onChange={(e) =>
+                                                  actualizarCalificacion(
+                                                    est.id,
+                                                    e.target.value,
+                                                  )
+                                                }
+                                                onKeyDown={(e) =>
+                                                  handleNotaKeyDown(e, index)
+                                                }
+                                                onFocus={(e) => {
+                                                  if (!tieneRefuerzo)
+                                                    e.target.select();
+                                                }}
+                                                placeholder="0-10"
+                                                title={
+                                                  tieneRefuerzo
+                                                    ? "Nota final después del refuerzo (solo lectura)"
+                                                    : undefined
+                                                }
+                                                className={`w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${
+                                                  notaParaColor !== undefined
+                                                    ? notaParaColor >= 7
+                                                      ? "border-green-500 text-green-700 bg-green-50"
+                                                      : "border-red-500 text-red-700 bg-red-50"
+                                                    : ausenteAntiguo
+                                                      ? "border-amber-400 bg-amber-50"
+                                                      : "border-slate-300 bg-white"
+                                                } ${tieneRefuerzo ? "cursor-not-allowed" : ""}`}
+                                              />
+                                              {necesitaRefuerzo && (
+                                                <button
+                                                  onClick={() => {
+                                                    setRefuerzoEstudianteId(
+                                                      est.id,
+                                                    );
+                                                    setRefuerzoForm({
+                                                      nota: 7,
+                                                      detalle: "",
+                                                      fecha: new Date()
+                                                        .toISOString()
+                                                        .split("T")[0],
+                                                      estrategia:
+                                                        actividadSeleccionada?.estrategiaNota ||
+                                                        "promediar",
+                                                    });
+                                                    setShowRefuerzoModal(true);
+                                                  }}
+                                                  className="inline-flex items-center gap-1 bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-1 rounded text-xs font-semibold transition-all"
+                                                  title="Aplicar refuerzo"
+                                                >
+                                                  <FaSyncAlt className="text-xs" />
+                                                  <span className="hidden sm:inline">
+                                                    Refuerzo
+                                                  </span>
+                                                </button>
+                                              )}
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                      {calificacion?.refuerzo &&
+                                        !bloqueadoPorAusenciaHoy && (
+                                          <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-xs">
+                                            <div className="font-semibold text-orange-800 mb-1 flex items-center gap-2 flex-wrap">
+                                              <span>
+                                                Refuerzo aplicado (
+                                                {calificacion.refuerzo.fecha}
+                                                ):
+                                              </span>
+                                              <span className="text-[10px] px-1.5 py-0.5 bg-orange-200 rounded text-orange-900 font-bold">
+                                                {ESTRATEGIAS_NOTA.find(
+                                                  (e) =>
+                                                    e.value ===
+                                                    (calificacion.refuerzo
+                                                      ?.estrategiaElegida ||
+                                                      actividadSeleccionada?.estrategiaNota ||
+                                                      "promediar"),
+                                                )?.label.split(" ")[0] ||
+                                                  "Estrategia"}
+                                              </span>
+                                            </div>
+                                            <div className="text-orange-700">
+                                              Original:{" "}
+                                              <strong>
+                                                {round2(notaOriginal ?? 0)}
+                                              </strong>
+                                              {" → Refuerzo: "}
+                                              <strong>
+                                                {round2(
+                                                  calificacion.refuerzo.nota,
+                                                )}
+                                              </strong>
+                                              {" = Final: "}
+                                              <strong>
+                                                {round2(notaFinal)}
+                                              </strong>
+                                            </div>
+                                            <div className="text-orange-600 mt-1">
+                                              {calificacion.refuerzo.detalle}
+                                            </div>
+                                          </div>
+                                        )}
+                                      {!bloqueadoPorAusenciaHoy && (
+                                        <div className="mt-2">
                                           <input
-                                            ref={(el) => {
-                                              notaInputRefs.current[index] = el;
-                                            }}
                                             type="text"
-                                            inputMode="decimal"
-                                            maxLength={5}
-                                            value={notaMostrada}
-                                            readOnly={tieneRefuerzo}
+                                            value={
+                                              calificacion?.observacion || ""
+                                            }
                                             onChange={(e) =>
-                                              actualizarCalificacion(
+                                              actualizarObservacionCalificacion(
                                                 est.id,
                                                 e.target.value,
                                               )
                                             }
-                                            onKeyDown={(e) =>
-                                              handleNotaKeyDown(e, index)
+                                            tabIndex={-1}
+                                            placeholder={
+                                              ausenteAntiguo
+                                                ? "Observación (sugerido: justificar la nota)"
+                                                : "Observación (opcional)..."
                                             }
-                                            onFocus={(e) => {
-                                              if (!tieneRefuerzo)
-                                                e.target.select();
-                                            }}
-                                            placeholder="0-10"
-                                            title={
-                                              tieneRefuerzo
-                                                ? "Nota final después del refuerzo (solo lectura)"
-                                                : undefined
-                                            }
-                                            className={`w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${
-                                              notaParaColor !== undefined
-                                                ? notaParaColor >= 7
-                                                  ? "border-green-500 text-green-700 bg-green-50"
-                                                  : "border-red-500 text-red-700 bg-red-50"
-                                                : ausenteAntiguo
-                                                  ? "border-amber-400 bg-amber-50"
-                                                  : "border-slate-300 bg-white"
-                                            } ${tieneRefuerzo ? "cursor-not-allowed" : ""}`}
+                                            className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
+                                              ausenteAntiguo
+                                                ? "border-amber-300 bg-amber-50"
+                                                : "border-slate-300"
+                                            }`}
                                           />
-                                          {necesitaRefuerzo && (
-                                            <button
-                                              onClick={() => {
-                                                setRefuerzoEstudianteId(est.id);
-                                                setRefuerzoForm({
-                                                  nota: 7,
-                                                  detalle: "",
-                                                  fecha: new Date()
-                                                    .toISOString()
-                                                    .split("T")[0],
-                                                  estrategia:
-                                                    actividadSeleccionada?.estrategiaNota ||
-                                                    "promediar",
-                                                });
-                                                setShowRefuerzoModal(true);
-                                              }}
-                                              className="inline-flex items-center gap-1 bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-1 rounded text-xs font-semibold transition-all"
-                                              title="Aplicar refuerzo"
-                                            >
-                                              <FaSyncAlt className="text-xs" />
-                                              <span className="hidden sm:inline">
-                                                Refuerzo
-                                              </span>
-                                            </button>
-                                          )}
-                                        </>
+                                        </div>
                                       )}
                                     </div>
-                                  </div>
-                                  {calificacion?.refuerzo &&
-                                    !bloqueadoPorAusenciaHoy && (
-                                      <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-xs">
-                                        <div className="font-semibold text-orange-800 mb-1 flex items-center gap-2 flex-wrap">
-                                          <span>
-                                            Refuerzo aplicado (
-                                            {calificacion.refuerzo.fecha}):
-                                          </span>
-                                          <span className="text-[10px] px-1.5 py-0.5 bg-orange-200 rounded text-orange-900 font-bold">
-                                            {ESTRATEGIAS_NOTA.find(
-                                              (e) =>
-                                                e.value ===
-                                                (calificacion.refuerzo
-                                                  ?.estrategiaElegida ||
-                                                  actividadSeleccionada?.estrategiaNota ||
-                                                  "promediar"),
-                                            )?.label.split(" ")[0] ||
-                                              "Estrategia"}
-                                          </span>
-                                        </div>
-                                        <div className="text-orange-700">
-                                          Original:{" "}
-                                          <strong>
-                                            {round2(notaOriginal ?? 0)}
-                                          </strong>
-                                          {" → Refuerzo: "}
-                                          <strong>
-                                            {round2(calificacion.refuerzo.nota)}
-                                          </strong>
-                                          {" = Final: "}
-                                          <strong>{round2(notaFinal)}</strong>
-                                        </div>
-                                        <div className="text-orange-600 mt-1">
-                                          {calificacion.refuerzo.detalle}
-                                        </div>
-                                      </div>
-                                    )}
-                                  {!bloqueadoPorAusenciaHoy && (
-                                    <div className="mt-2">
-                                      <input
-                                        type="text"
-                                        value={calificacion?.observacion || ""}
-                                        onChange={(e) =>
-                                          actualizarObservacionCalificacion(
-                                            est.id,
-                                            e.target.value,
-                                          )
-                                        }
-                                        tabIndex={-1}
-                                        placeholder={
-                                          ausenteAntiguo
-                                            ? "Observación (sugerido: justificar la nota)"
-                                            : "Observación (opcional)..."
-                                        }
-                                        className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
-                                          ausenteAntiguo
-                                            ? "border-amber-300 bg-amber-50"
-                                            : "border-slate-300"
-                                        }`}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
+                        </>
+                      )}
+
+                      {vistaCalificaciones === "matriz" && (
+                        <>
+                          <div className="flex items-center gap-2 mb-3">
+                            <button
+                              onClick={() => {
+                                setEditingActividadId(null);
+                                setActividadForm({
+                                  tipo: "Tarea",
+                                  detalle: "",
+                                  fecha: new Date().toISOString().split("T")[0],
+                                  estrategiaNota: "promediar",
+                                });
+                                setShowActividadModal(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition-all"
+                            >
+                              <FaPlus className="text-[10px]" /> Nueva actividad
+                            </button>
+                            <span className="text-[10px] text-slate-500">
+                              Haz clic en una celda para editar · clic en nota
+                              &lt;7 para refuerzo
+                            </span>
+                          </div>
+                          <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+                            {loadingMatriz ? (
+                              <div className="flex items-center justify-center py-12">
+                                <FaSpinner className="animate-spin text-2xl text-blue-600" />
+                              </div>
+                            ) : actividadesMatriz.length === 0 ? (
+                              <div className="text-center py-10 text-slate-500">
+                                <FaTable className="text-3xl mx-auto mb-2 text-slate-300" />
+                                <p className="font-medium text-sm">
+                                  Sin actividades para mostrar en la matriz
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-slate-50 border-b border-slate-200">
+                                    <tr>
+                                      <th className="px-2 py-2 text-center font-semibold text-slate-700 w-8">
+                                        #
+                                      </th>
+                                      <th className="px-2 py-2 text-left font-semibold text-slate-700 min-w-40 sticky left-0 bg-slate-50">
+                                        Estudiante
+                                      </th>
+                                      {actividadesMatriz.map((a) => (
+                                        <th
+                                          key={a.id}
+                                          className="px-2 py-2 text-center font-semibold text-slate-700 min-w-28"
+                                          title={`${a.tipo}: ${a.detalle} · ${a.fecha}`}
+                                        >
+                                          <div className="text-[10px] font-bold text-slate-800">
+                                            {a.tipo}
+                                          </div>
+                                          <div
+                                            className="text-[9px] font-normal text-slate-600 truncate max-w-30"
+                                            title={a.detalle}
+                                          >
+                                            {a.detalle}
+                                          </div>
+                                          <div className="text-[9px] font-normal text-slate-500">
+                                            {a.fecha}
+                                          </div>
+                                        </th>
+                                      ))}
+                                      <th className="px-2 py-2 text-center font-semibold text-slate-700 w-14">
+                                        Prom
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {estudiantes.map((est, idx) => {
+                                      let suma = 0;
+                                      let conteo = 0;
+                                      const celdas = actividadesMatriz.map(
+                                        (a) => {
+                                          const key = `${est.id}|${a.id}`;
+                                          const cal =
+                                            calificacionesMatrizEfectiva[key];
+                                          const esCeldaActiva =
+                                            celdaActiva?.estudianteId ===
+                                              est.id &&
+                                            celdaActiva?.actividadId === a.id;
+                                          const estadoAsistencia =
+                                            asistenciasDiaActividad[est.id];
+                                          const actividadEsHoy = esFechaHoy(
+                                            a.fecha,
+                                          );
+                                          const bloqueada =
+                                            estadoBloqueaNota(
+                                              estadoAsistencia,
+                                            ) && actividadEsHoy;
+                                          if (
+                                            !cal ||
+                                            cal.nota === undefined ||
+                                            cal.nota === null
+                                          ) {
+                                            return (
+                                              <td
+                                                key={a.id}
+                                                className="px-2 py-1.5 text-center"
+                                              >
+                                                {esCeldaActiva ? (
+                                                  <input
+                                                    type="text"
+                                                    inputMode="decimal"
+                                                    maxLength={5}
+                                                    value={notaTemporal}
+                                                    onChange={(e) => {
+                                                      const v = e.target.value;
+                                                      const regex =
+                                                        /^\d*(\.\d{0,2})?$/;
+                                                      if (
+                                                        v === "" ||
+                                                        regex.test(v)
+                                                      ) {
+                                                        if (
+                                                          /^\d+(\.\d+)?$/.test(
+                                                            v,
+                                                          )
+                                                        ) {
+                                                          const num =
+                                                            parseFloat(v);
+                                                          if (num > 10) return;
+                                                        }
+                                                        if (v.length > 5)
+                                                          return;
+                                                        setNotaTemporal(v);
+                                                      }
+                                                    }}
+                                                    onBlur={guardarNotaMatriz}
+                                                    onKeyDown={(e) => {
+                                                      if (e.key === "Enter") {
+                                                        guardarNotaMatriz();
+                                                      } else if (
+                                                        e.key === "Escape"
+                                                      ) {
+                                                        setCeldaActiva(null);
+                                                        setNotaTemporal("");
+                                                      }
+                                                    }}
+                                                    autoFocus
+                                                    placeholder="—"
+                                                    className="w-12 border-2 border-blue-400 rounded px-1 py-0.5 text-center text-[10px] font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none bg-blue-50"
+                                                  />
+                                                ) : (
+                                                  <button
+                                                    onClick={() => {
+                                                      if (bloqueada) return;
+                                                      setCeldaActiva({
+                                                        estudianteId: est.id,
+                                                        actividadId: a.id,
+                                                      });
+                                                      setNotaTemporal("");
+                                                    }}
+                                                    disabled={bloqueada}
+                                                    className={`w-10 h-7 rounded text-[10px] font-bold transition-all ${
+                                                      bloqueada
+                                                        ? "bg-red-50 text-red-300 cursor-not-allowed"
+                                                        : "bg-slate-100 text-slate-400 hover:bg-blue-100 hover:text-blue-600 cursor-pointer"
+                                                    }`}
+                                                    title={
+                                                      bloqueada
+                                                        ? "Bloqueado por ausencia"
+                                                        : "Clic para agregar nota"
+                                                    }
+                                                  >
+                                                    {bloqueada ? "🔒" : "+"}
+                                                  </button>
+                                                )}
+                                              </td>
+                                            );
+                                          }
+                                          const nf = calcularNotaFinal(
+                                            cal.nota,
+                                            cal.refuerzo,
+                                            a.estrategiaNota,
+                                          );
+                                          suma += nf;
+                                          conteo++;
+                                          const cls =
+                                            nf >= 9
+                                              ? "bg-green-100 text-green-800"
+                                              : nf >= 7
+                                                ? "bg-blue-100 text-blue-800"
+                                                : nf >= 5
+                                                  ? "bg-amber-100 text-amber-800"
+                                                  : "bg-red-100 text-red-800";
+                                          const necesitaRefuerzo =
+                                            !esGradoInicialActual &&
+                                            nf < 7 &&
+                                            !cal.refuerzo;
+                                          return (
+                                            <td
+                                              key={a.id}
+                                              className="px-2 py-1.5 text-center"
+                                            >
+                                              {esCeldaActiva ? (
+                                                <input
+                                                  type="text"
+                                                  inputMode="decimal"
+                                                  maxLength={5}
+                                                  value={notaTemporal}
+                                                  onChange={(e) => {
+                                                    const v = e.target.value;
+                                                    const regex =
+                                                      /^\d*(\.\d{0,2})?$/;
+                                                    if (
+                                                      v === "" ||
+                                                      regex.test(v)
+                                                    ) {
+                                                      if (
+                                                        /^\d+(\.\d+)?$/.test(v)
+                                                      ) {
+                                                        const num =
+                                                          parseFloat(v);
+                                                        if (num > 10) return;
+                                                      }
+                                                      if (v.length > 5) return;
+                                                      setNotaTemporal(v);
+                                                    }
+                                                  }}
+                                                  onBlur={guardarNotaMatriz}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === "Enter") {
+                                                      guardarNotaMatriz();
+                                                    } else if (
+                                                      e.key === "Escape"
+                                                    ) {
+                                                      setCeldaActiva(null);
+                                                      setNotaTemporal("");
+                                                    }
+                                                  }}
+                                                  autoFocus
+                                                  className="w-12 border-2 border-blue-400 rounded px-1 py-0.5 text-center text-[10px] font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none bg-blue-50"
+                                                />
+                                              ) : (
+                                                <button
+                                                  onClick={() => {
+                                                    if (necesitaRefuerzo) {
+                                                      setRefuerzoEstudianteId(
+                                                        est.id,
+                                                      );
+                                                      setRefuerzoForm({
+                                                        nota: 7,
+                                                        detalle: "",
+                                                        fecha: new Date()
+                                                          .toISOString()
+                                                          .split("T")[0],
+                                                        estrategia:
+                                                          a.estrategiaNota ||
+                                                          "promediar",
+                                                      });
+                                                      setSelectedActividadId(
+                                                        a.id || "",
+                                                      );
+                                                      setShowRefuerzoModal(
+                                                        true,
+                                                      );
+                                                    } else {
+                                                      setCeldaActiva({
+                                                        estudianteId: est.id,
+                                                        actividadId: a.id,
+                                                      });
+                                                      setNotaTemporal(
+                                                        String(cal.nota),
+                                                      );
+                                                    }
+                                                  }}
+                                                  className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer hover:ring-2 hover:ring-blue-400 ${cls}`}
+                                                  title={
+                                                    necesitaRefuerzo
+                                                      ? `Nota ${round2(nf)} · clic para aplicar refuerzo`
+                                                      : cal.refuerzo
+                                                        ? `Original ${cal.nota} → refuerzo ${cal.refuerzo.nota} · clic para editar`
+                                                        : `${round2(nf)} · clic para editar`
+                                                  }
+                                                >
+                                                  {round2(nf)}
+                                                  {cal.refuerzo && (
+                                                    <span className="ml-0.5 text-[8px]">
+                                                      ✓
+                                                    </span>
+                                                  )}
+                                                </button>
+                                              )}
+                                            </td>
+                                          );
+                                        },
+                                      );
+                                      const prom =
+                                        conteo > 0
+                                          ? round2(suma / conteo)
+                                          : null;
+                                      return (
+                                        <tr
+                                          key={est.id}
+                                          className="hover:bg-slate-50"
+                                        >
+                                          <td className="px-2 py-1.5 text-center text-slate-500">
+                                            {idx + 1}
+                                          </td>
+                                          <td className="px-2 py-1.5 font-medium text-slate-900 sticky left-0 bg-white truncate max-w-50">
+                                            {est.apellidos} {est.nombres}
+                                          </td>
+                                          {celdas}
+                                          <td className="px-2 py-1.5 text-center">
+                                            {prom !== null ? (
+                                              <span
+                                                className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                                  prom >= 7
+                                                    ? "bg-green-100 text-green-800"
+                                                    : "bg-red-100 text-red-800"
+                                                }`}
+                                              >
+                                                {prom}
+                                              </span>
+                                            ) : (
+                                              <span className="text-slate-300">
+                                                —
+                                              </span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
                           </div>
                         </>
                       )}
@@ -2510,6 +3052,7 @@ export default function Calificaciones() {
                           </button>
                         </div>
                       )}
+
                       {estudiantes.map((est) => {
                         const asistencia = asistencias[est.id];
                         const estado = asistencia?.estado;
@@ -2524,9 +3067,11 @@ export default function Calificaciones() {
                           <div
                             key={est.id}
                             className={`border rounded-lg p-3 transition-colors ${
-                              esTutorOnly
-                                ? "border-blue-300 bg-blue-50/50"
-                                : "border-slate-200 hover:border-blue-300"
+                              estado === "J"
+                                ? "border-green-300 bg-green-50/40"
+                                : esTutorOnly
+                                  ? "border-blue-300 bg-blue-50/50"
+                                  : "border-slate-200 hover:border-blue-300"
                             }`}
                           >
                             <div className="flex items-center justify-between gap-3">
@@ -2534,21 +3079,32 @@ export default function Calificaciones() {
                                 <div className="font-semibold text-slate-900 text-sm truncate">
                                   {est.apellidos} {est.nombres}
                                 </div>
-                                {est.cedula && (
-                                  <div className="text-slate-500 text-xs mt-0.5">
-                                    CI: {est.cedula}
+                                {estado === "J" ? (
+                                  <div
+                                    className="mt-0.5 flex items-center gap-1 min-w-0 text-[10px] leading-tight text-green-700"
+                                    title={
+                                      (asistencia?.observacion || "").trim() ||
+                                      "Falta justificada por tutor"
+                                    }
+                                  >
+                                    <FaCheck className="text-[8px] shrink-0" />
+                                    <span className="truncate">
+                                      {(asistencia?.observacion || "").trim() ||
+                                        "Falta justificada por tutor"}
+                                    </span>
                                   </div>
-                                )}
-                                {esTutorOnly && (
-                                  <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
-                                    <FaLock className="text-[9px]" />
-                                    {configEstado?.label}
-                                    {!esTutorDelGradoActual && (
-                                      <span className="ml-1 opacity-75">
-                                        — solo tutor
-                                      </span>
-                                    )}
-                                  </div>
+                                ) : (
+                                  esTutorOnly && (
+                                    <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
+                                      <FaLock className="text-[9px]" />
+                                      {configEstado?.label}
+                                      {!esTutorDelGradoActual && (
+                                        <span className="ml-1 opacity-75">
+                                          — solo tutor
+                                        </span>
+                                      )}
+                                    </div>
+                                  )
                                 )}
                                 {estado &&
                                   !esTutorOnly &&
@@ -2579,118 +3135,216 @@ export default function Calificaciones() {
                                   )}
                               </div>
                               <div className="flex gap-1 shrink-0 flex-wrap justify-end">
-                                {estadosVisibles.map((estadoConf) => {
-                                  const estaSeleccionado =
-                                    estado === estadoConf.value;
-                                  const esEstadoTutor =
-                                    estadoConf.quien === "tutor";
-                                  const bloqueadoPorTutoria =
-                                    esTutorOnly && !esTutorDelGradoActual;
-                                  const disabled =
-                                    esEstadoTutor || bloqueadoPorTutoria;
-                                  return (
-                                    <button
-                                      key={estadoConf.value}
-                                      onClick={() =>
-                                        !disabled &&
-                                        actualizarAsistencia(
-                                          est.id,
-                                          estadoConf.value,
-                                        )
-                                      }
-                                      disabled={disabled}
-                                      title={
-                                        esEstadoTutor
-                                          ? `${estadoConf.label} — solo el tutor en Reporte de Asistencias`
-                                          : bloqueadoPorTutoria
-                                            ? "Estado definido por el tutor (bloqueado)"
-                                            : estadoConf.label
-                                      }
-                                      className={`h-9 min-w-9 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${
-                                        estaSeleccionado
-                                          ? `${estadoConf.colorSel} ${
-                                              disabled
-                                                ? "opacity-70 cursor-not-allowed ring-1 ring-slate-300"
-                                                : ""
-                                            }`
-                                          : disabled
-                                            ? "bg-slate-100 text-slate-400 cursor-not-allowed opacity-60"
-                                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                                      }`}
-                                    >
-                                      {estadoConf.value}
-                                      {esEstadoTutor && (
-                                        <FaLock className="text-[8px] opacity-70" />
-                                      )}
-                                    </button>
-                                  );
-                                })}
+                                {estadosVisibles
+                                  .filter((c) => c.value !== "J")
+                                  .map((estadoConf) => {
+                                    const estadoJustificado = estado === "J";
+                                    const estaSeleccionado =
+                                      estado === estadoConf.value ||
+                                      (estadoJustificado &&
+                                        estadoConf.value === "I");
+                                    const bloqueadoPorTutoria =
+                                      esTutorOnly && !esTutorDelGradoActual;
+                                    const disabled = bloqueadoPorTutoria;
+                                    return (
+                                      <button
+                                        key={estadoConf.value}
+                                        onClick={() =>
+                                          !disabled &&
+                                          actualizarAsistencia(
+                                            est.id,
+                                            estadoConf.value,
+                                          )
+                                        }
+                                        disabled={disabled}
+                                        title={
+                                          estadoJustificado &&
+                                          estadoConf.value === "I"
+                                            ? "Inasistencia justificada por el tutor"
+                                            : bloqueadoPorTutoria
+                                              ? "Estado definido por el tutor (bloqueado)"
+                                              : estadoConf.label
+                                        }
+                                        className={`h-9 min-w-9 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${
+                                          estaSeleccionado
+                                            ? estadoJustificado &&
+                                              estadoConf.value === "I"
+                                              ? `bg-green-600 text-white ring-1 ring-green-300 ${
+                                                  disabled
+                                                    ? "opacity-90 cursor-not-allowed"
+                                                    : ""
+                                                }`
+                                              : `${estadoConf.colorSel} ${
+                                                  disabled
+                                                    ? "opacity-70 cursor-not-allowed ring-1 ring-slate-300"
+                                                    : ""
+                                                }`
+                                            : disabled
+                                              ? "bg-slate-100 text-slate-400 cursor-not-allowed opacity-60"
+                                              : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                                        }`}
+                                      >
+                                        {estadoConf.value}
+                                        {estadoJustificado &&
+                                          estadoConf.value === "I" && (
+                                            <FaCheck className="text-[8px]" />
+                                          )}
+                                      </button>
+                                    );
+                                  })}
                               </div>
                             </div>
-                            {estado && (
-                              <div className="mt-2 space-y-1.5">
-                                {(estado === "P" || estado === "A") &&
-                                  !esTutorOnly && (
-                                    <div className="flex gap-1.5 flex-wrap">
-                                      <span className="text-[10px] text-slate-500 self-center mr-1">
-                                        Marcar:
+
+                            {estado &&
+                              (() => {
+                                const obsActual = (
+                                  asistencia?.observacion || ""
+                                ).trim();
+                                const tieneObs = obsActual !== "";
+                                const expandida = !!obsExpandida[est.id];
+                                const bloqueadaObs =
+                                  esTutorOnly && !esTutorDelGradoActual;
+                                const mostrarEditor =
+                                  expandida || (estado === "A" && !tieneObs);
+
+                                // ✅ En J la justificación ya se muestra como línea plana bajo el nombre
+                                if (estado === "J" && !expandida) {
+                                  return null;
+                                }
+
+                                // ✅ Observación colapsada: línea de texto plano (no botón) para ahorrar espacio
+                                if (tieneObs && !mostrarEditor) {
+                                  return (
+                                    <div className="mt-1 flex items-center gap-1 min-w-0">
+                                      <span
+                                        className="text-[10px] leading-tight text-slate-500 truncate"
+                                        title={obsActual}
+                                      >
+                                        {obsActual}
                                       </span>
-                                      {[
-                                        { value: "", label: "Sin observación" },
-                                        {
-                                          value: "Permiso de inspección",
-                                          label: "📋 Permiso de inspección",
-                                        },
-                                        {
-                                          value: "Llamado por dirección",
-                                          label: "🏢 Llamado por dirección",
-                                        },
-                                      ].map((opt) => (
+                                      {!bloqueadaObs && (
                                         <button
-                                          key={opt.value}
                                           onClick={() =>
+                                            setObsExpandida((p) => ({
+                                              ...p,
+                                              [est.id]: true,
+                                            }))
+                                          }
+                                          className="p-0.5 text-slate-400 hover:text-slate-600 shrink-0"
+                                          title="Editar observación"
+                                        >
+                                          <FaEdit className="text-[9px]" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                }
+
+                                // ✅ Editor: expandido manual o contextual en Ausente
+                                if (mostrarEditor) {
+                                  return (
+                                    <div className="mt-2 space-y-1.5">
+                                      {(estado === "P" || estado === "A") &&
+                                        !esTutorOnly && (
+                                          <div className="flex gap-1.5 flex-wrap">
+                                            <span className="text-[10px] text-slate-500 self-center mr-1">
+                                              Marcar:
+                                            </span>
+                                            {[
+                                              {
+                                                value: "",
+                                                label: "Sin observación",
+                                              },
+                                              {
+                                                value: "Permiso de inspección",
+                                                label:
+                                                  "📋 Permiso de inspección",
+                                              },
+                                              {
+                                                value: "Llamado por dirección",
+                                                label:
+                                                  "🏢 Llamado por dirección",
+                                              },
+                                            ].map((opt) => (
+                                              <button
+                                                key={opt.value}
+                                                onClick={() =>
+                                                  actualizarObservacionAsistencia(
+                                                    est.id,
+                                                    opt.value,
+                                                  )
+                                                }
+                                                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
+                                                  (asistencia?.observacion ||
+                                                    "") === opt.value
+                                                    ? "bg-blue-100 text-blue-700 border border-blue-300"
+                                                    : "bg-slate-100 text-slate-600 hover:bg-slate-200 border border-transparent"
+                                                }`}
+                                              >
+                                                {opt.label}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        )}
+                                      <div className="flex items-center gap-1.5">
+                                        <input
+                                          type="text"
+                                          value={asistencia?.observacion || ""}
+                                          onChange={(e) =>
                                             actualizarObservacionAsistencia(
                                               est.id,
-                                              opt.value,
+                                              e.target.value,
                                             )
                                           }
-                                          className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
-                                            (asistencia?.observacion || "") ===
-                                            opt.value
-                                              ? "bg-blue-100 text-blue-700 border border-blue-300"
-                                              : "bg-slate-100 text-slate-600 hover:bg-slate-200 border border-transparent"
+                                          placeholder={
+                                            bloqueadaObs
+                                              ? "Observación del tutor (no editable)"
+                                              : "Observación libre (opcional)..."
+                                          }
+                                          disabled={bloqueadaObs}
+                                          className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
+                                            bloqueadaObs
+                                              ? "border-blue-200 bg-blue-50 text-blue-700 cursor-not-allowed"
+                                              : "border-slate-300"
                                           }`}
+                                        />
+                                        <button
+                                          onClick={() =>
+                                            setObsExpandida((p) => ({
+                                              ...p,
+                                              [est.id]: false,
+                                            }))
+                                          }
+                                          className="p-1.5 text-slate-400 hover:text-slate-600 shrink-0"
+                                          title="Colapsar"
                                         >
-                                          {opt.label}
+                                          <FaTimes className="text-[10px]" />
                                         </button>
-                                      ))}
+                                      </div>
                                     </div>
-                                  )}
-                                <input
-                                  type="text"
-                                  value={asistencia?.observacion || ""}
-                                  onChange={(e) =>
-                                    actualizarObservacionAsistencia(
-                                      est.id,
-                                      e.target.value,
-                                    )
-                                  }
-                                  placeholder={
-                                    esTutorOnly && !esTutorDelGradoActual
-                                      ? "Observación del tutor (no editable)"
-                                      : "Observación libre (opcional)..."
-                                  }
-                                  disabled={
-                                    esTutorOnly && !esTutorDelGradoActual
-                                  }
-                                  className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
-                                    esTutorOnly && !esTutorDelGradoActual
-                                      ? "border-blue-200 bg-blue-50 text-blue-700 cursor-not-allowed"
-                                      : "border-slate-300"
-                                  }`}
-                                />
-                              </div>
-                            )}
+                                  );
+                                }
+
+                                // ✅ Sin observación y estado ≠ A: solo acceso discreto ✎
+                                if (bloqueadaObs) return null;
+                                return (
+                                  <div className="mt-1.5 flex justify-end">
+                                    <button
+                                      onClick={() =>
+                                        setObsExpandida((p) => ({
+                                          ...p,
+                                          [est.id]: true,
+                                        }))
+                                      }
+                                      className="inline-flex items-center gap-1 p-1 text-slate-300 hover:text-slate-500 transition-colors"
+                                      title="Agregar observación"
+                                    >
+                                      <FaEdit className="text-[10px]" />
+                                      <span className="text-[10px]">obs.</span>
+                                    </button>
+                                  </div>
+                                );
+                              })()}
                           </div>
                         );
                       })}
@@ -2701,6 +3355,7 @@ export default function Calificaciones() {
             )}
         </>
       )}
+
       {mostrarBarraSticky && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] p-3 z-40">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
@@ -2759,6 +3414,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       {mostrarBarraStickyCalificaciones && (
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-40">
           <div className="border-b border-slate-100 px-3 py-2">
@@ -2847,6 +3503,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       {/* ==================== MODAL LISTADO DE ACTIVIDADES ==================== */}
       {showActividadesModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -2980,6 +3637,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       {showActividadModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6">
@@ -3099,6 +3757,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       {/* ==================== MODAL FICHA INDIVIDUAL (con observaciones) ==================== */}
       {showFichaModal && fichaEstudianteId && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
@@ -3255,7 +3914,6 @@ export default function Calificaciones() {
                             )}
                           </div>
                         </div>
-                        {/* ✅ NUEVO: Observación por actividad (visible si hay nota) */}
                         {(valor !== "" || !!base?.notaGuardada) &&
                           !bloqueada && (
                             <div className="mt-2">
@@ -3312,6 +3970,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       {showRefuerzoModal && refuerzoEstudianteId && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -3501,6 +4160,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
@@ -3537,6 +4197,7 @@ export default function Calificaciones() {
           </div>
         </div>
       )}
+
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -3572,4 +4233,5 @@ export default function Calificaciones() {
         })}
       </div>
     </Layout>
-  );}
+  );
+}
