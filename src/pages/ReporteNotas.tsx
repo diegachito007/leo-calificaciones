@@ -72,7 +72,6 @@ interface RegistroRiesgo {
   calificacionId: string;
   estudianteId: string;
   estudianteNombre: string;
-  estudianteCedula?: string;
   gradoId: string;
   gradoNombre: string;
   gradoParalelo: string;
@@ -495,13 +494,14 @@ export default function ReporteNotas() {
       if (estudiante.gradoId !== gradoTutorEfectivo) return;
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
-      const ambito = ambitosMap.get(actividad.ambitoId || destreza?.ambitoId || "");
+      const ambito = ambitosMap.get(
+        actividad.ambitoId || destreza?.ambitoId || "",
+      );
 
       registros.push({
         calificacionId: cal.id,
         estudianteId: estudiante.id,
         estudianteNombre: `${estudiante.apellidos} ${estudiante.nombres}`,
-        estudianteCedula: estudiante.cedula,
         gradoId: estudiante.gradoId,
         gradoNombre: grado?.nombre || "—",
         gradoParalelo: grado?.paralelo || "",
@@ -653,10 +653,13 @@ export default function ReporteNotas() {
         aplicadoPor: user?.uid || "",
         estrategiaElegida: refuerzoForm.estrategia,
       };
-      await updateDoc(doc(db, "calificaciones", refuerzoRegistro.calificacionId), {
-        refuerzo: refuerzoData,
-        updatedAt: serverTimestamp(),
-      });
+      await updateDoc(
+        doc(db, "calificaciones", refuerzoRegistro.calificacionId),
+        {
+          refuerzo: refuerzoData,
+          updatedAt: serverTimestamp(),
+        },
+      );
       setCalificaciones((prev) =>
         prev.map((c) =>
           c.id === refuerzoRegistro.calificacionId
@@ -693,7 +696,7 @@ export default function ReporteNotas() {
         .map(
           (r) => `
           <tr>
-            <td>${r.estudianteNombre}${r.estudianteCedula ? `<br><small>CI: ${r.estudianteCedula}</small>` : ""}</td>
+            <td>${r.estudianteNombre}</td>
             <td>${r.materiaNombre}<br><small>${r.ambitoNombre}</small></td>
             <td>${r.actividadTipo}: ${r.actividadDetalle}</td>
             <td>${r.actividadFecha}</td>
@@ -904,36 +907,39 @@ export default function ReporteNotas() {
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
         <label className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
           <FaGraduationCap className="text-blue-600" />
-          {modoEfectivo === "tutor" ? "Grado que tutoras" : "Grado donde dictas"}
+          {modoEfectivo === "tutor"
+            ? "Grado que tutoras"
+            : "Grado donde dictas"}
         </label>
         <div className="flex flex-wrap gap-2">
-          {(modoEfectivo === "tutor" ? gradosTutorizados : gradosDocenteMios).map(
-            (g) => {
-              const sel =
-                modoEfectivo === "tutor"
-                  ? gradoTutorEfectivo === g.id
-                  : gradoDocenteEfectivo === g.id;
-              return (
-                <button
-                  key={g.id}
-                  onClick={() =>
-                    modoEfectivo === "tutor"
-                      ? setGradoTutorSel(g.id)
-                      : setGradoDocenteSel(g.id)
-                  }
-                  className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
-                    sel
-                      ? modoEfectivo === "tutor"
-                        ? "bg-purple-600 text-white border-purple-600"
-                        : "bg-cyan-600 text-white border-cyan-600"
-                      : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
-                  }`}
-                >
-                  {g.nombre} - {g.paralelo}
-                </button>
-              );
-            },
-          )}
+          {(modoEfectivo === "tutor"
+            ? gradosTutorizados
+            : gradosDocenteMios
+          ).map((g) => {
+            const sel =
+              modoEfectivo === "tutor"
+                ? gradoTutorEfectivo === g.id
+                : gradoDocenteEfectivo === g.id;
+            return (
+              <button
+                key={g.id}
+                onClick={() =>
+                  modoEfectivo === "tutor"
+                    ? setGradoTutorSel(g.id)
+                    : setGradoDocenteSel(g.id)
+                }
+                className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                  sel
+                    ? modoEfectivo === "tutor"
+                      ? "bg-purple-600 text-white border-purple-600"
+                      : "bg-cyan-600 text-white border-cyan-600"
+                    : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
+                }`}
+              >
+                {g.nombre} - {g.paralelo}
+              </button>
+            );
+          })}
         </div>
         <div className="mt-3 text-xs text-slate-600 bg-slate-50 rounded-lg p-3 border border-slate-200">
           <FaInfoCircle className="inline mr-1 text-blue-600" />
@@ -1055,52 +1061,52 @@ export default function ReporteNotas() {
                 </div>
               </div>
               <div className="divide-y divide-slate-100">
-                {estudiantesUnicosEnRiesgo.map(({ estudiante, conteo, materias }) => (
-                  <div key={estudiante.estudianteId} className="p-4 hover:bg-slate-50">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <h4 className="font-semibold text-slate-900 text-sm">
-                            {estudiante.estudianteNombre}
-                          </h4>
-                          {estudiante.estudianteCedula && (
-                            <span className="text-[10px] text-slate-500">
-                              CI: {estudiante.estudianteCedula}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          {Array.from(materias)
-                            .slice(0, 4)
-                            .map((m) => (
-                              <span
-                                key={m}
-                                className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded"
-                              >
-                                {m}
+                {estudiantesUnicosEnRiesgo.map(
+                  ({ estudiante, conteo, materias }) => (
+                    <div
+                      key={estudiante.estudianteId}
+                      className="p-4 hover:bg-slate-50"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <h4 className="font-semibold text-slate-900 text-sm">
+                              {estudiante.estudianteNombre}
+                            </h4>
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {Array.from(materias)
+                              .slice(0, 4)
+                              .map((m) => (
+                                <span
+                                  key={m}
+                                  className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded"
+                                >
+                                  {m}
+                                </span>
+                              ))}
+                            {materias.size > 4 && (
+                              <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
+                                +{materias.size - 4} más
                               </span>
-                            ))}
-                          {materias.size > 4 && (
-                            <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                              +{materias.size - 4} más
-                            </span>
-                          )}
+                            )}
+                          </div>
                         </div>
+                        <span
+                          className={`px-3 py-1 rounded-full text-sm font-bold shrink-0 ${
+                            conteo >= 5
+                              ? "bg-red-100 text-red-700 border border-red-300"
+                              : conteo >= 3
+                                ? "bg-orange-100 text-orange-700 border border-orange-300"
+                                : "bg-amber-100 text-amber-700 border border-amber-300"
+                          }`}
+                        >
+                          {conteo} {conteo === 1 ? "nota" : "notas"} &lt; 7
+                        </span>
                       </div>
-                      <span
-                        className={`px-3 py-1 rounded-full text-sm font-bold shrink-0 ${
-                          conteo >= 5
-                            ? "bg-red-100 text-red-700 border border-red-300"
-                            : conteo >= 3
-                              ? "bg-orange-100 text-orange-700 border border-orange-300"
-                              : "bg-amber-100 text-amber-700 border border-amber-300"
-                        }`}
-                      >
-                        {conteo} {conteo === 1 ? "nota" : "notas"} &lt; 7
-                      </span>
                     </div>
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
             </div>
 
@@ -1151,11 +1157,6 @@ export default function ReporteNotas() {
                           <p className="font-medium text-slate-900 text-xs">
                             {r.estudianteNombre}
                           </p>
-                          {r.estudianteCedula && (
-                            <p className="text-[10px] text-slate-500">
-                              CI: {r.estudianteCedula}
-                            </p>
-                          )}
                         </td>
                         <td className="px-3 py-2.5">
                           <p className="text-xs font-medium text-slate-900 flex items-center gap-1">
@@ -1236,185 +1237,178 @@ export default function ReporteNotas() {
             </div>
           </div>
         )
-      ) : (
-        // ==================== VISTA DOCENTE: MATRIZ (SIN CAMBIOS) ====================
-        seccionesDocente.length === 0 ? (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
-            <div className="bg-slate-100 rounded-full p-5 mb-4 inline-block">
-              <FaBook className="text-4xl text-slate-400" />
-            </div>
-            <h3 className="text-lg font-bold text-slate-800 mb-2">
-              Sin actividades registradas
-            </h3>
-            <p className="text-slate-600 text-sm">
-              Aún no hay actividades con calificaciones en tus materias de este
-              grado y trimestre.
-            </p>
+      ) : // ==================== VISTA DOCENTE: MATRIZ (SIN CAMBIOS) ====================
+      seccionesDocente.length === 0 ? (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
+          <div className="bg-slate-100 rounded-full p-5 mb-4 inline-block">
+            <FaBook className="text-4xl text-slate-400" />
           </div>
-        ) : (
-          <div className="space-y-6">
-            {seccionesDocente.map((sec) => (
-              <div
-                key={sec.id}
-                className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden"
-              >
-                <div className="bg-linear-to-r from-cyan-600 to-cyan-700 px-5 py-3 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <FaBook className="text-white text-lg" />
-                    <div>
-                      <h3 className="text-white font-semibold">{sec.nombre}</h3>
-                      <p className="text-white/80 text-xs">{sec.ambitoNombre}</p>
-                    </div>
+          <h3 className="text-lg font-bold text-slate-800 mb-2">
+            Sin actividades registradas
+          </h3>
+          <p className="text-slate-600 text-sm">
+            Aún no hay actividades con calificaciones en tus materias de este
+            grado y trimestre.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {seccionesDocente.map((sec) => (
+            <div
+              key={sec.id}
+              className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden"
+            >
+              <div className="bg-linear-to-r from-cyan-600 to-cyan-700 px-5 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FaBook className="text-white text-lg" />
+                  <div>
+                    <h3 className="text-white font-semibold">{sec.nombre}</h3>
+                    <p className="text-white/80 text-xs">{sec.ambitoNombre}</p>
                   </div>
-                  <span className="text-white/90 text-xs bg-white/20 px-2 py-1 rounded-full">
-                    {sec.actividades.length} actividad(es)
-                  </span>
                 </div>
+                <span className="text-white/90 text-xs bg-white/20 px-2 py-1 rounded-full">
+                  {sec.actividades.length} actividad(es)
+                </span>
+              </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                      <tr>
-                        <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-10">
-                          #
-                        </th>
-                        <th className="text-left px-3 py-2 font-semibold text-slate-700 text-xs min-w-45 sticky left-0 bg-slate-50">
-                          Estudiante
-                        </th>
-                        {sec.actividades.map((a) => (
-                          <th
-                            key={a.id}
-                            className="text-center px-2 py-2 font-semibold text-slate-700 text-xs min-w-28"
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-10">
+                        #
+                      </th>
+                      <th className="text-left px-3 py-2 font-semibold text-slate-700 text-xs min-w-45 sticky left-0 bg-slate-50">
+                        Estudiante
+                      </th>
+                      {sec.actividades.map((a) => (
+                        <th
+                          key={a.id}
+                          className="text-center px-2 py-2 font-semibold text-slate-700 text-xs min-w-28"
+                        >
+                          <div className="text-[11px] font-bold text-slate-800">
+                            {a.tipo}
+                          </div>
+                          <div
+                            className="text-[10px] font-normal text-slate-600 truncate max-w-30"
+                            title={a.detalle}
                           >
-                            <div className="text-[11px] font-bold text-slate-800">
-                              {a.tipo}
-                            </div>
-                            <div
-                              className="text-[10px] font-normal text-slate-600 truncate max-w-30"
-                              title={a.detalle}
-                            >
-                              {a.detalle}
-                            </div>
-                            <div className="text-[10px] font-normal text-slate-500">
-                              {a.fecha}
-                            </div>
-                          </th>
-                        ))}
-                        <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-16">
-                          Prom
+                            {a.detalle}
+                          </div>
+                          <div className="text-[10px] font-normal text-slate-500">
+                            {a.fecha}
+                          </div>
                         </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {estudiantesDelGradoDocente.map((est, idx) => {
-                        let suma = 0;
-                        let conteo = 0;
-                        return (
-                          <tr key={est.id} className="hover:bg-slate-50">
-                            <td className="px-2 py-2 text-center text-xs text-slate-500">
-                              {idx + 1}
-                            </td>
-                            <td className="px-3 py-2 sticky left-0 bg-white">
-                              <div className="font-medium text-slate-900 text-xs truncate">
-                                {est.apellidos} {est.nombres}
-                              </div>
-                              {est.cedula && (
-                                <div className="text-[10px] text-slate-500">
-                                  CI: {est.cedula}
-                                </div>
-                              )}
-                            </td>
-                            {sec.actividades.map((a) => {
-                              const cal = calMap.get(`${est.id}|${a.id}`);
-                              if (!cal) {
-                                return (
-                                  <td
-                                    key={a.id}
-                                    className="px-2 py-2 text-center text-slate-300 text-xs"
-                                  >
-                                    —
-                                  </td>
-                                );
-                              }
-                              const nf = notaFinalDe(cal);
-                              suma += nf;
-                              conteo++;
-                              const puedeRefuerzo =
-                                !cal.refuerzo &&
-                                cal.nota < 7 &&
-                                misDestrezasTodas.has(a.destrezaId);
-                              const cls =
-                                nf >= 9
-                                  ? "bg-green-100 text-green-800 border-green-300"
-                                  : nf >= 7
-                                    ? "bg-blue-100 text-blue-800 border-blue-300"
-                                    : nf >= 5
-                                      ? "bg-amber-100 text-amber-800 border-amber-300"
-                                      : "bg-red-100 text-red-800 border-red-300";
+                      ))}
+                      <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-16">
+                        Prom
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {estudiantesDelGradoDocente.map((est, idx) => {
+                      let suma = 0;
+                      let conteo = 0;
+                      return (
+                        <tr key={est.id} className="hover:bg-slate-50">
+                          <td className="px-2 py-2 text-center text-xs text-slate-500">
+                            {idx + 1}
+                          </td>
+                          <td className="px-3 py-2 sticky left-0 bg-white">
+                            <div className="font-medium text-slate-900 text-xs truncate">
+                              {est.apellidos} {est.nombres}
+                            </div>
+                          </td>
+                          {sec.actividades.map((a) => {
+                            const cal = calMap.get(`${est.id}|${a.id}`);
+                            if (!cal) {
                               return (
-                                <td key={a.id} className="px-2 py-2 text-center">
-                                  {puedeRefuerzo ? (
-                                    <button
-                                      onClick={() =>
-                                        abrirRefuerzo({
-                                          calificacionId: cal.id,
-                                          estudianteNombre: `${est.apellidos} ${est.nombres}`,
-                                          materiaNombre: sec.nombre,
-                                          actividadDetalle: a.detalle,
-                                          notaOriginal: cal.nota,
-                                          destrezaId: a.destrezaId,
-                                          estrategiaActividad:
-                                            a.estrategiaNota || "promediar",
-                                        })
-                                      }
-                                      className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls} hover:ring-2 hover:ring-orange-400 cursor-pointer`}
-                                      title="Aplicar refuerzo"
-                                    >
-                                      {round2(nf)}
-                                    </button>
-                                  ) : (
-                                    <span
-                                      className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls}`}
-                                      title={
-                                        cal.refuerzo
-                                          ? `Refuerzo de ${cal.nota} → ${round2(nf)}`
-                                          : undefined
-                                      }
-                                    >
-                                      {round2(nf)}
-                                      {cal.refuerzo && (
-                                        <span className="block text-[9px] font-normal text-slate-500">
-                                          de {cal.nota}
-                                        </span>
-                                      )}
-                                    </span>
-                                  )}
+                                <td
+                                  key={a.id}
+                                  className="px-2 py-2 text-center text-slate-300 text-xs"
+                                >
+                                  —
                                 </td>
                               );
-                            })}
-                            <td className="px-2 py-2 text-center">
-                              <span
-                                className={`inline-block px-2 py-1 rounded text-xs font-bold ${
-                                  conteo === 0
-                                    ? "text-slate-400"
-                                    : suma / conteo >= 7
-                                      ? "bg-green-100 text-green-800"
-                                      : "bg-red-100 text-red-800"
-                                }`}
-                              >
-                                {conteo > 0 ? round2(suma / conteo) : "—"}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                            }
+                            const nf = notaFinalDe(cal);
+                            suma += nf;
+                            conteo++;
+                            const puedeRefuerzo =
+                              !cal.refuerzo &&
+                              cal.nota < 7 &&
+                              misDestrezasTodas.has(a.destrezaId);
+                            const cls =
+                              nf >= 9
+                                ? "bg-green-100 text-green-800 border-green-300"
+                                : nf >= 7
+                                  ? "bg-blue-100 text-blue-800 border-blue-300"
+                                  : nf >= 5
+                                    ? "bg-amber-100 text-amber-800 border-amber-300"
+                                    : "bg-red-100 text-red-800 border-red-300";
+                            return (
+                              <td key={a.id} className="px-2 py-2 text-center">
+                                {puedeRefuerzo ? (
+                                  <button
+                                    onClick={() =>
+                                      abrirRefuerzo({
+                                        calificacionId: cal.id,
+                                        estudianteNombre: `${est.apellidos} ${est.nombres}`,
+                                        materiaNombre: sec.nombre,
+                                        actividadDetalle: a.detalle,
+                                        notaOriginal: cal.nota,
+                                        destrezaId: a.destrezaId,
+                                        estrategiaActividad:
+                                          a.estrategiaNota || "promediar",
+                                      })
+                                    }
+                                    className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls} hover:ring-2 hover:ring-orange-400 cursor-pointer`}
+                                    title="Aplicar refuerzo"
+                                  >
+                                    {round2(nf)}
+                                  </button>
+                                ) : (
+                                  <span
+                                    className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls}`}
+                                    title={
+                                      cal.refuerzo
+                                        ? `Refuerzo de ${cal.nota} → ${round2(nf)}`
+                                        : undefined
+                                    }
+                                  >
+                                    {round2(nf)}
+                                    {cal.refuerzo && (
+                                      <span className="block text-[9px] font-normal text-slate-500">
+                                        de {cal.nota}
+                                      </span>
+                                    )}
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          })}
+                          <td className="px-2 py-2 text-center">
+                            <span
+                              className={`inline-block px-2 py-1 rounded text-xs font-bold ${
+                                conteo === 0
+                                  ? "text-slate-400"
+                                  : suma / conteo >= 7
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-red-100 text-red-800"
+                              }`}
+                            >
+                              {conteo > 0 ? round2(suma / conteo) : "—"}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            ))}
-          </div>
-        )
+            </div>
+          ))}
+        </div>
       )}
 
       {/* ==================== MODAL REFUERZO (compartido) ==================== */}
