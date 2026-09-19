@@ -1758,7 +1758,7 @@ export default function Calificaciones() {
 
           {/* ============ PANEL 1: ASISTENCIA ============ */}
           {panel === 1 && (
-            <div>
+            <div className={mostrarBarraSticky ? "pb-28" : ""}>
               <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
                 <button
                   onClick={volverListado}
@@ -2098,7 +2098,7 @@ export default function Calificaciones() {
 
           {/* ============ PANEL 2: CALIFICACIONES ============ */}
           {panel === 2 && (
-            <div>
+            <div className={mostrarBarraStickyCalificaciones ? "pb-32" : ""}>
               <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
                 <button
                   onClick={volverListado}
