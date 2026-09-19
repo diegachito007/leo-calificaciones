@@ -1847,12 +1847,20 @@ export default function Calificaciones() {
                     return (
                       <div
                         key={est.id}
-                        className={`border rounded-lg p-3 transition-colors ${
+                        className={`border rounded-lg p-3 transition-all border-l-4 ${
                           estado === "J"
-                            ? "border-green-300 bg-green-50/30"
+                            ? "border-emerald-200 bg-emerald-50/40 border-l-emerald-500 hover:shadow-md"
                             : esTutorOnly
-                              ? "border-blue-300 bg-blue-50/30"
-                              : "border-slate-200 bg-white hover:border-blue-300"
+                              ? "border-blue-200 bg-blue-50/40 border-l-blue-500 hover:shadow-md"
+                              : estado === "P"
+                                ? "border-blue-200 bg-blue-50/40 border-l-blue-500 hover:shadow-md"
+                                : estado === "A"
+                                  ? "border-amber-200 bg-amber-50/40 border-l-amber-500 hover:shadow-md"
+                                  : estado === "I"
+                                    ? "border-red-200 bg-red-50/40 border-l-red-500 hover:shadow-md"
+                                    : estado === "F"
+                                      ? "border-rose-200 bg-rose-50/40 border-l-rose-500 hover:shadow-md"
+                                      : "border-blue-200 bg-blue-50/30 border-l-blue-300 hover:shadow-md"
                         }`}
                       >
                         <div className="flex items-center justify-between gap-3">
@@ -2267,7 +2275,13 @@ export default function Calificaciones() {
                           return (
                             <div
                               key={est.id}
-                              className={`border rounded-lg p-3 transition-colors ${bloqueadoPorAusenciaHoy ? "border-red-300 bg-red-50/40" : ausenteAntiguo ? "border-amber-300 bg-amber-50/30" : "border-slate-200 hover:border-blue-300"}`}
+                              className={`border rounded-lg p-3 transition-all border-l-4 ${
+                                bloqueadoPorAusenciaHoy
+                                  ? "border-red-200 bg-red-50/40 border-l-red-500 hover:shadow-md"
+                                  : ausenteAntiguo
+                                    ? "border-amber-200 bg-amber-50/40 border-l-amber-500 hover:shadow-md"
+                                    : "border-orange-200 bg-orange-50/40 border-l-orange-400 hover:shadow-md"
+                              }`}
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <div className="flex-1 min-w-0">
