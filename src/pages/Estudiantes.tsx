@@ -32,7 +32,9 @@ import {
   FaTimesCircle,
   FaQuestionCircle,
   FaSpinner,
+  FaFileExcel,
 } from "react-icons/fa";
+import * as XLSX from "xlsx";
 import { cacheGet, cacheSet, cacheInvalidate } from "../utils/sessionCache";
 
 const formatText = (text: string): string => {
@@ -446,6 +448,94 @@ export default function Estudiantes() {
     printWindow.document.write(html);
     printWindow.document.close();
     printWindow.focus();
+  };
+
+  // ✅ EXPORTAR NÓMINA A EXCEL
+  const handleExportExcel = () => {
+    if (estudiantesAMostrar.length === 0) {
+      mostrarToast(
+        "warning",
+        "Sin datos",
+        "No hay estudiantes para exportar.",
+      );
+      return;
+    }
+
+    try {
+      // Ordenar: activos primero, luego inactivos, alfabético por apellidos
+      const listaOrdenada = [...estudiantesAMostrar].sort((a, b) => {
+        if (a.activo !== b.activo) return a.activo ? -1 : 1;
+        return a.apellidos.localeCompare(b.apellidos);
+      });
+
+      // Obtener grado seleccionado para el nombre del archivo y columnas adicionales
+      const gradoSeleccionado = gradosFiltrados.find(
+        (g) => g.id === gradoEfectivoId,
+      );
+
+      // Construir datos para Excel
+      const data = listaOrdenada.map((est, idx) => {
+        const row: Record<string, string | number> = {
+          "N°": idx + 1,
+          Apellidos: est.apellidos,
+          Nombres: est.nombres,
+          "Cédula/Código": est.cedula || "—",
+          Estado: est.activo ? "ACTIVO" : "INACTIVO",
+        };
+        if (esAdmin && gradoSeleccionado) {
+          row.Grado = gradoSeleccionado.nombre;
+          row.Paralelo = gradoSeleccionado.paralelo;
+        }
+        return row;
+      });
+
+      // Crear hoja de trabajo
+      const ws = XLSX.utils.json_to_sheet(data);
+
+      // Calcular anchos de columna según contenido máximo
+      const colWidths = Object.keys(data[0]).map((col) => {
+        const maxWidth = data.reduce((max, row) => {
+          const cellValue = String(row[col] ?? "");
+          return Math.max(max, cellValue.length);
+        }, col.length); // Al menos el largo del header
+        return { wch: Math.min(maxWidth + 2, 50) }; // Máximo 50 caracteres
+      });
+      ws["!cols"] = colWidths;
+
+      // Crear workbook con una hoja llamada "Nómina"
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Nómina");
+
+      // Generar nombre del archivo
+      const now = new Date();
+      const fechaStr = now.toISOString().split("T")[0]; // YYYY-MM-DD
+
+      let nombreArchivo: string;
+      if (gradoSeleccionado) {
+        const gradoNombre = gradoSeleccionado.nombre.replace(/ /g, "_");
+        const paralelo = gradoSeleccionado.paralelo.replace(/ /g, "_");
+        nombreArchivo = `Nomina_${gradoNombre}_${paralelo}_${fechaStr}.xlsx`;
+      } else {
+        nombreArchivo = `Nomina_Todos_${fechaStr}.xlsx`;
+      }
+
+      // Descargar archivo
+      XLSX.writeFile(wb, nombreArchivo);
+
+      // Mostrar toast de éxito
+      mostrarToast(
+        "success",
+        "Excel descargado",
+        `Se exportaron ${listaOrdenada.length} estudiante${listaOrdenada.length !== 1 ? "s" : ""}.`,
+      );
+    } catch (error) {
+      console.error("Error exportando a Excel:", error);
+      mostrarToast(
+        "error",
+        "Error al exportar",
+        "No se pudo descargar el archivo Excel.",
+      );
+    }
   };
 
   const parsearListaMasiva = (
@@ -1266,27 +1356,37 @@ export default function Estudiantes() {
                   {(esAdmin ||
                     (userData?.role === "docente" && gradoEfectivoId)) &&
                     estudiantes.length > 0 && (
-                      <button
-                        onClick={handlePrintNomina}
-                        className="inline-flex items-center gap-2 bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm"
-                        title="Imprimir nómina completa (activos e inactivos)"
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="w-4 h-4"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+                      <>
+                        {estudiantesAMostrar.length > 0 && (
+                          <button
+                            onClick={handleExportExcel}
+                            className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm"
+                          >
+                            <FaFileExcel /> Descargar Excel
+                          </button>
+                        )}
+                        <button
+                          onClick={handlePrintNomina}
+                          className="inline-flex items-center gap-2 bg-slate-700 hover:bg-slate-800 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm"
+                          title="Imprimir nómina completa (activos e inactivos)"
                         >
-                          <polyline points="6 9 6 2 18 2 18 9" />
-                          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-                          <rect x="6" y="14" width="12" height="8" />
-                        </svg>
-                        Imprimir Nómina
-                      </button>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="w-4 h-4"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <polyline points="6 9 6 2 18 2 18 9" />
+                            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                            <rect x="6" y="14" width="12" height="8" />
+                          </svg>
+                          Imprimir Nómina
+                        </button>
+                      </>
                     )}
                   {puedeRegistrar && (
                     <button
