@@ -6,9 +6,9 @@ import {
   updateDoc,
   doc,
   serverTimestamp,
-  getDocs,
   where,
   addDoc,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -35,7 +35,6 @@ import {
   FaFileExcel,
 } from "react-icons/fa";
 import * as XLSX from "xlsx";
-import { cacheGet, cacheSet, cacheInvalidate } from "../utils/sessionCache";
 
 const formatText = (text: string): string => {
   if (!text) return "";
@@ -71,15 +70,13 @@ interface EstudianteParseado {
   nombres: string;
 }
 
-// ✅ TTL del cache para estudiantes (30 minutos)
-const TTL_ESTUDIANTES = 1000 * 60 * 30;
-
 export default function Estudiantes() {
   const { user, userData } = useAuth();
   const { grados, anioActivo, ready } = useData();
 
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
-  const [loadingEstudiantes, setLoadingEstudiantes] = useState(false);
+  const [gradoCargado, setGradoCargado] = useState<string | null>(null);
+  
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedGradoId, setSelectedGradoId] = useState<string | null>(null);
@@ -210,90 +207,44 @@ export default function Estudiantes() {
     setValidationErrors([]);
   };
 
-  // ✅ Función unificada para cargar estudiantes con cache
-  const cargarEstudiantes = useCallback(
-    async (gradoId: string | null, forceRefresh = false) => {
-      if (userData?.role === "docente" && !gradoId) {
-        setEstudiantes([]);
-        return;
-      }
-
-      const cacheKey = gradoId
-        ? `estudiantesTodos_${gradoId}`
-        : "estudiantesTodos_todos";
-
-      // Intentar obtener del cache primero (si no es refresh forzado)
-      if (!forceRefresh) {
-        const cached = cacheGet<Estudiante[]>(cacheKey, TTL_ESTUDIANTES);
-        if (cached) {
-          setEstudiantes(cached);
-          return;
-        }
-      }
-
-      setLoadingEstudiantes(true);
-
-      let q;
-      if ((userData?.role === "docente" || esAdmin) && gradoId) {
-        q = query(
-          collection(db, "estudiantes"),
-          where("gradoId", "==", gradoId),
-          orderBy("apellidos", "asc"),
-        );
-      } else {
-        q = query(collection(db, "estudiantes"), orderBy("apellidos", "asc"));
-      }
-
-      try {
-        const snap = await getDocs(q);
-        const data = snap.docs.map(
-          (doc) =>
-            ({
-              id: doc.id,
-              ...doc.data(),
-            }) as Estudiante,
-        );
-
-        // Guardar en cache
-        cacheSet(cacheKey, data);
-        setEstudiantes(data);
-      } catch (error) {
-        console.error("Error cargando estudiantes:", error);
-      } finally {
-        setLoadingEstudiantes(false);
-      }
-    },
-    [userData?.role, esAdmin],
-  );
-
-  // ✅ Effect inicial con cache
+  // ✅ Tiempo real con onSnapshot. SIN setState síncrono en el cuerpo del
+  // effect: el spinner se deriva comparando el grado del último snapshot
+  // recibido contra el grado efectivo actual.
   useEffect(() => {
     if (!ready) return;
+    const esDocente = userData?.role === "docente";
+    if (esDocente && !gradoEfectivoId) return;
+    
+    const claveGrado = gradoEfectivoId ?? "__todos__";
+    const q = gradoEfectivoId
+      ? query(
+          collection(db, "estudiantes"),
+          where("gradoId", "==", gradoEfectivoId),
+          orderBy("apellidos", "asc"),
+        )
+      : query(collection(db, "estudiantes"), orderBy("apellidos", "asc"));
+    
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        setEstudiantes(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
+        );
+        setGradoCargado(claveGrado);
+      },
+      (error) => {
+        console.error("Error escuchando estudiantes:", error);
+        setGradoCargado(claveGrado);
+      },
+    );
+    return () => unsubscribe();
+  }, [ready, gradoEfectivoId, userData?.role]);
 
-    const ejecutar = async () => {
-      await cargarEstudiantes(gradoEfectivoId);
-    };
-    ejecutar();
-  }, [gradoEfectivoId, ready, cargarEstudiantes]);
-
-  // ✅ Función para invalidar cache y recargar (sin useCallback)
-  async function recargarEstudiantes() {
-    // Invalidar cache de "todos" (este módulo)
-    const cacheKeyTodos = gradoEfectivoId
-      ? `estudiantesTodos_${gradoEfectivoId}`
-      : "estudiantesTodos_todos";
-    cacheInvalidate(cacheKeyTodos);
-
-    // Invalidar cache de "activos" (usado por Calificaciones)
-    if (gradoEfectivoId) {
-      cacheInvalidate(`estudiantesActivos_${gradoEfectivoId}`);
-    }
-
-    await cargarEstudiantes(gradoEfectivoId, true);
-
-    // Notificar al DataContext que los datos cambiaron
-    window.dispatchEvent(new Event("eduX:refreshData"));
-  }
+  // ✅ Derivar cargandoLista: true si el grado efectivo no coincide con el último cargado
+  const cargandoLista =
+    ready && (gradoEfectivoId !== null || esAdmin)
+      ? gradoCargado !== (gradoEfectivoId ?? "__todos__")
+      : false;
 
   // ✅ IMPRIMIR NÓMINA DEL GRADO (activos + inactivos)
   const handlePrintNomina = () => {
@@ -663,17 +614,11 @@ export default function Estudiantes() {
 
     setIsSavingMassive(true);
     try {
-      const q = query(
-        collection(db, "estudiantes"),
-        where("gradoId", "==", gradoEfectivoId),
+      const mapaExistentes = new Map(
+        estudiantes
+          .filter((e) => e.gradoId === gradoEfectivoId)
+          .map((e) => [e.cedula, e]),
       );
-      const snap = await getDocs(q);
-      const existentes = snap.docs.map((d) => ({
-        id: d.id,
-        cedula: d.data().cedula,
-        activo: d.data().activo ?? true,
-      }));
-      const mapaExistentes = new Map(existentes.map((e) => [e.cedula, e]));
 
       const aCrear: EstudianteParseado[] = [];
       const aReactivar: (EstudianteParseado & { id: string })[] = [];
@@ -742,8 +687,6 @@ export default function Estudiantes() {
       setMassiveData("");
       setValidationErrors([]);
       setShowMassiveForm(false);
-
-      await recargarEstudiantes();
     } catch (error) {
       console.error("Error guardando estudiantes masivos:", error);
       mostrarToast(
@@ -815,8 +758,6 @@ export default function Estudiantes() {
         });
       }
       resetForm();
-
-      await recargarEstudiantes();
 
       mostrarToast(
         "success",
@@ -892,8 +833,6 @@ export default function Estudiantes() {
         "Estudiante desactivado",
         `"${estudiante.apellidos} ${estudiante.nombres}" fue desactivado correctamente.`,
       );
-
-      await recargarEstudiantes();
     } catch (error) {
       console.error("Error desactivando:", error);
       mostrarToast(
@@ -925,8 +864,6 @@ export default function Estudiantes() {
         estadoActual ? "Estudiante desactivado" : "Estudiante reactivado",
         `"${estudiante.apellidos} ${estudiante.nombres}" ${estadoActual ? "fue desactivado" : "fue reactivado correctamente"}.`,
       );
-
-      await recargarEstudiantes();
     } catch (error) {
       console.error("Error actualizando estado:", error);
       mostrarToast(
@@ -1428,7 +1365,7 @@ export default function Estudiantes() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
-                      {loadingEstudiantes ? (
+                      {cargandoLista ? (
                         <tr>
                           <td colSpan={4} className="px-5 py-16 text-center">
                             <div className="flex flex-col items-center">
@@ -1612,7 +1549,7 @@ export default function Estudiantes() {
                   </table>
                 </div>
 
-                {estudiantesAMostrar.length > 0 && !loadingEstudiantes && (
+                {estudiantesAMostrar.length > 0 && !cargandoLista && (
                   <div className="bg-slate-50 px-5 py-3 border-t border-slate-200">
                     <div className="flex items-center justify-between text-xs text-slate-600">
                       <span>

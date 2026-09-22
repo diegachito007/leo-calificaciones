@@ -1,0 +1,41 @@
+📜 PROTOCOLO QWEN → PRODUCCIÓN (tarjeta de bolsillo)
+
+📋 FASE 1 — Qwen Coder Web (proponer)
+1.	Nuevo Chat → conectar repo dosdemarzo-dev / rama main
+
+2.	Pegar prompt con esta plantilla:
+   Realiza exactamente estos cambios:
+   1. En [archivo]: [cambio específico]
+   2. En [archivo]: [cambio específico]
+   Reglas:
+   - Modifica SOLO lo listado arriba.
+   - NO toques .gitignore ni ningún otro archivo.
+   - NO escribas frases, comentarios ni explicaciones dentro de ningún archivo.
+   - Al final muéstrame la lista de archivos que modificaste.
+3.	Revisar el REGISTRO de herramientas (nunca el "Resumen"):
+
+o	Archivos pedidos: +1 −1 c/u ✅
+o	.gitignore: aparecerá tocado (quirk esperado) 🔴 → se arregla en Fase 4
+
+4.	Clic "Publicar en Github" → se crea el PR
+
+🔍 FASE 2 — GitHub (revisar)
+5.	PR → "Files changed":
+o	Esperado: solo tus archivos + .gitignore
+o	🛑 ALTO si aparece un archivo extra → no mergear, investigar
+
+6.	"Conversation" → "Merge pull request" → "Confirm merge" 🟣
+
+🌐 FASE 3 — Verificar en vivo
+7.	Vercel → deploy "Ready"
+
+8.	App con Ctrl + Shift + R → confirmar que los cambios se ven 🎉
+🛠️ FASE 4 — VS Code (sincronizar y sanear)
+
+9.	Terminal, en orden:
+   git pull origin main
+   git checkout 1f6cdef -- .gitignore        
+   git commit -m "Restauro .gitignore"   
+   git push                                 
+
+10.	Confirmar: .gitignore con 25 líneas en GitHub + git status clean
