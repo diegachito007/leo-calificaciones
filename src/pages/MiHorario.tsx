@@ -3,7 +3,6 @@ import {
   collection,
   query,
   where,
-  getDocs,
   addDoc,
   deleteDoc,
   doc,
@@ -60,14 +59,13 @@ interface ConfirmModalState {
 export default function MiHorario() {
   const { user, userData } = useAuth();
 
-  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
   const { grados, destrezas, ambitos, anioActivo, ready } = useData();
 
   const [asignaturas, setAsignaturas] = useState<AsignaturaDocente[]>([]);
-  // ✅ Cache en memoria de asignaturas ACTIVAS del grado+año (todos los docentes)
+  // ✅ Cache del grado: ahora alimentado por onSnapshot (tiempo real multi-dispositivo)
   const [asignaturasGradoCache, setAsignaturasGradoCache] = useState<
     Map<string, string[]>
-  >(new Map()); // destrezaId -> docenteIds[]
+  >(new Map());
   const [saving, setSaving] = useState(false);
   const [selectedGradoId, setSelectedGradoId] = useState<string>('');
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -79,7 +77,6 @@ export default function MiHorario() {
     onCancel: () => {},
   });
 
-  // ✅ Grados filtrados localmente (sin lectura a Firestore)
   const gradosFiltrados = (() => {
     if (
       userData?.role === 'docente' &&
@@ -92,11 +89,9 @@ export default function MiHorario() {
     return grados;
   })();
 
-  // ✅ Grado efectivo: el seleccionado por el usuario, o el primero como default
   const gradoEfectivoId =
     selectedGradoId || (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : '');
 
-  // ==================== HELPERS DE NOTIFICACIÓN ====================
   const mostrarToast = useCallback(
     (type: Toast['type'], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -147,7 +142,7 @@ export default function MiHorario() {
     [],
   );
 
-  // ==================== CARGA DE ASIGNATURAS PROPIAS (listener) ====================
+  // ✅ ASIGNATURAS PROPIAS: listener en tiempo real (sin cambios)
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
     const q = query(
@@ -171,20 +166,21 @@ export default function MiHorario() {
     return () => unsubscribe();
   }, [user?.uid, anioActivo?.id]);
 
-  // ✅ NUEVO: Cache de asignaturas ACTIVAS del grado+año (TODOS los docentes)
-  // Una sola lectura al cambiar de grado; evita N queries al asignar masivamente
+  // ✅ CACHE DEL GRADO: ahora con onSnapshot para tiempo real multi-dispositivo.
+  // Si otro docente asigna/quita una materia en el MISMO grado y MISMO año lectivo,
+  // este listener la detecta y actualiza la disponibilidad al instante (<1s).
+  // Reemplaza el getDocs anterior: 0 lecturas extra por recarga manual.
   useEffect(() => {
     if (!gradoEfectivoId || !anioActivo?.id) return;
-    let mounted = true;
-    const cargar = async () => {
-      try {
-        const q = query(
-          collection(db, 'asignaturasDocente'),
-          where('gradoId', '==', gradoEfectivoId),
-          where('anioLectivoId', '==', anioActivo.id),
-          where('activo', '==', true),
-        );
-        const snap = await getDocs(q);
+    const q = query(
+      collection(db, 'asignaturasDocente'),
+      where('gradoId', '==', gradoEfectivoId),
+      where('anioLectivoId', '==', anioActivo.id),
+      where('activo', '==', true),
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
         const mapa = new Map<string, string[]>();
         snap.docs.forEach((d) => {
           const data = d.data();
@@ -193,35 +189,16 @@ export default function MiHorario() {
           if (!mapa.has(destrezaId)) mapa.set(destrezaId, []);
           mapa.get(destrezaId)!.push(docenteId);
         });
-        if (mounted) setAsignaturasGradoCache(mapa);
-      } catch (error) {
-        console.error('Error cargando asignaturas del grado:', error);
-      }
-    };
-    cargar();
-    return () => {
-      mounted = false;
-    };
+        setAsignaturasGradoCache(mapa);
+      },
+      (error) => {
+        console.error('Error escuchando asignaturas del grado:', error);
+      },
+    );
+    return () => unsubscribe();
   }, [gradoEfectivoId, anioActivo?.id]);
 
-  // ✅ Mantener el cache consistente tras mis propias acciones (sin lecturas extra)
-  const actualizarCacheGrado = (destrezaId: string, agregar: boolean) => {
-    setAsignaturasGradoCache((prev) => {
-      const nuevo = new Map(prev);
-      const lista = nuevo.get(destrezaId) ? [...nuevo.get(destrezaId)!] : [];
-      if (agregar) {
-        if (!lista.includes(user?.uid || '')) lista.push(user?.uid || '');
-      } else {
-        const idx = lista.indexOf(user?.uid || '');
-        if (idx >= 0) lista.splice(idx, 1);
-      }
-      if (lista.length === 0) nuevo.delete(destrezaId);
-      else nuevo.set(destrezaId, lista);
-      return nuevo;
-    });
-  };
-
-  // ==================== HELPERS ====================
+  // ✅ HELPERS ====================
   const getAmbitoNombre = (ambitoId: string): string => {
     const ambito = ambitos.find((a) => a.id === ambitoId);
     return ambito?.nombre || 'Sin ámbito';
@@ -229,7 +206,11 @@ export default function MiHorario() {
 
   const esGradoInicial = (gradoNombre: string): boolean => {
     const n = gradoNombre.toLowerCase();
-    return n.includes('inicial 1') || n.includes('inicial 2') || n.includes('preparatoria');
+    return (
+      n.includes('inicial 1') ||
+      n.includes('inicial 2') ||
+      n.includes('preparatoria')
+    );
   };
 
   const destrezasDelGrado = (() => {
@@ -250,7 +231,8 @@ export default function MiHorario() {
   })();
 
   const destrezasPorAmbito = (() => {
-    const grupos: Record<string, { ambito: Ambito; destrezas: Destreza[] }> = {};
+    const grupos: Record<string, { ambito: Ambito; destrezas: Destreza[] }> =
+      {};
     destrezasDisponibles.forEach((destreza) => {
       const ambito = ambitos.find((a) => a.id === destreza.ambitoId);
       if (!ambito) return;
@@ -262,20 +244,17 @@ export default function MiHorario() {
     return Object.values(grupos);
   })();
 
-  // ==================== ACCIONES ====================
-
-  // ✅ OPTIMIZADO: verificar disponibilidad en memoria (0 lecturas a Firestore)
+  // ✅ VERIFICAR DISPONIBILIDAD: 0 lecturas (todo en memoria, alimentado por listeners)
   const verificarDisponibilidad = (destrezaId: string): boolean => {
-    // Si yo ya la tengo asignada en este grado, está disponible para mí
     const asignacionPropia = asignaturas.find(
       (a) => a.gradoId === gradoEfectivoId && a.destrezaId === destrezaId,
     );
     if (asignacionPropia) return true;
-    // Si otro docente la tiene activa en este grado, no está disponible
     const docentes = asignaturasGradoCache.get(destrezaId) || [];
     return docentes.length === 0;
   };
 
+  // ==================== ACCIONES ====================
   const asignarMateria = async (destrezaId: string) => {
     if (!user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
     setSaving(true);
@@ -299,7 +278,7 @@ export default function MiHorario() {
         activo: true,
         createdAt: new Date(),
       });
-      actualizarCacheGrado(destrezaId, true);
+      // ✅ Sin actualizarCacheGrado: el onSnapshot del grado lo actualiza solo
       mostrarToast(
         'success',
         'Materia asignada',
@@ -307,7 +286,11 @@ export default function MiHorario() {
       );
     } catch (error) {
       console.error('Error asignando materia:', error);
-      mostrarToast('error', 'Error al asignar', 'No se pudo asignar la materia. Intenta nuevamente.');
+      mostrarToast(
+        'error',
+        'Error al asignar',
+        'No se pudo asignar la materia. Intenta nuevamente.',
+      );
     } finally {
       setSaving(false);
     }
@@ -334,6 +317,8 @@ export default function MiHorario() {
       let asignadas = 0;
       let omitidas = 0;
       for (const destreza of grupo.destrezas) {
+        // Re-verificar disponibilidad en cada iteración (el cache puede actualizarse
+        // entre escrituras si otro docente asigna en paralelo)
         const disponible = verificarDisponibilidad(destreza.id);
         if (!disponible) {
           omitidas++;
@@ -347,7 +332,7 @@ export default function MiHorario() {
           activo: true,
           createdAt: new Date(),
         });
-        actualizarCacheGrado(destreza.id, true);
+        // ✅ Sin actualizarCacheGrado: el onSnapshot lo actualiza solo
         asignadas++;
       }
       let mensaje = `Se asignaron ${asignadas} destreza(s).`;
@@ -356,8 +341,15 @@ export default function MiHorario() {
       }
       mostrarToast('success', 'Asignación masiva completada', mensaje, 6000);
     } catch (error) {
-      console.error('Error asignando todas las destrezas del ámbito:', error);
-      mostrarToast('error', 'Error al asignar', 'No se pudieron asignar las destrezas del ámbito.');
+      console.error(
+        'Error asignando todas las destrezas del ámbito:',
+        error,
+      );
+      mostrarToast(
+        'error',
+        'Error al asignar',
+        'No se pudieron asignar las destrezas del ámbito.',
+      );
     } finally {
       setSaving(false);
     }
@@ -382,7 +374,7 @@ export default function MiHorario() {
     setSaving(true);
     try {
       await deleteDoc(doc(db, 'asignaturasDocente', asignacionId));
-      if (asignatura) actualizarCacheGrado(asignatura.destrezaId, false);
+      // ✅ Sin actualizarCacheGrado: el onSnapshot lo actualiza solo
       mostrarToast(
         'success',
         'Materia removida',
@@ -390,13 +382,16 @@ export default function MiHorario() {
       );
     } catch (error) {
       console.error('Error removiendo materia:', error);
-      mostrarToast('error', 'Error al remover', 'No se pudo quitar la materia del horario.');
+      mostrarToast(
+        'error',
+        'Error al remover',
+        'No se pudo quitar la materia del horario.',
+      );
     } finally {
       setSaving(false);
     }
   };
 
-  // ==================== CONFIG DE TOASTS ====================
   const toastConfig = {
     success: {
       bg: 'bg-green-50 border-green-400',
@@ -452,12 +447,13 @@ export default function MiHorario() {
   }
 
   const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
-  const esInicialOPreparatoria = gradoActual ? esGradoInicial(gradoActual.nombre) : false;
+  const esInicialOPreparatoria = gradoActual
+    ? esGradoInicial(gradoActual.nombre)
+    : false;
 
   return (
     <Layout>
       <div className="space-y-6">
-        {/* Selector de grados */}
         {gradosFiltrados.length > 0 && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
@@ -466,7 +462,9 @@ export default function MiHorario() {
             </h3>
             <div className="flex flex-wrap gap-2">
               {gradosFiltrados.map((grado) => {
-                const countAsignadas = asignaturas.filter((a) => a.gradoId === grado.id).length;
+                const countAsignadas = asignaturas.filter(
+                  (a) => a.gradoId === grado.id,
+                ).length;
                 const esInicial = esGradoInicial(grado.nombre);
                 return (
                   <button
@@ -504,14 +502,14 @@ export default function MiHorario() {
           </div>
         )}
 
-        {/* Panel de materias asignadas */}
         {gradoEfectivoId && (
           <div className="bg-white rounded-xl shadow-sm border-2 border-green-200 overflow-hidden">
             <div className="bg-linear-to-r from-green-600 to-green-700 px-5 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <FaCheckCircle className="text-white text-lg" />
                 <h3 className="text-white font-semibold">
-                  Mis Materias Asignadas en {gradoActual?.nombre} - {gradoActual?.paralelo}
+                  Mis Materias Asignadas en {gradoActual?.nombre} -{' '}
+                  {gradoActual?.paralelo}
                 </h3>
               </div>
               <span className="bg-white text-green-700 px-3 py-1 rounded-full text-sm font-bold">
@@ -522,13 +520,19 @@ export default function MiHorario() {
               {asignaturasDelGrado.length === 0 ? (
                 <div className="text-center py-6 text-slate-400">
                   <FaBook className="text-3xl mx-auto mb-2" />
-                  <p className="text-sm">Aún no has asignado materias en este grado</p>
-                  <p className="text-xs mt-1">Selecciona materias desde la lista de abajo</p>
+                  <p className="text-sm">
+                    Aún no has asignado materias en este grado
+                  </p>
+                  <p className="text-xs mt-1">
+                    Selecciona materias desde la lista de abajo
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                   {asignaturasDelGrado.map((asignatura) => {
-                    const destreza = destrezas.find((d) => d.id === asignatura.destrezaId);
+                    const destreza = destrezas.find(
+                      (d) => d.id === asignatura.destrezaId,
+                    );
                     if (!destreza) return null;
                     const ambitoNombre = getAmbitoNombre(destreza.ambitoId);
                     return (
@@ -561,7 +565,6 @@ export default function MiHorario() {
           </div>
         )}
 
-        {/* Lista de materias disponibles */}
         {gradoEfectivoId && (
           <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
             <h3 className="text-base font-semibold text-slate-800 mb-1">
@@ -570,82 +573,97 @@ export default function MiHorario() {
             <p className="text-xs text-slate-500 mb-4">
               {esInicialOPreparatoria ? (
                 <>
-                  <strong>Modo Inicial/Preparatoria:</strong> Usa el botón "Asignar todo el ámbito" para asignar rápidamente todas las destrezas de un ámbito, o asigna individualmente.
+                  <strong>Modo Inicial/Preparatoria:</strong> Usa el botón
+                  "Asignar todo el ámbito" para asignar rápidamente todas las
+                  destrezas de un ámbito, o asigna individualmente.
                 </>
               ) : (
                 <>
-                  Haz clic en "Asignar" para agregar una materia a tu horario de {gradoActual?.nombre} - {gradoActual?.paralelo}
+                  Haz clic en "Asignar" para agregar una materia a tu horario de{' '}
+                  {gradoActual?.nombre} - {gradoActual?.paralelo}
                 </>
               )}
             </p>
             {destrezasDisponibles.length === 0 ? (
               <div className="text-center py-8 text-slate-400">
                 <FaCheck className="text-3xl mx-auto mb-2 text-green-500" />
-                <p className="text-sm font-medium">¡Ya tienes todas las materias asignadas!</p>
-                <p className="text-xs mt-1">No hay más materias disponibles en este grado</p>
+                <p className="text-sm font-medium">
+                  ¡Ya tienes todas las materias asignadas!
+                </p>
+                <p className="text-xs mt-1">
+                  No hay más materias disponibles en este grado
+                </p>
               </div>
             ) : esInicialOPreparatoria ? (
               <div className="space-y-4">
-                {destrezasPorAmbito.map(({ ambito, destrezas: destrezasAmbito }) => (
-                  <div key={ambito.id} className="border-2 border-purple-200 rounded-lg overflow-hidden">
-                    <div className="bg-purple-50 border-b border-purple-200 px-4 py-3 flex items-center justify-between">
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <FaBook className="text-purple-600 shrink-0" />
-                        <div className="min-w-0">
-                          <h4 className="font-semibold text-purple-900 text-sm truncate">
-                            {ambito.nombre}
-                          </h4>
-                          <p className="text-xs text-purple-700">
-                            {destrezasAmbito.length} destreza{destrezasAmbito.length !== 1 ? 's' : ''} disponible{destrezasAmbito.length !== 1 ? 's' : ''}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => asignarTodasDelAmbito(ambito.id)}
-                        disabled={saving}
-                        className="ml-3 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 hover:bg-purple-700 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                        title={`Asignar todas las destrezas de ${ambito.nombre}`}
-                      >
-                        {saving ? (
-                          <FaSpinner className="animate-spin text-xs" />
-                        ) : (
-                          <>
-                            <FaPlus className="text-xs" />
-                            Asignar todo
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    <div className="p-3 space-y-2">
-                      {destrezasAmbito.map((destreza) => (
-                        <div
-                          key={destreza.id}
-                          className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50 transition-all"
-                        >
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-slate-800 text-sm truncate">
-                              {destreza.nombre}
+                {destrezasPorAmbito.map(
+                  ({ ambito, destrezas: destrezasAmbito }) => (
+                    <div
+                      key={ambito.id}
+                      className="border-2 border-purple-200 rounded-lg overflow-hidden"
+                    >
+                      <div className="bg-purple-50 border-b border-purple-200 px-4 py-3 flex items-center justify-between">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <FaBook className="text-purple-600 shrink-0" />
+                          <div className="min-w-0">
+                            <h4 className="font-semibold text-purple-900 text-sm truncate">
+                              {ambito.nombre}
+                            </h4>
+                            <p className="text-xs text-purple-700">
+                              {destrezasAmbito.length} destreza
+                              {destrezasAmbito.length !== 1 ? 's' : ''}{' '}
+                              disponible
+                              {destrezasAmbito.length !== 1 ? 's' : ''}
                             </p>
                           </div>
-                          <button
-                            onClick={() => asignarMateria(destreza.id)}
-                            disabled={saving}
-                            className="ml-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                          >
-                            {saving ? (
-                              <FaSpinner className="animate-spin text-xs" />
-                            ) : (
-                              <>
-                                <FaCheck className="text-xs" />
-                                Asignar
-                              </>
-                            )}
-                          </button>
                         </div>
-                      ))}
+                        <button
+                          onClick={() => asignarTodasDelAmbito(ambito.id)}
+                          disabled={saving}
+                          className="ml-3 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 hover:bg-purple-700 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                          title={`Asignar todas las destrezas de ${ambito.nombre}`}
+                        >
+                          {saving ? (
+                            <FaSpinner className="animate-spin text-xs" />
+                          ) : (
+                            <>
+                              <FaPlus className="text-xs" />
+                              Asignar todo
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      <div className="p-3 space-y-2">
+                        {destrezasAmbito.map((destreza) => (
+                          <div
+                            key={destreza.id}
+                            className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50 transition-all"
+                          >
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-slate-800 text-sm truncate">
+                                {destreza.nombre}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => asignarMateria(destreza.id)}
+                              disabled={saving}
+                              className="ml-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                            >
+                              {saving ? (
+                                <FaSpinner className="animate-spin text-xs" />
+                              ) : (
+                                <>
+                                  <FaCheck className="text-xs" />
+                                  Asignar
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ),
+                )}
               </div>
             ) : (
               <div className="space-y-2">
@@ -687,19 +705,20 @@ export default function MiHorario() {
           </div>
         )}
 
-        {/* Mensaje si no hay grados */}
         {gradosFiltrados.length === 0 && ready && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
             <FaExclamationTriangle className="text-yellow-600 text-4xl mx-auto mb-3" />
-            <p className="text-yellow-800 font-medium mb-2">No tienes grados asignados</p>
+            <p className="text-yellow-800 font-medium mb-2">
+              No tienes grados asignados
+            </p>
             <p className="text-sm text-yellow-700">
-              Contacta al administrador para que te asigne grados antes de configurar tu horario.
+              Contacta al administrador para que te asigne grados antes de
+              configurar tu horario.
             </p>
           </div>
         )}
       </div>
 
-      {/* CONTENEDOR DE TOASTS */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -709,13 +728,21 @@ export default function MiHorario() {
               key={toast.id}
               className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
             >
-              <div className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}>
+              <div
+                className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
+              >
                 <Icon className="text-white text-sm" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>{toast.title}</p>
+                <p className={`font-semibold text-sm ${config.titleColor}`}>
+                  {toast.title}
+                </p>
                 {toast.message && (
-                  <p className={`text-xs ${config.msgColor} mt-0.5 whitespace-pre-line`}>{toast.message}</p>
+                  <p
+                    className={`text-xs ${config.msgColor} mt-0.5 whitespace-pre-line`}
+                  >
+                    {toast.message}
+                  </p>
                 )}
               </div>
               <button
@@ -729,7 +756,6 @@ export default function MiHorario() {
         })}
       </div>
 
-      {/* MODAL DE CONFIRMACIÓN */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
@@ -739,7 +765,9 @@ export default function MiHorario() {
                   <ConfirmIcon className="text-slate-700 text-xl" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-bold text-slate-900 mb-1">{confirmModal.title}</h3>
+                  <h3 className="text-lg font-bold text-slate-900 mb-1">
+                    {confirmModal.title}
+                  </h3>
                   <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">
                     {confirmModal.message}
                   </p>

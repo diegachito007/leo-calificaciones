@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   collection,
   doc,
@@ -8,6 +8,7 @@ import {
   orderBy,
   where,
   writeBatch,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -59,6 +60,7 @@ export default function GestionUsuarios() {
   const { grados, ready, reload } = useData();
 
   const [users, setUsers] = useState<AppUser[]>([]);
+  const [loadingUsuarios, setLoadingUsuarios] = useState(true);
   const [filter, setFilter] = useState<
     "pending" | "active" | "rejected" | "blocked" | "deleted"
   >("pending");
@@ -132,38 +134,28 @@ export default function GestionUsuarios() {
   );
 
   // ==================== CARGA DE DATOS ====================
-  async function cargarUsuarios() {
-    try {
-      const q = query(collection(db, "usuarios"), orderBy("createdAt", "desc"));
-      const snap = await getDocs(q);
-      const usersData = snap.docs.map(
-        (d) => ({ id: d.id, ...d.data() }) as unknown as AppUser,
-      );
-      setUsers(usersData);
-    } catch (error) {
-      console.error("Error cargando usuarios:", error);
-    }
-  }
-
+  // ✅ OPTIMIZADO: Listener EN VIVO para usuarios (reemplaza getDocs + función duplicada).
+  // Si otro admin aprueba/archiva un usuario, se refleja aquí al instante.
   useEffect(() => {
     if (!ready) return;
 
-    const fetchUsers = async () => {
-      try {
-        const q = query(
-          collection(db, "usuarios"),
-          orderBy("createdAt", "desc"),
-        );
-        const snap = await getDocs(q);
+    const q = query(collection(db, "usuarios"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
         const usersData = snap.docs.map(
           (d) => ({ id: d.id, ...d.data() }) as unknown as AppUser,
         );
         setUsers(usersData);
-      } catch (error) {
-        console.error("Error cargando usuarios:", error);
-      }
-    };
-    fetchUsers();
+        setLoadingUsuarios(false);
+      },
+      (error) => {
+        console.error("Error escuchando usuarios:", error);
+        setLoadingUsuarios(false);
+      },
+    );
+
+    return () => unsubscribe();
   }, [ready]);
 
   // ==================== ACCIONES ====================
@@ -198,7 +190,7 @@ export default function GestionUsuarios() {
         mostrarToast("warning", "Usuario bloqueado", "El usuario ya no podrá acceder al sistema.");
       }
 
-      await cargarUsuarios();
+      // ✅ El listener onSnapshot actualiza la lista automáticamente
     } catch (error) {
       console.error("Error actualizando:", error);
       mostrarToast("error", "Error al actualizar", "No se pudo cambiar el estado del usuario.");
@@ -251,7 +243,7 @@ export default function GestionUsuarios() {
       setSelectedUserForGrados(null);
       setGradosSeleccionados([]);
       setTutorDe([]);
-      await cargarUsuarios();
+      // ✅ El listener onSnapshot actualiza la lista automáticamente
     } catch (error) {
       console.error("Error guardando asignación:", error);
       mostrarToast("error", "Error al guardar", "No se pudo actualizar la asignación.");
@@ -274,7 +266,7 @@ export default function GestionUsuarios() {
     try {
       await updateDoc(doc(db, "usuarios", user.uid), { role: newRole });
       mostrarToast("success", "Rol actualizado", `${user.displayName} ahora es ${newRole === "super_admin" ? "Super Admin" : "Docente"}.`);
-      await cargarUsuarios();
+      // ✅ El listener onSnapshot actualiza la lista automáticamente
     } catch (error) {
       console.error("Error cambiando rol:", error);
       mostrarToast("error", "Error al cambiar rol", "No se pudo actualizar el rol.");
@@ -325,7 +317,7 @@ export default function GestionUsuarios() {
         tutorDe: [],
       });
       mostrarToast("success", "Usuario archivado", `${materiasDesactivadas} materia(s) desactivada(s). Su historial se conserva.`, 5000);
-      await cargarUsuarios();
+      // ✅ El listener onSnapshot actualiza la lista automáticamente
     } catch (error) {
       console.error("Error archivando:", error);
       mostrarToast("error", "Error al archivar", "No se pudo archivar el usuario.");
@@ -360,13 +352,14 @@ export default function GestionUsuarios() {
     return <span className="px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">Docente</span>;
   };
 
-  const counts = {
-    pending: users.filter((u) => u.status === "pending").length,
-    active: users.filter((u) => u.status === "active").length,
-    blocked: users.filter((u) => u.status === "blocked").length,
-    rejected: users.filter((u) => u.status === "rejected").length,
-    deleted: users.filter((u) => u.status === "deleted").length,
-  };
+  // ✅ OPTIMIZADO: 1 sola pasada en vez de 5 filtros separados
+  const counts = useMemo(() => {
+    const c = { pending: 0, active: 0, blocked: 0, rejected: 0, deleted: 0 };
+    users.forEach((u) => {
+      if (u.status in c) c[u.status as keyof typeof c]++;
+    });
+    return c;
+  }, [users]);
 
   const toastConfig = {
     success: { bg: "bg-green-50 border-green-400", iconBg: "bg-green-500", titleColor: "text-green-900", msgColor: "text-green-700", icon: FaCheckCircle },
@@ -377,11 +370,14 @@ export default function GestionUsuarios() {
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  if (!ready) {
+  if (!ready || loadingUsuarios) {
     return (
       <Layout>
         <div className="text-center py-12">
           <FaSpinner className="animate-spin text-4xl text-blue-600 mx-auto" />
+          <p className="text-slate-600 text-sm font-medium mt-3">
+            Cargando usuarios...
+          </p>
         </div>
       </Layout>
     );

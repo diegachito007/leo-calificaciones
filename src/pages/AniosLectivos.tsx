@@ -1,21 +1,18 @@
 import { useState, useCallback } from 'react';
 import { 
   collection, 
-  addDoc, 
-  updateDoc, 
-  deleteDoc, 
   doc,
   serverTimestamp,
   getDocs,
   where,
-  query
+  query,
+  writeBatch
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import type { AnioLectivo, PeriodoEvaluacion } from '../types';
 import Layout from '../components/Layout';
-import ConfirmModal from '../components/ConfirmModal';
 import { 
   FaPlus, FaEdit, FaTrash, FaCheck, FaTimes, FaCalendarAlt, FaInfoCircle, FaClock, FaSpinner,
   FaCheckCircle, FaTimesCircle, FaExclamationTriangle, FaQuestionCircle
@@ -50,7 +47,6 @@ interface ConfirmModalState {
 export default function AniosLectivos() {
   const { user } = useAuth();
 
-  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
   const { aniosLectivos, ready } = useData();
 
   const [showForm, setShowForm] = useState(false);
@@ -77,14 +73,10 @@ export default function AniosLectivos() {
     onCancel: () => {},
   });
 
-  // ✅ Años lectivos ordenados desc por nombre (derivado del Context, sin estado)
   const anios = [...aniosLectivos].sort((a, b) => {
     if (!a.nombre || !b.nombre) return 0;
     return b.nombre.localeCompare(a.nombre);
   });
-
-  // ==================== HELPERS DE NOTIFICACIÓN ====================
-  // ✅ Solo useCallback en helpers estables (sin dependencias derivadas)
 
   const mostrarToast = useCallback((
     type: Toast['type'],
@@ -134,8 +126,6 @@ export default function AniosLectivos() {
       });
     });
   }, []);
-
-  // ==================== FUNCIONES AUXILIARES ====================
 
   const calcularNombre = (fechaInicio: string, fechaFin: string): string => {
     if (!fechaInicio || !fechaFin) return '';
@@ -189,7 +179,6 @@ export default function AniosLectivos() {
     });
   };
 
-  // ✅ Lectura puntual solo cuando se EDITA un año (necesita períodos del año específico)
   async function cargarPeriodosExistentes(anioId: string) {
     try {
       const q = query(
@@ -272,6 +261,7 @@ export default function AniosLectivos() {
     setShowConfirmModal(false);
   };
 
+  // ✅ OPTIMIZADO: writeBatch para atomicidad en todas las operaciones
   async function guardarAnioLectivo(nombre: string, forzarActivo = false) {
     setIsSaving(true);
     
@@ -284,18 +274,21 @@ export default function AniosLectivos() {
         estadoActivo = forzarActivo || !anios.some(a => a.activo);
       }
 
+      const batch = writeBatch(db);
+
+      // Desactivar años activos si este será activo
       if (estadoActivo) {
         const aniosActivos = anios.filter(a => a.activo && a.id !== editingId);
-        for (const anio of aniosActivos) {
-          await updateDoc(doc(db, 'aniosLectivos', anio.id), { activo: false });
-        }
+        aniosActivos.forEach(anio => {
+          batch.update(doc(db, 'aniosLectivos', anio.id), { activo: false });
+        });
       }
 
       let anioId: string;
 
       if (editingId) {
         anioId = editingId;
-        await updateDoc(doc(db, 'aniosLectivos', editingId), {
+        batch.update(doc(db, 'aniosLectivos', editingId), {
           nombre,
           fechaInicio: formData.fechaInicio,
           fechaFin: formData.fechaFin,
@@ -303,8 +296,17 @@ export default function AniosLectivos() {
           activo: estadoActivo,
           updatedAt: serverTimestamp()
         });
+
+        // Eliminar períodos anteriores
+        const periodosAnteriores = await getDocs(
+          query(collection(db, 'periodosEvaluacion'), where('anioLectivoId', '==', editingId))
+        );
+        periodosAnteriores.docs.forEach(p => {
+          batch.delete(doc(db, 'periodosEvaluacion', p.id));
+        });
       } else {
-        const docRef = await addDoc(collection(db, 'aniosLectivos'), {
+        const nuevoRef = doc(collection(db, 'aniosLectivos'));
+        batch.set(nuevoRef, {
           nombre,
           fechaInicio: formData.fechaInicio,
           fechaFin: formData.fechaFin,
@@ -313,20 +315,13 @@ export default function AniosLectivos() {
           createdAt: serverTimestamp(),
           createdBy: user?.uid
         });
-        anioId = docRef.id;
+        anioId = nuevoRef.id;
       }
 
-      if (editingId) {
-        const periodosAnteriores = await getDocs(
-          query(collection(db, 'periodosEvaluacion'), where('anioLectivoId', '==', editingId))
-        );
-        for (const p of periodosAnteriores.docs) {
-          await deleteDoc(doc(db, 'periodosEvaluacion', p.id));
-        }
-      }
-
-      for (const periodo of periodosEditables) {
-        await addDoc(collection(db, 'periodosEvaluacion'), {
+      // Crear nuevos períodos
+      periodosEditables.forEach(periodo => {
+        const nuevoRef = doc(collection(db, 'periodosEvaluacion'));
+        batch.set(nuevoRef, {
           nombre: periodo.nombre,
           tipo: formData.tipoEvaluacion === 'trimestral' ? 'trimestre' : 'quimestre',
           anioLectivoId: anioId,
@@ -336,7 +331,9 @@ export default function AniosLectivos() {
           activo: true,
           createdAt: serverTimestamp()
         });
-      }
+      });
+
+      await batch.commit();
 
       mostrarToast(
         'success', 
@@ -345,7 +342,6 @@ export default function AniosLectivos() {
         5000
       );
       resetForm();
-      // ✅ NO se llama a cargarAnios(): el Context detecta los cambios automáticamente
     } catch (error) {
       console.error('Error guardando año lectivo:', error);
       mostrarToast('error', 'Error al guardar', 'No se pudo guardar el año lectivo. Intenta nuevamente.');
@@ -367,6 +363,7 @@ export default function AniosLectivos() {
     cargarPeriodosExistentes(anio.id);
   };
 
+  // ✅ OPTIMIZADO: writeBatch para eliminar año y períodos atómicamente
   async function handleDelete(id: string) {
     const anio = anios.find(a => a.id === id);
     const confirmado = await confirmar(
@@ -382,34 +379,48 @@ export default function AniosLectivos() {
     if (!confirmado) return;
 
     try {
+      const batch = writeBatch(db);
+
+      // Eliminar períodos
       const periodos = await getDocs(
         query(collection(db, 'periodosEvaluacion'), where('anioLectivoId', '==', id))
       );
-      for (const p of periodos.docs) {
-        await deleteDoc(doc(db, 'periodosEvaluacion', p.id));
-      }
+      periodos.docs.forEach(p => {
+        batch.delete(doc(db, 'periodosEvaluacion', p.id));
+      });
 
-      await deleteDoc(doc(db, 'aniosLectivos', id));
+      // Eliminar año lectivo
+      batch.delete(doc(db, 'aniosLectivos', id));
+
+      await batch.commit();
+
       mostrarToast('success', 'Año lectivo eliminado', `${anio?.nombre} y sus períodos fueron eliminados correctamente.`);
-      // ✅ El Context detecta el cambio automáticamente
     } catch (error) {
       console.error('Error eliminando:', error);
       mostrarToast('error', 'Error al eliminar', 'No se pudo eliminar el año lectivo.');
     }
   }
 
+  // ✅ OPTIMIZADO: writeBatch para activar período atómicamente
   async function handleActivar(id: string) {
     const anio = anios.find(a => a.id === id);
     setIsSaving(true);
     try {
-      const updates = anios
+      const batch = writeBatch(db);
+
+      // Desactivar años activos actuales
+      anios
         .filter(a => a.activo)
-        .map(a => updateDoc(doc(db, 'aniosLectivos', a.id), { activo: false }));
-      
-      await Promise.all(updates);
-      await updateDoc(doc(db, 'aniosLectivos', id), { activo: true });
+        .forEach(a => {
+          batch.update(doc(db, 'aniosLectivos', a.id), { activo: false });
+        });
+
+      // Activar el nuevo
+      batch.update(doc(db, 'aniosLectivos', id), { activo: true });
+
+      await batch.commit();
+
       mostrarToast('success', 'Período activado', `${anio?.nombre} ahora es el período académico vigente.`);
-      // ✅ El Context detecta el cambio automáticamente
     } catch (error) {
       console.error('Error activando:', error);
       mostrarToast('error', 'Error al activar', 'No se pudo activar el período.');
@@ -429,8 +440,6 @@ export default function AniosLectivos() {
     setShowForm(false);
     setPeriodosEditables([]);
   };
-
-  // ==================== CONFIG DE TOASTS ====================
 
   const toastConfig = {
     success: {
@@ -465,7 +474,6 @@ export default function AniosLectivos() {
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  // ✅ Loading global: espera a que el Context cargue los datos maestros
   if (!ready) {
     return (
       <Layout>
@@ -850,19 +858,6 @@ export default function AniosLectivos() {
         )}
       </div>
 
-      {/* Modal existente para confirmar creación cuando hay un periodo activo */}
-      <ConfirmModal
-        isOpen={showConfirmModal}
-        title="Crear Nuevo Periodo Académico"
-        message={`Ya existe un periodo académico activo. Si creas este nuevo periodo (${nombreGenerado}), se convertirá en el vigente y el periodo actual se inactivará automáticamente. Todo el sistema trabajará con el nuevo periodo. ¿Deseas continuar?`}
-        onConfirm={confirmarCreacion}
-        onCancel={cancelarCreacion}
-        confirmText="Sí, crear nuevo periodo"
-        cancelText="Cancelar"
-        type="warning"
-      />
-
-      {/* ✅ CONTENEDOR DE TOASTS */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -892,7 +887,6 @@ export default function AniosLectivos() {
         })}
       </div>
 
-      {/* ✅ MODAL DE CONFIRMACIÓN PERSONALIZADO (para eliminar) */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
@@ -925,6 +919,45 @@ export default function AniosLectivos() {
               >
                 <ConfirmIcon className="text-xs" />
                 {confirmModal.confirmText || "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para confirmar creación cuando hay un periodo activo */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-70 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-linear-to-r from-yellow-50 to-orange-50 px-6 pt-6 pb-4 border-b border-yellow-200">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-full bg-yellow-100 flex items-center justify-center shrink-0">
+                  <FaExclamationTriangle className="text-yellow-600 text-xl" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-bold text-slate-900 mb-1">
+                    Crear Nuevo Periodo Académico
+                  </h3>
+                  <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">
+                    Ya existe un periodo académico activo. Si creas este nuevo periodo ({nombreGenerado}), se convertirá en el vigente y el periodo actual se inactivará automáticamente. Todo el sistema trabajará con el nuevo periodo. ¿Deseas continuar?
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 flex gap-3 justify-end">
+              <button
+                onClick={cancelarCreacion}
+                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-sm font-semibold transition-all"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmarCreacion}
+                className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2"
+              >
+                <FaCheck className="text-xs" />
+                Sí, crear nuevo periodo
               </button>
             </div>
           </div>

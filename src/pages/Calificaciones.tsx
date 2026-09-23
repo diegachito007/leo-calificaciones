@@ -501,6 +501,8 @@ export default function Calificaciones() {
   const volverListado = () => setPanel(0);
 
   // ==================== CARGA ====================
+  // ✅ Listener EN VIVO: si el docente cambia materias en MiHorario,
+  // se refleja aquí al instante (<1s) sin recargar.
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
     const q = query(
@@ -509,18 +511,18 @@ export default function Calificaciones() {
       where("anioLectivoId", "==", anioActivo.id),
       where("activo", "==", true),
     );
-    (async () => {
-      try {
-        const snapshot = await getDocs(q);
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
         setAsignaturasDocente(
           snapshot.docs.map(
             (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
           ),
         );
-      } catch (e) {
-        console.error(e);
-      }
-    })();
+      },
+      (e) => console.error(e),
+    );
+    return () => unsubscribe();
   }, [user?.uid, anioActivo?.id]);
 
   const cargarActividades = useCallback(async (destrezaId: string) => {
@@ -1021,28 +1023,34 @@ export default function Calificaciones() {
         setFichaLoading(false);
         return;
       }
-      const snapCal = await getDocs(
-        query(
-          collection(db, "calificaciones"),
-          where("estudianteId", "==", estudianteId),
-        ),
-      );
+      // ✅ OPTIMIZADO: filtra por actividadId en la query (no en memoria).
+      // Solo trae calificaciones de las actividades visibles en esta destreza,
+      // no de TODAS las materias del estudiante. Chunk de 30 (límite de Firestore).
       const base: Record<string, FichaBaseEntry> = {};
-      snapCal.docs.forEach((d) => {
-        const data = d.data() as unknown as CalificacionData;
-        if (!actividadIds.includes(data.actividadId)) return;
-        base[data.actividadId] = {
-          calId: d.id,
-          notaGuardada:
-            typeof data.nota === "number"
-              ? String(round2(data.nota))
-              : String(data.nota ?? ""),
-          observacion: data.observacion || "",
-          refuerzo: data.refuerzo || null,
-          docenteId: data.docenteId,
-          notaOriginalPrevio: data.notaOriginal,
-        };
-      });
+      for (let i = 0; i < actividadIds.length; i += 30) {
+        const chunk = actividadIds.slice(i, i + 30);
+        const snapCal = await getDocs(
+          query(
+            collection(db, "calificaciones"),
+            where("estudianteId", "==", estudianteId),
+            where("actividadId", "in", chunk),
+          ),
+        );
+        snapCal.docs.forEach((d) => {
+          const data = d.data() as unknown as CalificacionData;
+          base[data.actividadId] = {
+            calId: d.id,
+            notaGuardada:
+              typeof data.nota === "number"
+                ? String(round2(data.nota))
+                : String(data.nota ?? ""),
+            observacion: data.observacion || "",
+            refuerzo: data.refuerzo || null,
+            docenteId: data.docenteId,
+            notaOriginalPrevio: data.notaOriginal,
+          };
+        });
+      }
       const fechas = Array.from(new Set(actividades.map((a) => a.fecha)));
       const asis: Record<string, EstadoAsistencia | undefined> = {};
       for (let i = 0; i < fechas.length; i += 30) {

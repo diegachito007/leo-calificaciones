@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   collection,
-  addDoc,
   updateDoc,
   deleteDoc,
   doc,
@@ -11,6 +10,7 @@ import {
   where,
   getDocs,
   getCountFromServer,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -94,6 +94,7 @@ interface GrupoDuplicado {
 // ==================== HELPERS ====================
 
 // ✅ Conteo de referencias de un grado (para borrado seguro)
+// 7 lecturas paralelas con getCountFromServer (ligero, solo metadata)
 const contarReferenciasGrado = async (gradoId: string): Promise<RefsGrado> => {
   const [est, asig, asis, cal, act, tut, asig2] = await Promise.all([
     getCountFromServer(
@@ -148,7 +149,8 @@ export default function Grados() {
   const { anioActivo, ready } = useData();
 
   const [gradosLocales, setGradosLocales] = useState<Grado[]>([]);
-  const [loadingGrados, setLoadingGrados] = useState(true);
+  // ✅ Clave del último año cuyos grados llegaron por snapshot (para derivar loading)
+  const [anioCargado, setAnioCargado] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -176,46 +178,40 @@ export default function Grados() {
     onCancel: () => {},
   });
 
-  // ✅ Listener EN VIVO: los grados aparecen al instante (no depende del caché)
+  // ✅ Listener EN VIVO: los grados aparecen al instante.
+  // SIN setState síncrono en el cuerpo del effect (regla react-hooks):
+  // todo setState ocurre dentro del callback de onSnapshot.
   useEffect(() => {
-    // ✅ Envolver en async para evitar setState síncrono en el cuerpo del effect
-    const iniciarListener = async () => {
-      if (!ready || !anioActivo?.id) {
-        setGradosLocales([]);
-        setLoadingGrados(false);
-        return;
-      }
-      const q = query(
-        collection(db, "grados"),
-        where("anioLectivoId", "==", anioActivo.id),
-      );
-      const unsubscribe = onSnapshot(
-        q,
-        (snap) => {
-          const data = snap.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as Grado,
-          );
-          data.sort((a, b) => (a.orden || 0) - (b.orden || 0));
-          setGradosLocales(data);
-          setLoadingGrados(false);
-        },
-        (error) => {
-          console.error("Error escuchando grados:", error);
-          setLoadingGrados(false);
-        },
-      );
-      return unsubscribe;
-    };
-
-    let cleanup: (() => void) | undefined;
-    iniciarListener().then((unsub) => {
-      cleanup = unsub;
-    });
-
-    return () => {
-      if (cleanup) cleanup();
-    };
+    if (!ready || !anioActivo?.id) return;
+    const anioId = anioActivo.id;
+    const q = query(
+      collection(db, "grados"),
+      where("anioLectivoId", "==", anioId),
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
+        const data = snap.docs.map(
+          (d) => ({ id: d.id, ...d.data() }) as Grado,
+        );
+        data.sort((a, b) => (a.orden || 0) - (b.orden || 0));
+        setGradosLocales(data);
+        setAnioCargado(anioId);
+      },
+      (error) => {
+        console.error("Error escuchando grados:", error);
+        setAnioCargado(anioId);
+      },
+    );
+    return () => unsubscribe();
   }, [ready, anioActivo?.id]);
+
+  // ✅ Estados DERIVADOS (reemplazan el setState síncrono del early return):
+  // - loadingGrados: true mientras el año activo no haya recibido su snapshot
+  // - gradosBase: lista vacía si no hay año activo o aún no está ready
+  const loadingGrados =
+    ready && anioActivo?.id ? anioCargado !== anioActivo.id : false;
+  const gradosBase = ready && anioActivo?.id ? gradosLocales : [];
 
   // ✅ Avisar a otros módulos (DataContext) que refresquen sus datos cacheados
   const notificarRefresh = useCallback(() => {
@@ -235,7 +231,7 @@ export default function Grados() {
 
   // ✅ Filtrado local: rol docente + toggle de inactivos
   const gradosFiltrados = (() => {
-    let filtered = gradosLocales;
+    let filtered = gradosBase;
     if (
       userData?.role === "docente" &&
       userData?.gradosAsignados &&
@@ -336,7 +332,7 @@ export default function Grados() {
       return;
     }
 
-    // ✅ MODO EDITAR: update REAL del documento (antes creaba duplicados)
+    // ✅ MODO EDITAR: update REAL del documento (solo 1 doc, no necesita batch)
     if (editingId) {
       setGuardando(true);
       try {
@@ -374,14 +370,14 @@ export default function Grados() {
 
     // ✅ MODO CREAR: validación de duplicados contra la lista EN VIVO (incluye inactivos)
     const duplicados = combinaciones.filter((comb) =>
-      gradosLocales.some(
+      gradosBase.some(
         (g) => g.nombre === comb.nombre && g.paralelo === comb.paralelo,
       ),
     );
     if (duplicados.length > 0) {
       const detalle = duplicados
         .map((c) => {
-          const g = gradosLocales.find(
+          const g = gradosBase.find(
             (x) => x.nombre === c.nombre && x.paralelo === c.paralelo,
           );
           return `  • ${c.nombre} - ${c.paralelo}${
@@ -400,12 +396,15 @@ export default function Grados() {
 
     setGuardando(true);
     try {
-      const promesas = combinaciones.map(async (comb) => {
+      // ✅ writeBatch: atomicidad + 1 round-trip (antes N addDoc individuales)
+      const batch = writeBatch(db);
+      combinaciones.forEach((comb) => {
         const ordenNivel = NIVELES.indexOf(comb.nombre) + 1;
         const ordenParalelo = PARALELOS.indexOf(comb.paralelo) + 1;
         const orden = ordenNivel * 100 + ordenParalelo;
 
-        await addDoc(collection(db, "grados"), {
+        const nuevoRef = doc(collection(db, "grados"));
+        batch.set(nuevoRef, {
           nombre: comb.nombre,
           paralelo: comb.paralelo,
           anioLectivoId: anioActivo.id,
@@ -416,7 +415,7 @@ export default function Grados() {
         });
       });
 
-      await Promise.all(promesas);
+      await batch.commit();
 
       mostrarToast(
         "success",
@@ -1013,9 +1012,9 @@ export default function Grados() {
                 <span className="text-xs font-medium text-slate-600">
                   Mostrar inactivos
                 </span>
-                {gradosLocales.filter((g) => !g.activo).length > 0 && (
+                {gradosBase.filter((g) => !g.activo).length > 0 && (
                   <span className="text-[10px] px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded-full font-bold">
-                    {gradosLocales.filter((g) => !g.activo).length}
+                    {gradosBase.filter((g) => !g.activo).length}
                   </span>
                 )}
               </label>

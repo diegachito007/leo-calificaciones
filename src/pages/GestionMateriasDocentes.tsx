@@ -9,12 +9,14 @@ import {
   addDoc,
   serverTimestamp,
   writeBatch,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { AppUser } from "../types";
 import Layout from "../components/Layout";
+import { cacheGet, cacheSet, cacheInvalidate } from "../utils/sessionCache";
 import {
   FaChalkboardTeacher,
   FaGraduationCap,
@@ -31,6 +33,7 @@ import {
   FaTimes as FaXmark,
   FaUserTie,
   FaUsers,
+  FaChevronDown,
 } from "react-icons/fa";
 
 interface AsignaturaDocente {
@@ -72,26 +75,31 @@ interface AsignacionConInfo extends AsignaturaDocente {
   huerfana: boolean;
 }
 
+const TTL_DOCENTES = 1000 * 60 * 10;
+
 export default function GestionMateriasDocentes() {
   useAuth();
   const { grados, destrezas, ambitos, anioActivo, ready } = useData();
 
   const [users, setUsers] = useState<AppUser[]>([]);
   const [asignaciones, setAsignaciones] = useState<AsignaturaDocente[]>([]);
-  const [loading, setLoading] = useState(true);
+  // ✅ Estado derivado para loading: compara el año cargado vs el año activo
+  const [anioCargado, setAnioCargado] = useState<string | null>(null);
 
-  // Filtros
   const [searchTerm, setSearchTerm] = useState("");
   const [filterDocenteId, setFilterDocenteId] = useState("");
   const [filterGradoId, setFilterGradoId] = useState("");
 
-  // Modal de transferencia
+  const [expandedDocentes, setExpandedDocentes] = useState<
+    Record<string, boolean>
+  >({});
+
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferSource, setTransferSource] = useState<AppUser | null>(null);
   const [transferDestId, setTransferDestId] = useState("");
-  const [transferMaterias, setTransferMaterias] = useState<AsignaturaDocente[]>(
-    [],
-  );
+  const [transferMaterias, setTransferMaterias] = useState<
+    AsignaturaDocente[]
+  >([]);
   const [loadingTransfer, setLoadingTransfer] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
 
@@ -105,22 +113,23 @@ export default function GestionMateriasDocentes() {
     onCancel: () => {},
   });
 
-  // ==================== HELPERS ====================
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
       const toast: Toast = { id, type, title, message };
       setToasts((prev) => [...prev, toast]);
-      setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
-      }, duration);
+      setTimeout(
+        () => setToasts((prev) => prev.filter((t) => t.id !== id)),
+        duration,
+      );
     },
     [],
   );
 
-  const cerrarToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+  const cerrarToast = useCallback(
+    (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)),
+    [],
+  );
 
   const confirmar = useCallback(
     (
@@ -143,11 +152,11 @@ export default function GestionMateriasDocentes() {
           confirmColor: options?.confirmColor || "bg-red-600 hover:bg-red-700",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
-            setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+            setConfirmModal((p) => ({ ...p, isOpen: false }));
             resolve(true);
           },
           onCancel: () => {
-            setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+            setConfirmModal((p) => ({ ...p, isOpen: false }));
             resolve(false);
           },
         });
@@ -156,54 +165,74 @@ export default function GestionMateriasDocentes() {
     [],
   );
 
-  // ==================== CARGA DE DATOS ====================
+  // ✅ DOCENTES: solo rol docente + cache de sesión 10 min
   useEffect(() => {
-    if (!ready || !anioActivo?.id) return;
-    const cargarDatos = async () => {
-      setLoading(true);
+    if (!ready) return;
+    const cargarDocentes = async () => {
+      const cached = cacheGet<AppUser[]>("gmd_docentes", TTL_DOCENTES);
+      if (cached) {
+        setUsers(cached);
+        return;
+      }
       try {
-        // Cargar usuarios
-        const usersSnap = await getDocs(collection(db, "usuarios"));
-        const usersData = usersSnap.docs.map(
+        const snap = await getDocs(
+          query(collection(db, "usuarios"), where("role", "==", "docente")),
+        );
+        const data = snap.docs.map(
           (d) => ({ id: d.id, ...d.data() }) as unknown as AppUser,
         );
-        setUsers(usersData);
+        cacheSet("gmd_docentes", data);
+        setUsers(data);
+      } catch (error) {
+        console.error("Error cargando docentes:", error);
+      }
+    };
+    cargarDocentes();
+  }, [ready]);
 
-        // Cargar asignaciones activas del año lectivo actual
-        const q = query(
-          collection(db, "asignaturasDocente"),
-          where("anioLectivoId", "==", anioActivo.id),
-          where("activo", "==", true),
-        );
-        const asigSnap = await getDocs(q);
+  // ✅ ASIGNACIONES: onSnapshot en tiempo real. SIN setState síncrono en el
+  // cuerpo del effect: el loading se deriva comparando anioCargado vs anioActivo.id
+  useEffect(() => {
+    if (!ready || !anioActivo?.id) return;
+    const q = query(
+      collection(db, "asignaturasDocente"),
+      where("anioLectivoId", "==", anioActivo.id),
+      where("activo", "==", true),
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      (snap) => {
         setAsignaciones(
-          asigSnap.docs.map(
+          snap.docs.map(
             (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
           ),
         );
-      } catch (error) {
-        console.error("Error cargando datos:", error);
-        mostrarToast(
-          "error",
-          "Error",
-          "No se pudieron cargar las asignaciones.",
-        );
-      } finally {
-        setLoading(false);
-      }
-    };
-    cargarDatos();
-  }, [ready, anioActivo?.id, mostrarToast]);
+        setAnioCargado(anioActivo.id);
+      },
+      (error) => {
+        console.error("Error escuchando asignaciones:", error);
+        setAnioCargado(anioActivo.id);
+      },
+    );
+    return () => unsubscribe();
+  }, [ready, anioActivo?.id]);
 
-  // ==================== DATOS ENRIQUECIDOS ====================
+  // ✅ Loading derivado: true si el año activo aún no ha cargado
+  const loading = ready && anioActivo?.id ? anioCargado !== anioActivo.id : false;
+
+  const usersById = useMemo(() => {
+    const map = new Map<string, AppUser>();
+    users.forEach((u) => map.set(u.uid, u));
+    return map;
+  }, [users]);
+
   const asignacionesConInfo = useMemo((): AsignacionConInfo[] => {
     return asignaciones.map((asig) => {
-      const docente = users.find((u) => u.uid === asig.docenteId);
+      const docente = usersById.get(asig.docenteId);
       const grado = grados.find((g) => g.id === asig.gradoId);
       const destreza = destrezas.find((d) => d.id === asig.destrezaId);
       const ambito = ambitos.find((a) => a.id === destreza?.ambitoId);
 
-      // ✅ Huérfana: docente activo con materias en un grado que YA NO tiene asignado
       const huerfana =
         !!docente &&
         docente.status === "active" &&
@@ -220,24 +249,17 @@ export default function GestionMateriasDocentes() {
         huerfana,
       };
     });
-  }, [asignaciones, users, grados, destrezas, ambitos]);
+  }, [asignaciones, usersById, grados, destrezas, ambitos]);
 
-  // ✅ Asignaciones huérfanas (grado removido al docente)
   const asignacionesHuerfanas = useMemo(
     () => asignacionesConInfo.filter((a) => a.huerfana),
     [asignacionesConInfo],
   );
 
-  // ==================== FILTROS ====================
   const asignacionesFiltradas = useMemo(() => {
     return asignacionesConInfo.filter((asig) => {
-      // Filtro por docente
       if (filterDocenteId && asig.docenteId !== filterDocenteId) return false;
-
-      // Filtro por grado
       if (filterGradoId && asig.gradoId !== filterGradoId) return false;
-
-      // Búsqueda de texto
       if (searchTerm) {
         const term = searchTerm.toLowerCase();
         return (
@@ -248,12 +270,12 @@ export default function GestionMateriasDocentes() {
           asig.ambitoNombre.toLowerCase().includes(term)
         );
       }
-
       return true;
     });
   }, [asignacionesConInfo, filterDocenteId, filterGradoId, searchTerm]);
 
-  // Agrupar por docente
+  const hayFiltro = !!(searchTerm || filterDocenteId || filterGradoId);
+
   const agrupadoPorDocente = useMemo(() => {
     const grupos: Record<string, AsignacionConInfo[]> = {};
     asignacionesFiltradas.forEach((asig) => {
@@ -265,17 +287,14 @@ export default function GestionMateriasDocentes() {
     return grupos;
   }, [asignacionesFiltradas]);
 
-  // Docentes activos (para filtros)
   const docentesActivos = useMemo(() => {
     return users.filter((u) => u.status === "active" && u.role === "docente");
   }, [users]);
 
-  // Grados activos
   const gradosActivos = useMemo(() => {
     return grados.filter((g) => g.activo);
   }, [grados]);
 
-  // ==================== ACCIONES ====================
   async function quitarAsignacion(asignacion: AsignacionConInfo) {
     const confirmado = await confirmar(
       "Quitar asignación de materia",
@@ -306,7 +325,7 @@ export default function GestionMateriasDocentes() {
   }
 
   async function quitarTodasDelDocente(docenteId: string) {
-    const docente = users.find((u) => u.uid === docenteId);
+    const docente = usersById.get(docenteId);
     if (!docente) return;
 
     const materiasDelDocente = asignaciones.filter(
@@ -346,7 +365,6 @@ export default function GestionMateriasDocentes() {
     }
   }
 
-  // ✅ LIMPIAR HUÉRFANAS: desactiva en lote todas las asignaciones de grados removidos
   async function limpiarHuerfanas() {
     if (asignacionesHuerfanas.length === 0) return;
     const confirmado = await confirmar(
@@ -379,12 +397,16 @@ export default function GestionMateriasDocentes() {
       );
     } catch (error) {
       console.error("Error limpiando huérfanas:", error);
-      mostrarToast("error", "Error al limpiar", "No se pudieron desactivar las asignaciones.");
+      mostrarToast(
+        "error",
+        "Error al limpiar",
+        "No se pudieron desactivar las asignaciones.",
+      );
     }
   }
 
   async function openTransferModal(docenteId: string) {
-    const docente = users.find((u) => u.uid === docenteId);
+    const docente = usersById.get(docenteId);
     if (!docente) return;
 
     setTransferSource(docente);
@@ -409,7 +431,7 @@ export default function GestionMateriasDocentes() {
       return;
     }
 
-    const dest = users.find((u) => u.uid === transferDestId);
+    const dest = usersById.get(transferDestId);
     if (!dest) return;
 
     const confirmado = await confirmar(
@@ -430,7 +452,6 @@ export default function GestionMateriasDocentes() {
       let omitidas = 0;
 
       for (const mat of transferMaterias) {
-        // Verificar si el destino ya tiene esta materia
         const yaExiste = asignaciones.some(
           (a) =>
             a.docenteId === dest.uid &&
@@ -444,7 +465,6 @@ export default function GestionMateriasDocentes() {
           continue;
         }
 
-        // Crear nueva asignación para el destino
         await addDoc(collection(db, "asignaturasDocente"), {
           docenteId: dest.uid,
           gradoId: mat.gradoId,
@@ -455,7 +475,6 @@ export default function GestionMateriasDocentes() {
           createdAt: serverTimestamp(),
         });
 
-        // Desactivar la del origen
         await updateDoc(doc(db, "asignaturasDocente", mat.id), {
           activo: false,
         });
@@ -463,7 +482,6 @@ export default function GestionMateriasDocentes() {
         transferidas++;
       }
 
-      // Actualizar grados asignados del destino
       const gradosOrigen = transferMaterias.map((m) => m.gradoId);
       const gradosActualesDest = dest.gradosAsignados || [];
       const gradosUnicos = Array.from(
@@ -474,18 +492,16 @@ export default function GestionMateriasDocentes() {
         gradosAsignados: gradosUnicos,
       });
 
-      // Recargar datos
-      const q = query(
-        collection(db, "asignaturasDocente"),
-        where("anioLectivoId", "==", anioActivo?.id),
-        where("activo", "==", true),
+      // ✅ Sin recarga getDocs: el onSnapshot actualiza automáticamente
+      setAsignaciones((prev) =>
+        prev.filter((a) => !transferMaterias.some((m) => m.id === a.id)),
       );
-      const asigSnap = await getDocs(q);
-      setAsignaciones(
-        asigSnap.docs.map(
-          (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.uid === dest.uid ? { ...u, gradosAsignados: gradosUnicos } : u,
         ),
       );
+      cacheInvalidate("gmd_docentes");
 
       mostrarToast(
         "success",
@@ -505,7 +521,6 @@ export default function GestionMateriasDocentes() {
     }
   }
 
-  // ==================== ESTADÍSTICAS ====================
   const stats = useMemo(() => {
     const totalAsignaciones = asignaciones.length;
     const totalDocentes = new Set(asignaciones.map((a) => a.docenteId)).size;
@@ -514,7 +529,6 @@ export default function GestionMateriasDocentes() {
     return { totalAsignaciones, totalDocentes, totalGrados, totalMaterias };
   }, [asignaciones]);
 
-  // ==================== RENDER ====================
   const toastConfig = {
     success: {
       bg: "bg-green-50 border-green-400",
@@ -564,7 +578,6 @@ export default function GestionMateriasDocentes() {
       subtitle="Administra las asignaciones de materias a docentes"
       showBack
     >
-      {/* Estadísticas */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <div className="flex items-center gap-3">
@@ -628,7 +641,6 @@ export default function GestionMateriasDocentes() {
         </div>
       </div>
 
-      {/* ✅ AVISO DE ASIGNACIONES HUÉRFANAS */}
       {asignacionesHuerfanas.length > 0 && (
         <div className="mb-4 bg-amber-50 border-l-4 border-amber-400 p-4 rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -654,7 +666,6 @@ export default function GestionMateriasDocentes() {
         </div>
       )}
 
-      {/* Filtros */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
@@ -724,7 +735,6 @@ export default function GestionMateriasDocentes() {
         )}
       </div>
 
-      {/* Contenido */}
       {loading ? (
         <div className="text-center py-12">
           <FaSpinner className="animate-spin text-4xl text-blue-600 mx-auto mb-3" />
@@ -740,19 +750,29 @@ export default function GestionMateriasDocentes() {
           </p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {Object.entries(agrupadoPorDocente).map(([docenteId, materias]) => {
-            const docente = users.find((u) => u.uid === docenteId);
+            const docente = usersById.get(docenteId);
             if (!docente) return null;
-            const huerfanasDelDocente = materias.filter((m) => m.huerfana).length;
+            const huerfanasDelDocente = materias.filter(
+              (m) => m.huerfana,
+            ).length;
+            const expandido = hayFiltro || !!expandedDocentes[docenteId];
             return (
               <div
                 key={docenteId}
                 className="bg-white rounded-xl border border-slate-200 overflow-hidden"
               >
-                {/* Header del docente */}
-                <div className="bg-linear-to-r from-blue-600 to-blue-700 px-5 py-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                <div
+                  className="bg-linear-to-r from-blue-600 to-blue-700 px-5 py-3 flex items-center justify-between cursor-pointer select-none"
+                  onClick={() =>
+                    setExpandedDocentes((p) => ({
+                      ...p,
+                      [docenteId]: !expandido,
+                    }))
+                  }
+                >
+                  <div className="flex items-center gap-3 min-w-0">
                     {docente.photoURL ? (
                       <img
                         src={docente.photoURL}
@@ -764,11 +784,11 @@ export default function GestionMateriasDocentes() {
                         {docente.displayName?.charAt(0).toUpperCase()}
                       </div>
                     )}
-                    <div>
-                      <h3 className="text-white font-semibold">
+                    <div className="min-w-0">
+                      <h3 className="text-white font-semibold truncate">
                         {docente.displayName}
                       </h3>
-                      <p className="text-white/80 text-xs">
+                      <p className="text-white/80 text-xs truncate">
                         {docente.email} · {materias.length} materia
                         {materias.length !== 1 ? "s" : ""}
                         {huerfanasDelDocente > 0 && (
@@ -778,8 +798,14 @@ export default function GestionMateriasDocentes() {
                         )}
                       </p>
                     </div>
+                    <FaChevronDown
+                      className={`text-white/70 text-sm shrink-0 transition-transform ${expandido ? "rotate-180" : ""}`}
+                    />
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div
+                    className="flex items-center gap-2 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <button
                       onClick={() => openTransferModal(docenteId)}
                       className="inline-flex items-center gap-1.5 bg-white/15 hover:bg-white/25 border border-white/40 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
@@ -797,49 +823,49 @@ export default function GestionMateriasDocentes() {
                   </div>
                 </div>
 
-                {/* Lista de materias */}
-                <div className="divide-y divide-slate-100">
-                  {materias.map((asig) => (
-                    <div
-                      key={asig.id}
-                      className={`px-5 py-3 flex items-center justify-between gap-3 hover:bg-slate-50 ${
-                        asig.huerfana ? "bg-amber-50/60" : ""
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <FaBook className="text-purple-500 text-sm shrink-0" />
-                        <div className="min-w-0">
-                          <p className="font-medium text-slate-900 text-sm truncate flex items-center gap-2">
-                            {asig.destrezaNombre}
-                            {asig.huerfana && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300 font-bold shrink-0">
-                                ⚠️ Grado removido
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-slate-500">
-                            {asig.ambitoNombre} · {asig.gradoNombre} -{" "}
-                            {asig.gradoParalelo}
-                          </p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => quitarAsignacion(asig)}
-                        className="shrink-0 p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Quitar esta asignación"
+                {expandido && (
+                  <div className="divide-y divide-slate-100">
+                    {materias.map((asig) => (
+                      <div
+                        key={asig.id}
+                        className={`px-5 py-3 flex items-center justify-between gap-3 hover:bg-slate-50 ${
+                          asig.huerfana ? "bg-amber-50/60" : ""
+                        }`}
                       >
-                        <FaTrash className="text-sm" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <FaBook className="text-purple-500 text-sm shrink-0" />
+                          <div className="min-w-0">
+                            <p className="font-medium text-slate-900 text-sm truncate flex items-center gap-2">
+                              {asig.destrezaNombre}
+                              {asig.huerfana && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300 font-bold shrink-0">
+                                  ⚠️ Grado removido
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {asig.ambitoNombre} · {asig.gradoNombre} -{" "}
+                              {asig.gradoParalelo}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => quitarAsignacion(asig)}
+                          className="shrink-0 p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Quitar esta asignación"
+                        >
+                          <FaTrash className="text-sm" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
       )}
 
-      {/* Modal de transferencia */}
       {showTransferModal && transferSource && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
@@ -950,7 +976,6 @@ export default function GestionMateriasDocentes() {
         </div>
       )}
 
-      {/* Toasts */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -988,7 +1013,6 @@ export default function GestionMateriasDocentes() {
         })}
       </div>
 
-      {/* Modal de confirmación */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">

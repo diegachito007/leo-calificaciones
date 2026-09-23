@@ -3,11 +3,12 @@ import {
   collection,
   query,
   where,
-  updateDoc,
   doc,
   serverTimestamp,
   getDocs,
   Timestamp,
+  onSnapshot,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -305,29 +306,33 @@ export default function ReporteAsistencias() {
 
   const periodoInicializado = useRef(false);
 
+  // ✅ OPTIMIZADO: Listener EN VIVO para asignaturas del docente.
+  // Si el docente modifica materias en MiHorario, se refleja aquí al instante.
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
 
-    const fetchAsignaturas = async () => {
-      try {
-        const q = query(
-          collection(db, "asignaturasDocente"),
-          where("docenteId", "==", user.uid),
-          where("anioLectivoId", "==", anioActivo.id),
-          where("activo", "==", true),
-        );
-        const snap = await getDocs(q);
+    const q = query(
+      collection(db, "asignaturasDocente"),
+      where("docenteId", "==", user.uid),
+      where("anioLectivoId", "==", anioActivo.id),
+      where("activo", "==", true),
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
         setAsignaturasDocente(
-          snap.docs.map(
+          snapshot.docs.map(
             (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
           ),
         );
-      } catch (error) {
-        console.error("Error cargando asignaturas del docente:", error);
-      }
-    };
+      },
+      (error) => {
+        console.error("Error escuchando asignaturas del docente:", error);
+      },
+    );
 
-    fetchAsignaturas();
+    return () => unsubscribe();
   }, [user?.uid, anioActivo?.id]);
 
   const esTutor = (userData?.tutorDe?.length ?? 0) > 0;
@@ -461,17 +466,14 @@ export default function ReporteAsistencias() {
     }
 
     const fetchAsistencias = async () => {
-      // ✅ Para vista docente, cargar asistencias de TODOS los grados del docente
+      // ✅ OPTIMIZACIÓN FINAL: Para vista docente, 1 sola query usando registradoPor
       if (vistaEfectiva === "docente") {
-        if (gradosDocente.length === 0 || fechasAFiltrar.length === 0) {
+        if (!user?.uid || fechasAFiltrar.length === 0) {
           if (isMounted) setAsistencias([]);
           return;
         }
 
-        const cacheKey = `${tipoReporte}|docente|${gradosDocente
-          .map((g) => g.id)
-          .sort()
-          .join(",")}|${fechasAFiltrar.join(",")}`;
+        const cacheKey = `${tipoReporte}|docente|${user.uid}|${fechasAFiltrar.join(",")}`;
 
         if (cacheAsistencias.current.has(cacheKey)) {
           if (isMounted)
@@ -498,27 +500,25 @@ export default function ReporteAsistencias() {
 
         const todas: AsistenciaData[] = [];
 
-        // Cargar asistencias de todos los grados del docente
-        for (const grado of gradosDocente) {
-          if (fechasAFiltrar.length <= 30) {
+        // ✅ 1 sola query en vez de N queries por grado
+        if (fechasAFiltrar.length <= 30) {
+          const q = query(
+            collection(db, "asistencias"),
+            where("registradoPor", "==", user.uid),
+            where("fecha", "in", fechasAFiltrar),
+          );
+          const snap = await getDocs(q);
+          todas.push(...normalizarDocs(snap.docs));
+        } else {
+          for (let i = 0; i < fechasAFiltrar.length; i += 30) {
+            const chunk = fechasAFiltrar.slice(i, i + 30);
             const q = query(
               collection(db, "asistencias"),
-              where("gradoId", "==", grado.id),
-              where("fecha", "in", fechasAFiltrar),
+              where("registradoPor", "==", user.uid),
+              where("fecha", "in", chunk),
             );
             const snap = await getDocs(q);
             todas.push(...normalizarDocs(snap.docs));
-          } else {
-            for (let i = 0; i < fechasAFiltrar.length; i += 30) {
-              const chunk = fechasAFiltrar.slice(i, i + 30);
-              const q = query(
-                collection(db, "asistencias"),
-                where("gradoId", "==", grado.id),
-                where("fecha", "in", chunk),
-              );
-              const snap = await getDocs(q);
-              todas.push(...normalizarDocs(snap.docs));
-            }
           }
         }
 
@@ -601,7 +601,7 @@ export default function ReporteAsistencias() {
     periodos,
     vistaEfectiva,
     gradoTutorEfectivo,
-    gradosDocente,
+    user?.uid,
   ]);
 
   const cambiarSemana = (offset: number) => {
@@ -661,7 +661,7 @@ export default function ReporteAsistencias() {
       const cacheKey = `${tipoReporte}|${gradoEfectivo}|${fechasAFiltrar.join(",")}`;
       cacheAsistencias.current.delete(cacheKey);
     } else {
-      // Vista docente: limpiar cache de todos los grados
+      // Vista docente: limpiar cache
       let fechasAFiltrar: string[] = [];
 
       if (tipoReporte === "semanal") {
@@ -680,12 +680,9 @@ export default function ReporteAsistencias() {
         }
       }
 
-      if (fechasAFiltrar.length === 0) return;
+      if (fechasAFiltrar.length === 0 || !user?.uid) return;
 
-      const cacheKey = `${tipoReporte}|docente|${gradosDocente
-        .map((g) => g.id)
-        .sort()
-        .join(",")}|${fechasAFiltrar.join(",")}`;
+      const cacheKey = `${tipoReporte}|docente|${user.uid}|${fechasAFiltrar.join(",")}`;
       cacheAsistencias.current.delete(cacheKey);
     }
 
@@ -1062,17 +1059,19 @@ export default function ReporteAsistencias() {
         ? `Justificado por tutor: ${motivoJustificacion.trim()}`
         : "Justificado por tutor";
 
-      const batch = asistenciasAActualizar.map((asistenciaId) =>
-        updateDoc(doc(db, "asistencias", asistenciaId), {
+      // ✅ OPTIMIZADO: writeBatch para atomicidad (todas o ninguna)
+      const batch = writeBatch(db);
+      asistenciasAActualizar.forEach((asistenciaId) => {
+        batch.update(doc(db, "asistencias", asistenciaId), {
           estado: "J",
           v2: true,
           observacion,
           justificadoPor: user?.uid,
           justificadoEl: serverTimestamp(),
-        }),
-      );
+        });
+      });
 
-      await Promise.all(batch);
+      await batch.commit();
 
       const gradoEfectivo = gradoTutorEfectivo;
       const fechas = diasSemana.map(formatFechaISO);
@@ -1196,23 +1195,29 @@ export default function ReporteAsistencias() {
         return;
       }
 
-      const ops = gruposAGuardar.flatMap((g) => {
+      // ✅ OPTIMIZADO: writeBatch para atomicidad (todas o ninguna)
+      const batch = writeBatch(db);
+      let opsCount = 0;
+
+      gruposAGuardar.forEach((g) => {
         const num = formatoNumeroActa(numeroParaDia(g.fecha));
         const nota =
           (notasPorDia[g.fecha] || "").trim() ||
           `Acta de compromiso N° ${num} firmada con el representante`;
-        return g.asistenciaIds.map((id) =>
-          updateDoc(doc(db, "asistencias", id), {
+
+        g.asistenciaIds.forEach((id) => {
+          batch.update(doc(db, "asistencias", id), {
             representanteAsistio: true,
             representanteNota: nota,
             actaNumero: num,
             representantePor: user?.uid || "",
             representanteEl: serverTimestamp(),
-          }),
-        );
+          });
+          opsCount++;
+        });
       });
 
-      await Promise.all(ops);
+      await batch.commit();
 
       const gradoEfectivo = gradoTutorEfectivo;
       const fechas = diasSemana.map(formatFechaISO);
@@ -1222,7 +1227,7 @@ export default function ReporteAsistencias() {
       mostrarToast(
         "success",
         "Acta(s) registrada(s)",
-        `Se registraron ${gruposAGuardar.length} acta(s) que cubren ${ops.length} fuga(s). Pulsa "Refrescar" para ver los cambios.`,
+        `Se registraron ${gruposAGuardar.length} acta(s) que cubren ${opsCount} fuga(s). Pulsa "Refrescar" para ver los cambios.`,
         5000,
       );
       setShowActaModal(false);
@@ -1378,7 +1383,6 @@ export default function ReporteAsistencias() {
           </table>`;
       }
     } else {
-      // ✅ Vista docente consolidada: todas las tablas de grados
       cuerpoTabla = datosDocenteConsolidado
         .map(({ grado, materias, matriz }) => {
           const encabezados = diasSemana

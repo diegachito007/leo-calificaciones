@@ -6,6 +6,7 @@ import {
   deleteDoc,
   doc,
   serverTimestamp,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -34,8 +35,6 @@ import {
   FaQuestionCircle,
 } from "react-icons/fa";
 
-// ==================== TIPOS PARA MODALES ====================
-
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
@@ -58,7 +57,6 @@ interface ConfirmModalState {
 export default function AmbitosDestrezas() {
   const { user } = useAuth();
 
-  // ✅ Datos maestros desde el Context (cargados UNA sola vez)
   const {
     grados: todosLosGrados,
     ambitos: todosLosAmbitosContext,
@@ -104,8 +102,6 @@ export default function AmbitosDestrezas() {
 
   const destrezaFormRef = useRef<HTMLDivElement>(null);
 
-  // ==================== VALORES DERIVADOS (sin estado, sin lecturas) ====================
-
   const grados = (() => {
     if (!anioActivo) return [];
     return todosLosGrados
@@ -132,8 +128,6 @@ export default function AmbitosDestrezas() {
   const todosLosAmbitos = (() => {
     return [...todosLosAmbitosContext].sort((a, b) => a.nombre.localeCompare(b.nombre));
   })();
-
-  // ==================== HELPERS DE NOTIFICACIÓN ====================
 
   const mostrarToast = useCallback((
     type: Toast["type"],
@@ -184,8 +178,6 @@ export default function AmbitosDestrezas() {
     });
   }, []);
 
-  // ==================== RESETS ====================
-
   const resetAmbitoForm = useCallback(() => {
     setAmbitoFormData({ nombre: "", orden: 0 });
     setEditingAmbitoId(null);
@@ -203,8 +195,6 @@ export default function AmbitosDestrezas() {
     setShowDestrezaForm(false);
     setValidationErrors([]);
   }, []);
-
-  // ==================== PARSEO Y VALIDACIÓN ====================
 
   const parseAmbitosMassiveData = (data: string): { ambitos: string[]; parseErrors: string[] } => {
     const lines = data.trim().split("\n");
@@ -253,8 +243,6 @@ export default function AmbitosDestrezas() {
     return allErrors;
   };
 
-  // ==================== GUARDADO DE ÁMBITOS ====================
-
   const guardarAmbitosMasivos = () => {
     if (!ambitoMassiveData.trim()) {
       setValidationErrors(["No hay datos para procesar. Ingrese al menos un ámbito."]);
@@ -291,6 +279,7 @@ export default function AmbitosDestrezas() {
     setShowConfirmAmbitoModal(true);
   };
 
+  // ✅ OPTIMIZADO: writeBatch para atomicidad y eficiencia
   async function confirmarGuardadoAmbitosMasivos() {
     setShowConfirmAmbitoModal(false);
     setIsSaving(true);
@@ -298,8 +287,10 @@ export default function AmbitosDestrezas() {
     try {
       const maxOrden = ambitos.length > 0 ? Math.max(...ambitos.map((a) => a.orden || 0)) : 0;
 
-      const batch = parsedAmbitos.map(async (nombre, index) => {
-        await addDoc(collection(db, "ambitos"), {
+      const batch = writeBatch(db);
+      parsedAmbitos.forEach((nombre, index) => {
+        const nuevoRef = doc(collection(db, "ambitos"));
+        batch.set(nuevoRef, {
           nombre: nombre.trim(),
           gradoId: gradoEfectivoId,
           orden: maxOrden + index + 1,
@@ -309,7 +300,7 @@ export default function AmbitosDestrezas() {
         });
       });
 
-      await Promise.all(batch);
+      await batch.commit();
       resetAmbitoForm();
       mostrarToast(
         "success",
@@ -378,8 +369,7 @@ export default function AmbitosDestrezas() {
     }
   }
 
-  // ==================== COPIAR A OTROS GRADOS ====================
-
+  // ✅ OPTIMIZADO: writeBatch para copiar ámbitos y destrezas (antes hacía await por cada addDoc)
   async function copiarAGrados() {
     if (selectedDestGrados.length === 0) {
       mostrarToast("warning", "Selecciona grados de destino", "Debes seleccionar al menos un grado para copiar.");
@@ -392,6 +382,7 @@ export default function AmbitosDestrezas() {
 
     setIsCopying(true);
     try {
+      const batch = writeBatch(db);
       let ambitosCreados = 0;
       let destrezasCreadas = 0;
 
@@ -410,7 +401,8 @@ export default function AmbitosDestrezas() {
             if (existenteEnDestino) {
               ambitoDestId = existenteEnDestino.id;
             } else {
-              const ref = await addDoc(collection(db, "ambitos"), {
+              const nuevoRef = doc(collection(db, "ambitos"));
+              batch.set(nuevoRef, {
                 nombre: ambitoOrigen.nombre,
                 gradoId: destGradoId,
                 orden: ambitoOrigen.orden || 0,
@@ -418,7 +410,7 @@ export default function AmbitosDestrezas() {
                 createdAt: serverTimestamp(),
                 createdBy: user?.uid,
               });
-              ambitoDestId = ref.id;
+              ambitoDestId = nuevoRef.id;
               ambitosCreadosMap[ambitoOrigen.nombre.toLowerCase()] = ambitoDestId;
               ambitosCreados++;
             }
@@ -445,7 +437,8 @@ export default function AmbitosDestrezas() {
             
             if (!existeEnContexto && !existeEnLoop) {
               ordenMax += 1;
-              await addDoc(collection(db, "destrezas"), {
+              const nuevoRef = doc(collection(db, "destrezas"));
+              batch.set(nuevoRef, {
                 nombre: destrezaOrigen.nombre,
                 descripcion: destrezaOrigen.descripcion,
                 ambitoId: ambitoDestId,
@@ -461,6 +454,8 @@ export default function AmbitosDestrezas() {
           }
         }
       }
+
+      await batch.commit();
 
       mostrarToast(
         "success",
@@ -485,8 +480,6 @@ export default function AmbitosDestrezas() {
         : [...prev, gradoId],
     );
   };
-
-  // ==================== GUARDADO DE DESTREZAS ====================
 
   async function analizarYGuardarDestrezas() {
     const errors: string[] = [];
@@ -552,9 +545,13 @@ export default function AmbitosDestrezas() {
     try {
       const ambito = ambitos.find((a) => a.id === selectedAmbitoId);
       if (!ambito) throw new Error("Ámbito no encontrado");
-      const batch = destrezasList.map(async (texto, index) => {
+
+      // ✅ OPTIMIZADO: writeBatch para atomicidad
+      const batch = writeBatch(db);
+      destrezasList.forEach((texto, index) => {
         const nombre = texto.substring(0, 100);
-        await addDoc(collection(db, "destrezas"), {
+        const nuevoRef = doc(collection(db, "destrezas"));
+        batch.set(nuevoRef, {
           nombre: nombre.trim(),
           descripcion: texto.trim(),
           ambitoId: selectedAmbitoId,
@@ -566,7 +563,7 @@ export default function AmbitosDestrezas() {
         });
       });
 
-      await Promise.all(batch);
+      await batch.commit();
       resetDestrezaForm();
       mostrarToast(
         "success",
@@ -581,8 +578,6 @@ export default function AmbitosDestrezas() {
     }
   }
 
-  // ==================== EDITAR / ELIMINAR ====================
-
   const handleEditAmbito = (ambito: Ambito) => {
     setAmbitoFormData({ nombre: ambito.nombre, orden: ambito.orden || 0 });
     setEditingAmbitoId(ambito.id);
@@ -591,6 +586,7 @@ export default function AmbitosDestrezas() {
     setValidationErrors([]);
   };
 
+  // ✅ OPTIMIZADO: writeBatch para eliminar ámbito + destrezas (antes hacía Promise.all + deleteDoc separado)
   async function handleDeleteAmbito(id: string) {
     const ambito = ambitos.find((a) => a.id === id);
     const destrezasDelAmbito = destrezas.filter((d) => d.ambitoId === id);
@@ -622,13 +618,17 @@ export default function AmbitosDestrezas() {
     if (!confirmado) return;
 
     try {
+      const batch = writeBatch(db);
+      
       if (destrezasDelAmbito.length > 0) {
-        const deleteDestrezas = destrezasDelAmbito.map((d) =>
-          deleteDoc(doc(db, "destrezas", d.id)),
-        );
-        await Promise.all(deleteDestrezas);
+        destrezasDelAmbito.forEach((d) => {
+          batch.delete(doc(db, "destrezas", d.id));
+        });
       }
-      await deleteDoc(doc(db, "ambitos", id));
+      batch.delete(doc(db, "ambitos", id));
+      
+      await batch.commit();
+
       mostrarToast(
         "success",
         "Ámbito eliminado",
@@ -722,8 +722,6 @@ export default function AmbitosDestrezas() {
     }
   }
 
-  // ==================== NAVEGACIÓN ====================
-
   const getDestrezasByAmbito = (ambitoId: string) => {
     return destrezas.filter((d) => d.ambitoId === ambitoId);
   };
@@ -804,8 +802,6 @@ export default function AmbitosDestrezas() {
     }
   };
 
-  // ==================== CONFIG DE TOASTS ====================
-
   const toastConfig = {
     success: {
       bg: "bg-green-50 border-green-400",
@@ -839,7 +835,6 @@ export default function AmbitosDestrezas() {
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
 
-  // ✅ Loading: espera a que el Context cargue los datos maestros
   if (!ready) {
     return (
       <Layout title="Ámbitos y Destrezas" subtitle="Configura competencias y destrezas" showBack>
@@ -890,7 +885,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* Selector de Grado como botones */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 p-4">
         <h3 className="text-base font-bold text-slate-800 mb-3 flex items-center gap-2">
           <FaBook className="text-purple-600" />
@@ -964,7 +958,6 @@ export default function AmbitosDestrezas() {
         )}
       </div>
 
-      {/* Breadcrumb de navegación */}
       {currentView === "destrezas" && ambitoSeleccionado && (
         <div className="mb-4 flex items-center gap-2 text-sm">
           <button
@@ -980,7 +973,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* VISTA: LISTA DE ÁMBITOS */}
       {currentView === "ambitos" && gradoEfectivoId && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="bg-linear-to-r from-purple-600 to-purple-700 px-5 py-4 flex items-center justify-between">
@@ -1211,7 +1203,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* VISTA: DESTREZAS DE UN ÁMBITO */}
       {currentView === "destrezas" && ambitoSeleccionado && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
           <div className="bg-linear-to-r from-teal-600 to-teal-700 px-5 py-4 flex items-center justify-between">
@@ -1369,7 +1360,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* Modal de Confirmación para Ámbitos Masivos */}
       {showConfirmAmbitoModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
@@ -1424,7 +1414,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* Modal para Copiar a otros grados */}
       {showCopyModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
@@ -1540,7 +1529,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* ✅ CONTENEDOR DE TOASTS */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -1570,7 +1558,6 @@ export default function AmbitosDestrezas() {
         })}
       </div>
 
-      {/* ✅ MODAL DE CONFIRMACIÓN PERSONALIZADO */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">

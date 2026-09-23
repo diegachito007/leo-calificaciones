@@ -271,27 +271,33 @@ export default function ReporteNotas() {
 
   // ==================== CARGA DE ASIGNATURAS ====================
 
+  // ✅ OPTIMIZADO: Listener EN VIVO para asignaturas del docente.
+  // Si el docente modifica materias en MiHorario, se refleja aquí al instante.
   useEffect(() => {
     if (!user?.uid || esAdmin || !anioActivo?.id) return;
-    const fetchAsignaturas = async () => {
-      try {
-        const q = query(
-          collection(db, "asignaturasDocente"),
-          where("docenteId", "==", user.uid),
-          where("anioLectivoId", "==", anioActivo.id),
-          where("activo", "==", true),
-        );
-        const snap = await getDocs(q);
+
+    const q = query(
+      collection(db, "asignaturasDocente"),
+      where("docenteId", "==", user.uid),
+      where("anioLectivoId", "==", anioActivo.id),
+      where("activo", "==", true),
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
         setAsignaturasDocente(
-          snap.docs.map(
+          snapshot.docs.map(
             (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
           ),
         );
-      } catch (error) {
-        console.error("Error cargando asignaturas:", error);
-      }
-    };
-    fetchAsignaturas();
+      },
+      (error) => {
+        console.error("Error escuchando asignaturas:", error);
+      },
+    );
+
+    return () => unsubscribe();
   }, [user?.uid, anioActivo?.id, esAdmin]);
 
   // ==================== LISTENER EN TIEMPO REAL PARA ESTUDIANTES ====================
@@ -363,53 +369,64 @@ export default function ReporteNotas() {
         const periodoIdActivo = periodoActual?.id;
 
         const actividadesMap = new Map<string, ActividadData>();
-        const agregarSiAplica = (act: ActividadData) => {
+        // ✅ OPTIMIZADO: Filtrar por periodoId en la query (no en memoria).
+        // Solo trae actividades del periodo activo, no de todo el año lectivo.
+        const agregarActividad = (act: ActividadData) => {
           if (!gradoIds.includes(act.gradoId)) return;
-          if (
-            periodoIdActivo &&
-            act.periodoId &&
-            act.periodoId !== periodoIdActivo
-          )
-            return;
           actividadesMap.set(act.id, act);
         };
 
         if (esAdmin) {
           for (let i = 0; i < gradoIds.length; i += 10) {
             const lote = gradoIds.slice(i, i + 10);
-            const snap = await getDocs(
-              query(
-                collection(db, "actividades"),
-                where("gradoId", "in", lote),
-              ),
-            );
+            const q = periodoIdActivo
+              ? query(
+                  collection(db, "actividades"),
+                  where("gradoId", "in", lote),
+                  where("periodoId", "==", periodoIdActivo),
+                )
+              : query(
+                  collection(db, "actividades"),
+                  where("gradoId", "in", lote),
+                );
+            const snap = await getDocs(q);
             snap.docs.forEach((d) =>
-              agregarSiAplica({ id: d.id, ...d.data() } as ActividadData),
+              agregarActividad({ id: d.id, ...d.data() } as ActividadData),
             );
           }
         } else {
           for (let i = 0; i < gradosTutorIds.length; i += 10) {
             const lote = gradosTutorIds.slice(i, i + 10);
-            const snap = await getDocs(
-              query(
-                collection(db, "actividades"),
-                where("gradoId", "in", lote),
-              ),
-            );
+            const q = periodoIdActivo
+              ? query(
+                  collection(db, "actividades"),
+                  where("gradoId", "in", lote),
+                  where("periodoId", "==", periodoIdActivo),
+                )
+              : query(
+                  collection(db, "actividades"),
+                  where("gradoId", "in", lote),
+                );
+            const snap = await getDocs(q);
             snap.docs.forEach((d) =>
-              agregarSiAplica({ id: d.id, ...d.data() } as ActividadData),
+              agregarActividad({ id: d.id, ...d.data() } as ActividadData),
             );
           }
           for (let i = 0; i < myDestrezaIds.length; i += 30) {
             const lote = myDestrezaIds.slice(i, i + 30);
-            const snap = await getDocs(
-              query(
-                collection(db, "actividades"),
-                where("destrezaId", "in", lote),
-              ),
-            );
+            const q = periodoIdActivo
+              ? query(
+                  collection(db, "actividades"),
+                  where("destrezaId", "in", lote),
+                  where("periodoId", "==", periodoIdActivo),
+                )
+              : query(
+                  collection(db, "actividades"),
+                  where("destrezaId", "in", lote),
+                );
+            const snap = await getDocs(q);
             snap.docs.forEach((d) =>
-              agregarSiAplica({ id: d.id, ...d.data() } as ActividadData),
+              agregarActividad({ id: d.id, ...d.data() } as ActividadData),
             );
           }
         }
