@@ -1,4 +1,11 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useMemo,
+  Fragment,
+} from "react";
 import {
   collection,
   query,
@@ -46,7 +53,6 @@ import {
   FaLock,
   FaListUl,
   FaTable,
-  FaCalendarAlt,
 } from "react-icons/fa";
 import {
   type EstadoAsistencia,
@@ -65,6 +71,7 @@ interface AsistenciaData {
   periodoId: string;
   fecha: string;
   ambitoId?: string;
+  hora?: number;
   estado: string;
   v2?: boolean;
   observacion?: string;
@@ -169,17 +176,8 @@ const ESTRATEGIAS_NOTA = [
 ];
 const TTL_ACTIVIDADES = 1000 * 60 * 15;
 const TTL_CALIFICACIONES = 1000 * 60 * 5;
-
-const FILAS_HORARIO: ({ tipo: "hora"; hora: number } | { tipo: "recreo" })[] = [
-  { tipo: "hora", hora: 1 },
-  { tipo: "hora", hora: 2 },
-  { tipo: "hora", hora: 3 },
-  { tipo: "hora", hora: 4 },
-  { tipo: "recreo" },
-  { tipo: "hora", hora: 5 },
-  { tipo: "hora", hora: 6 },
-  { tipo: "hora", hora: 7 },
-];
+const NOMBRES_DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie"];
+const HORAS_DIA = [1, 2, 3, 4, 5, 6, 7];
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 const notaALetra = (nota: number): string => {
@@ -252,13 +250,9 @@ export default function Calificaciones() {
   } = useData();
 
   const [panel, setPanel] = useState<0 | 1 | 2>(0);
-  const [vistaPanel0, setVistaPanel0] = useState<"horario" | "lista">("horario");
-  const [slotSeleccionado, setSlotSeleccionado] = useState<{
-    gradoId: string;
-    gradoNombre: string;
-    destrezaId: string;
-    etiqueta: string;
-  } | null>(null);
+  const [vistaPanel0, setVistaPanel0] = useState<"horario" | "lista">(
+    "horario",
+  );
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [actividades, setActividades] = useState<ActividadData[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -274,6 +268,15 @@ export default function Calificaciones() {
   const [fechaAsistencia, setFechaAsistencia] = useState(
     new Date().toISOString().split("T")[0],
   );
+  // ✅ Horas pedagógicas del bloque que se está registrando
+  const [horasAsistencia, setHorasAsistencia] = useState<number[]>([]);
+  const [horasPending, setHorasPending] = useState<{
+    gradoId: string;
+    gradoNombre: string;
+    destrezaId: string | null;
+    horas: number[];
+    presionada: number;
+  } | null>(null);
   const [asistencias, setAsistencias] = useState<
     Record<
       string,
@@ -403,10 +406,36 @@ export default function Calificaciones() {
   const materiaSeleccionadaEfectiva = esGradoBachillerato
     ? materiaEfectivaId
     : ambitoEfectivoId;
+  // ✅ Día de hoy (1=Lun ... 5=Vie); 0 = fin de semana
+  const DIA_HOY = (() => {
+    const js = new Date().getDay();
+    return js >= 1 && js <= 5 ? js : 0;
+  })();
+  // ✅ Suma de horas pedagógicas semanales de todas las materias
+  const totalHorasPedagogicas = asignaturasDocente.reduce(
+    (sum, a) => sum + (a.horario?.reduce((s, b) => s + b.horas.length, 0) || 0),
+    0,
+  );
+  // ✅ Paleta de colores por grado (para pintar la columna de hoy)
+  const PALETA_COLORES = [
+    "bg-yellow-300",
+    "bg-green-400",
+    "bg-pink-300",
+    "bg-sky-300",
+    "bg-orange-300",
+    "bg-lime-300",
+    "bg-fuchsia-300",
+    "bg-teal-300",
+  ];
+  const colorPorGrado = (gradoId: string) => {
+    const idx = grados.findIndex((g) => g.id === gradoId);
+    return PALETA_COLORES[Math.abs(idx) % PALETA_COLORES.length];
+  };
   const actividadSeleccionada = actividades.find(
     (a) => a.id === selectedActividadId,
   );
 
+  // ✅ ADAPTACIÓN CURRICULAR
   const aplicaActividad = (
     est: Estudiante | undefined | null,
     act:
@@ -505,10 +534,12 @@ export default function Calificaciones() {
     [],
   );
 
+  // ==================== NAVEGACIÓN ====================
   const entrarAsistencia = (
     gradoId: string,
     gradoNombre: string,
     destrezaId: string | null,
+    horas: number[] = [],
   ) => {
     const esBach = esBachillerato(gradoNombre);
     const d = destrezaId ? destrezas.find((x) => x.id === destrezaId) : null;
@@ -519,6 +550,7 @@ export default function Calificaciones() {
     setSelectedDestrezaId(d?.id || "");
     setSelectedActividadId("");
     setObsExpandida({});
+    setHorasAsistencia(horas);
     setPanel(1);
   };
   const entrarCalificaciones = (
@@ -541,133 +573,36 @@ export default function Calificaciones() {
   };
   const volverListado = () => setPanel(0);
 
-  const DIA_HOY = (() => {
-    const js = new Date().getDay();
-    return js >= 1 && js <= 5 ? js : 0;
-  })();
-  const NOMBRES_DIAS = [
-    { id: 1, n: "Lun" },
-    { id: 2, n: "Mar" },
-    { id: 3, n: "Mié" },
-    { id: 4, n: "Jue" },
-    { id: 5, n: "Vie" },
-  ];
-  const mapaSemana = useMemo(() => {
-    const m = new Map<string, AsignaturaDocente>();
-    asignaturasDocente.forEach((a) => {
-      (a.horario || []).forEach((b) => {
-        (b.horas || []).forEach((h) => m.set(`${b.dia}-${h}`, a));
+  // ✅ Al presionar una celda del horario: detecta el bloque consecutivo
+  const presionarCeldaHorario = (
+    asignatura: AsignaturaDocente,
+    dia: number,
+    hora: number,
+  ) => {
+    const bloque = asignatura.horario?.find(
+      (b) => b.dia === dia && b.horas.includes(hora),
+    );
+    const horas = bloque?.horas?.length ? bloque.horas : [hora];
+    if (horas.length > 1) {
+      setHorasPending({
+        gradoId: asignatura.gradoId,
+        gradoNombre:
+          grados.find((g) => g.id === asignatura.gradoId)?.nombre || "",
+        destrezaId: asignatura.destrezaId,
+        horas,
+        presionada: hora,
       });
-    });
-    return m;
-  }, [asignaturasDocente]);
-  const materiasSinHorario = useMemo(
-    () => asignaturasDocente.filter((a) => !a.horario || a.horario.length === 0),
-    [asignaturasDocente],
-  );
-  const PALETA = [
-    "bg-teal-400",
-    "bg-yellow-300",
-    "bg-indigo-300",
-    "bg-green-400",
-    "bg-pink-300",
-    "bg-purple-300",
-    "bg-orange-300",
-    "bg-cyan-400",
-  ];
-  const colorDeGrado = (gradoId: string) => {
-    const idx = gradosFiltrados.findIndex((g) => g.id === gradoId);
-    return PALETA[Math.abs(idx) % PALETA.length];
-  };
-  const nombreGradoDe = (gradoId: string) => {
-    const g = grados.find((x) => x.id === gradoId);
-    return g ? `${g.nombre} ${g.paralelo}` : "";
-  };
-  const destrezaDe = (destrezaId: string) =>
-    destrezas.find((d) => d.id === destrezaId);
-  const seleccionarSlot = (a: AsignaturaDocente) => {
-    const g = grados.find((x) => x.id === a.gradoId);
-    const d = destrezas.find((x) => x.id === a.destrezaId);
-    setSlotSeleccionado({
-      gradoId: a.gradoId,
-      gradoNombre: g?.nombre || "",
-      destrezaId: a.destrezaId,
-      etiqueta: `${d?.nombre || "Materia"} · ${g ? `${g.nombre} ${g.paralelo}` : ""}`,
-    });
+    } else {
+      entrarAsistencia(
+        asignatura.gradoId,
+        grados.find((g) => g.id === asignatura.gradoId)?.nombre || "",
+        asignatura.destrezaId,
+        [hora],
+      );
+    }
   };
 
-  const fechaLocalHoy = useMemo(() => {
-    const d = new Date();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${d.getFullYear()}-${m}-${day}`;
-  }, []);
-  const diaSemanaFecha = useMemo(
-    () => (fechaAsistencia ? new Date(fechaAsistencia + "T00:00:00").getDay() : 0),
-    [fechaAsistencia],
-  );
-  const nombreDiaSemana = (jsDay: number): string => {
-    if (jsDay === 0) return "domingo";
-    if (jsDay === 6) return "sábado";
-    return NOMBRES_DIAS.find((d) => d.id === jsDay)?.n.toLowerCase() || "";
-  };
-  const diasConClase = useMemo(() => {
-    if (!gradoEfectivoId) return null;
-    const relevantes = asignaturasDocente.filter((a) => {
-      if (a.gradoId !== gradoEfectivoId) return false;
-      if (esGradoInicialActual) return true;
-      if (esGradoBachillerato) return a.destrezaId === materiaEfectivaId;
-      const d = destrezas.find((x) => x.id === a.destrezaId);
-      return d?.ambitoId === ambitoEfectivoId;
-    });
-    const conHorario = relevantes.filter((a) => (a.horario || []).length > 0);
-    if (conHorario.length === 0) return null;
-    const set = new Set<number>();
-    conHorario.forEach((a) => (a.horario || []).forEach((b) => set.add(b.dia)));
-    return set;
-  }, [
-    asignaturasDocente,
-    gradoEfectivoId,
-    esGradoInicialActual,
-    esGradoBachillerato,
-    materiaEfectivaId,
-    ambitoEfectivoId,
-    destrezas,
-  ]);
-
-  // ✅ Gate: tiene materias en el grado pero NINGUNA con horas → exigir horario
-  const tieneAsignaturasEnScope = useMemo(() => {
-    if (!gradoEfectivoId) return false;
-    return asignaturasDocente.some((a) => {
-      if (a.gradoId !== gradoEfectivoId) return false;
-      if (esGradoInicialActual) return true;
-      if (esGradoBachillerato) return a.destrezaId === materiaEfectivaId;
-      const d = destrezas.find((x) => x.id === a.destrezaId);
-      return d?.ambitoId === ambitoEfectivoId;
-    });
-  }, [
-    asignaturasDocente,
-    gradoEfectivoId,
-    esGradoInicialActual,
-    esGradoBachillerato,
-    materiaEfectivaId,
-    ambitoEfectivoId,
-    destrezas,
-  ]);
-  const requiereHorario = tieneAsignaturasEnScope && diasConClase === null;
-
-  const sinHorarioGrado = (gradoId: string): boolean => {
-    const delGrado = asignaturasDocente.filter((a) => a.gradoId === gradoId);
-    if (delGrado.length === 0) return false;
-    return !delGrado.some((a) => (a.horario || []).length > 0);
-  };
-
-  const fechaFutura = !!fechaAsistencia && fechaAsistencia > fechaLocalHoy;
-  const diaSinClase = !!(
-    diasConClase &&
-    !diasConClase.has(diaSemanaFecha)
-  );
-
+  // ==================== CARGA ====================
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
     const q = query(
@@ -745,6 +680,7 @@ export default function Calificaciones() {
     }
   }, []);
 
+  // ✅ GUARDAR ASISTENCIA: un registro por estudiante POR HORA del bloque
   const guardarAsistencia = async () => {
     if (!esGradoInicialActual && !materiaSeleccionadaEfectiva) {
       mostrarToast(
@@ -754,22 +690,7 @@ export default function Calificaciones() {
       );
       return;
     }
-    if (fechaFutura) {
-      mostrarToast(
-        "warning",
-        "Fecha futura",
-        "No puedes registrar asistencia en una fecha posterior a hoy.",
-      );
-      return;
-    }
-    if (diaSinClase) {
-      mostrarToast(
-        "warning",
-        "Día sin clases",
-        `Según tu horario, no tienes clases de esta materia los ${nombreDiaSemana(diaSemanaFecha)}. Cambia la fecha.`,
-      );
-      return;
-    }
+    const horas = horasAsistencia.length ? horasAsistencia : [1];
     setIsSaving(true);
     try {
       const anioLectivoId = anioActivo?.id || "";
@@ -785,9 +706,12 @@ export default function Calificaciones() {
           where("ambitoId", "==", ambitoIdParaGuardar),
         ),
       );
-      const existentesMap = new Map<string, { id: string; data: AsistenciaData }>();
+      const existentesMap = new Map<
+        string,
+        { id: string; data: AsistenciaData }
+      >();
       existentesSnap.docs.forEach((d) =>
-        existentesMap.set(d.data().estudianteId, {
+        existentesMap.set(`${d.data().estudianteId}|${d.data().hora ?? 1}`, {
           id: d.id,
           data: d.data() as AsistenciaData,
         }),
@@ -798,53 +722,56 @@ export default function Calificaciones() {
         const asistencia = asistencias[est.id];
         if (!asistencia || !asistencia.estado) return;
         if (asistencia.esTutorOnly && !esTutorDelGradoActual) return;
-        const existente = existentesMap.get(est.id);
-        const configExistente = estadoConfig(
-          normalizarEstado(existente?.data.estado, existente?.data.v2),
-        );
-        if (configExistente?.quien === "tutor" && !esTutorDelGradoActual)
-          return;
-        const datos = {
-          estudianteId: est.id,
-          gradoId: gradoEfectivoId,
-          anioLectivoId,
-          periodoId,
-          fecha: fechaAsistencia,
-          ambitoId: ambitoIdParaGuardar,
-          estado: asistencia.estado,
-          v2: true,
-          observacion: asistencia.observacion || "",
-          updatedAt: serverTimestamp(),
-        };
-        if (!existente) {
-          batch.set(doc(collection(db, "asistencias")), {
-            ...datos,
-            registradoPor: user?.uid || "",
-            createdAt: serverTimestamp(),
-          });
-        } else {
-          const aud: Record<string, unknown> = {};
-          if (
-            existente.data.registradoPor &&
-            existente.data.registradoPor !== user?.uid
-          ) {
-            aud.editadoPor = user?.uid || "";
-            aud.editadoEl = serverTimestamp();
-            if (!existente.data.estadoOriginal)
-              aud.estadoOriginal = existente.data.estado;
+        horas.forEach((hora) => {
+          const existente = existentesMap.get(`${est.id}|${hora}`);
+          const configExistente = estadoConfig(
+            normalizarEstado(existente?.data.estado, existente?.data.v2),
+          );
+          if (configExistente?.quien === "tutor" && !esTutorDelGradoActual)
+            return;
+          const datos = {
+            estudianteId: est.id,
+            gradoId: gradoEfectivoId,
+            anioLectivoId,
+            periodoId,
+            fecha: fechaAsistencia,
+            ambitoId: ambitoIdParaGuardar,
+            hora,
+            estado: asistencia.estado,
+            v2: true,
+            observacion: asistencia.observacion || "",
+            updatedAt: serverTimestamp(),
+          };
+          if (!existente) {
+            batch.set(doc(collection(db, "asistencias")), {
+              ...datos,
+              registradoPor: user?.uid || "",
+              createdAt: serverTimestamp(),
+            });
+          } else {
+            const aud: Record<string, unknown> = {};
+            if (
+              existente.data.registradoPor &&
+              existente.data.registradoPor !== user?.uid
+            ) {
+              aud.editadoPor = user?.uid || "";
+              aud.editadoEl = serverTimestamp();
+              if (!existente.data.estadoOriginal)
+                aud.estadoOriginal = existente.data.estado;
+            }
+            batch.update(doc(db, "asistencias", existente.id), {
+              ...datos,
+              ...aud,
+            });
           }
-          batch.update(doc(db, "asistencias", existente.id), {
-            ...datos,
-            ...aud,
-          });
-        }
-        operaciones++;
+          operaciones++;
+        });
       });
       if (operaciones > 0) await batch.commit();
       mostrarToast(
         "success",
         "Asistencia guardada",
-        "La asistencia se registró correctamente.",
+        `Se registró la asistencia de ${horas.length} hora(s) correctamente.`,
       );
     } catch (e) {
       console.error(e);
@@ -860,7 +787,11 @@ export default function Calificaciones() {
 
   const guardarActividad = async () => {
     if (!actividadForm.detalle.trim()) {
-      mostrarToast("warning", "Detalle obligatorio", "El detalle es obligatorio.");
+      mostrarToast(
+        "warning",
+        "Detalle obligatorio",
+        "El detalle es obligatorio.",
+      );
       return;
     }
     setIsSaving(true);
@@ -913,7 +844,11 @@ export default function Calificaciones() {
       if (id) setSelectedActividadId(id);
     } catch (e) {
       console.error(e);
-      mostrarToast("error", "Error al guardar", "No se pudo guardar la actividad.");
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo guardar la actividad.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -950,7 +885,11 @@ export default function Calificaciones() {
       }
     } catch (e) {
       console.error(e);
-      mostrarToast("error", "Error al eliminar", "No se pudo eliminar la actividad.");
+      mostrarToast(
+        "error",
+        "Error al eliminar",
+        "No se pudo eliminar la actividad.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -958,7 +897,11 @@ export default function Calificaciones() {
 
   const guardarCalificaciones = async () => {
     if (!selectedActividadId) {
-      mostrarToast("warning", "Actividad requerida", "Selecciona una actividad.");
+      mostrarToast(
+        "warning",
+        "Actividad requerida",
+        "Selecciona una actividad.",
+      );
       return;
     }
     setIsSaving(true);
@@ -969,7 +912,10 @@ export default function Calificaciones() {
           where("actividadId", "==", selectedActividadId),
         ),
       );
-      const existentesMap = new Map<string, { id: string; data: CalificacionData }>();
+      const existentesMap = new Map<
+        string,
+        { id: string; data: CalificacionData }
+      >();
       existentesSnap.docs.forEach((d) =>
         existentesMap.set(d.data().estudianteId, {
           id: d.id,
@@ -981,7 +927,11 @@ export default function Calificaciones() {
       let operaciones = 0;
       estudiantesAplicables.forEach((est) => {
         const calificacion = calificaciones[est.id];
-        if (!calificacion || !calificacion.nota || calificacion.nota.trim() === "")
+        if (
+          !calificacion ||
+          !calificacion.nota ||
+          calificacion.nota.trim() === ""
+        )
           return;
         if (
           estadoBloqueaNota(asistenciasDiaActividad[est.id]) &&
@@ -1007,7 +957,10 @@ export default function Calificaciones() {
           });
         } else {
           const aud: Record<string, unknown> = {};
-          if (existente.data.docenteId && existente.data.docenteId !== user?.uid) {
+          if (
+            existente.data.docenteId &&
+            existente.data.docenteId !== user?.uid
+          ) {
             aud.editadoPor = user?.uid || "";
             aud.editadoEl = serverTimestamp();
             if (existente.data.notaOriginal === undefined)
@@ -1043,7 +996,11 @@ export default function Calificaciones() {
   };
 
   const aplicarRefuerzo = async () => {
-    if (!refuerzoEstudianteId || !selectedActividadId || !refuerzoForm.detalle.trim()) {
+    if (
+      !refuerzoEstudianteId ||
+      !selectedActividadId ||
+      !refuerzoForm.detalle.trim()
+    ) {
       mostrarToast(
         "warning",
         "Detalle obligatorio",
@@ -1061,7 +1018,11 @@ export default function Calificaciones() {
         ),
       );
       if (snap.empty) {
-        mostrarToast("error", "No encontrada", "No se encontró la calificación.");
+        mostrarToast(
+          "error",
+          "No encontrada",
+          "No se encontró la calificación.",
+        );
         setIsSaving(false);
         return;
       }
@@ -1083,7 +1044,11 @@ export default function Calificaciones() {
       await cargarCalificaciones(selectedActividadId);
     } catch (e) {
       console.error(e);
-      mostrarToast("error", "Error al aplicar", "No se pudo aplicar el refuerzo.");
+      mostrarToast(
+        "error",
+        "Error al aplicar",
+        "No se pudo aplicar el refuerzo.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -1151,7 +1116,11 @@ export default function Calificaciones() {
       setNotaTemporal("");
     } catch (e) {
       console.error(e);
-      mostrarToast("error", "Error al guardar", "No se pudo guardar la calificación.");
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo guardar la calificación.",
+      );
     } finally {
       setGuardandoCelda(false);
     }
@@ -1166,7 +1135,9 @@ export default function Calificaciones() {
     setFichaBase({});
     setFichaAsistencias({});
     try {
-      const actividadIds = actividades.map((a) => a.id).filter(Boolean) as string[];
+      const actividadIds = actividades
+        .map((a) => a.id)
+        .filter(Boolean) as string[];
       if (!actividadIds.length) {
         setFichaLoading(false);
         return;
@@ -1231,8 +1202,11 @@ export default function Calificaciones() {
   };
 
   const calcularCambiosFicha = () => {
-    const cambios: { actividadId: string; nota: number; observacion: string }[] =
-      [];
+    const cambios: {
+      actividadId: string;
+      nota: number;
+      observacion: string;
+    }[] = [];
     const estFicha = estudiantes.find((e) => e.id === fichaEstudianteId);
     actividades.forEach((a) => {
       if (!a.id) return;
@@ -1282,7 +1256,10 @@ export default function Calificaciones() {
           if (base.docenteId && base.docenteId !== user?.uid) {
             aud.editadoPor = user?.uid || "";
             aud.editadoEl = serverTimestamp();
-            if (base.notaOriginalPrevio === undefined && base.notaGuardada !== "")
+            if (
+              base.notaOriginalPrevio === undefined &&
+              base.notaGuardada !== ""
+            )
               aud.notaOriginal = parseFloat(base.notaGuardada);
           }
           batch.update(doc(db, "calificaciones", base.calId), {
@@ -1313,7 +1290,11 @@ export default function Calificaciones() {
         await cargarCalificaciones(selectedActividadId);
     } catch (e) {
       console.error(e);
-      mostrarToast("error", "Error al guardar", "No se pudieron guardar los cambios.");
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudieron guardar los cambios.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -1375,7 +1356,10 @@ export default function Calificaciones() {
     )
       return;
     if (valor === "") {
-      setCalificaciones((prev) => ({ ...prev, [id]: { ...prev[id], nota: "" } }));
+      setCalificaciones((prev) => ({
+        ...prev,
+        [id]: { ...prev[id], nota: "" },
+      }));
       return;
     }
     if (!/^\d*(\.\d{0,2})?$/.test(valor)) return;
@@ -1426,6 +1410,7 @@ export default function Calificaciones() {
     }
   };
 
+  // ==================== EFFECTS ====================
   useEffect(() => {
     if (!gradoEfectivoId || panel === 0) return;
     const q = query(
@@ -1709,7 +1694,9 @@ export default function Calificaciones() {
   const actividadEsHoy = esFechaHoy(fechaActividad);
   const actividadEsAntigua = esFechaAnteriorAHoy(fechaActividad);
   const estrategiaEfectivaRefuerzo =
-    refuerzoForm.estrategia || actividadSeleccionada?.estrategiaNota || "promediar";
+    refuerzoForm.estrategia ||
+    actividadSeleccionada?.estrategiaNota ||
+    "promediar";
   const cambiosFichaCount = showFichaModal ? calcularCambiosFicha().length : 0;
   const etiquetaAsistencia = esGradoInicialActual
     ? "Asistencia General"
@@ -1721,7 +1708,9 @@ export default function Calificaciones() {
   const nombreDestrezaCal =
     destrezas.find((d) => d.id === destrezaEfectivaId)?.nombre || "";
   const etiquetaCalificaciones =
-    nombreAmbitoCal && nombreDestrezaCal && nombreAmbitoCal !== nombreDestrezaCal
+    nombreAmbitoCal &&
+    nombreDestrezaCal &&
+    nombreAmbitoCal !== nombreDestrezaCal
       ? `${nombreAmbitoCal} · ${nombreDestrezaCal}`
       : nombreDestrezaCal || nombreAmbitoCal || "—";
 
@@ -1752,26 +1741,24 @@ export default function Calificaciones() {
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <h2 className="text-xl font-bold text-slate-800">
-                  Mis grados y materias
+                  Mi horario{" "}
+                  <span className="text-sm font-semibold text-slate-500">
+                    · {totalHorasPedagogicas}{" "}
+                    {totalHorasPedagogicas === 1
+                      ? "hora pedagógica"
+                      : "horas pedagógicas"}
+                  </span>
                 </h2>
                 <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => setVistaPanel0("horario")}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                      vistaPanel0 === "horario"
-                        ? "bg-blue-600 text-white shadow"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${vistaPanel0 === "horario" ? "bg-blue-600 text-white shadow" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                   >
                     <FaTable className="text-[10px]" /> Horario semanal
                   </button>
                   <button
                     onClick={() => setVistaPanel0("lista")}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                      vistaPanel0 === "lista"
-                        ? "bg-blue-600 text-white shadow"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${vistaPanel0 === "lista" ? "bg-blue-600 text-white shadow" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                   >
                     <FaListUl className="text-[10px]" /> Lista por grado
                   </button>
@@ -1779,187 +1766,153 @@ export default function Calificaciones() {
               </div>
 
               {vistaPanel0 === "horario" ? (
-                <>
-                  <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200">
-                          <th className="px-2 py-2 w-16"></th>
-                          {NOMBRES_DIAS.map((dia) => {
-                            const esHoy = DIA_HOY === dia.id;
-                            return (
-                              <th
-                                key={dia.id}
-                                className={`px-1 py-2 text-center font-semibold ${
-                                  esHoy
-                                    ? "text-emerald-700 bg-emerald-50"
-                                    : "text-slate-700"
-                                }`}
-                              >
-                                {dia.n}
-                                {esHoy && (
-                                  <span className="ml-1 text-[9px] font-bold text-emerald-600">
-                                    HOY
-                                  </span>
-                                )}
-                              </th>
-                            );
-                          })}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {FILAS_HORARIO.map((fila, fi) =>
-                          fila.tipo === "recreo" ? (
-                            <tr key={`rec-${fi}`}>
-                              <td className="px-2 py-1 text-[9px] font-bold text-amber-700 bg-amber-50 text-center rounded">
+                <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200">
+                        <th className="px-2 py-2 w-16"></th>
+                        {NOMBRES_DIAS.map((d, di) => {
+                          const esHoy = di + 1 === DIA_HOY;
+                          return (
+                            <th
+                              key={d}
+                              className={`px-1 py-2 text-center font-semibold ${
+                                esHoy
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "text-slate-700"
+                              }`}
+                            >
+                              {d}
+                              {esHoy && (
+                                <span className="ml-1 text-[9px] font-bold text-emerald-600">
+                                  HOY
+                                </span>
+                              )}
+                            </th>
+                          );
+                        })}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {HORAS_DIA.map((hora) => (
+                        <Fragment key={hora}>
+                          <tr>
+                            <td className="px-2 py-1 text-[10px] font-bold text-slate-500 text-center">
+                              {hora}ª
+                            </td>
+                            {NOMBRES_DIAS.map((d, di) => {
+                              const dia = di + 1;
+                              const esHoy = dia === DIA_HOY;
+                              const asignatura = asignaturasDocente.find((a) =>
+                                a.horario?.some(
+                                  (b) =>
+                                    b.dia === dia && b.horas.includes(hora),
+                                ),
+                              );
+                              const dest = asignatura
+                                ? destrezas.find(
+                                    (x) => x.id === asignatura.destrezaId,
+                                  )
+                                : null;
+                              const grado = asignatura
+                                ? grados.find(
+                                    (g) => g.id === asignatura.gradoId,
+                                  )
+                                : null;
+                              return (
+                                <td
+                                  key={d}
+                                  className={`px-0.5 py-1 ${esHoy ? "bg-emerald-50/40" : ""}`}
+                                >
+                                  {asignatura ? (
+                                    <button
+                                      onClick={() =>
+                                        presionarCeldaHorario(
+                                          asignatura,
+                                          dia,
+                                          hora,
+                                        )
+                                      }
+                                      className={`w-full truncate rounded-md px-1 py-1.5 text-[10px] font-semibold border transition-all ${
+                                        esHoy
+                                          ? `${colorPorGrado(asignatura.gradoId)} text-slate-900 border-slate-900/20 shadow-sm`
+                                          : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200 hover:text-slate-800"
+                                      }`}
+                                      title={`${dest?.nombre || "Materia"} · ${grado?.nombre || ""} ${grado?.paralelo || ""} · ${d} ${hora}ª`}
+                                    >
+                                      <span className="block truncate">
+                                        {dest?.nombre || "Materia"}
+                                      </span>
+                                      <span className="block truncate text-[9px] font-normal opacity-80">
+                                        {grado?.nombre || ""}{" "}
+                                        {grado?.paralelo || ""}
+                                      </span>
+                                    </button>
+                                  ) : (
+                                    <div
+                                      className={`w-full h-9 rounded-md ${
+                                        esHoy
+                                          ? "bg-emerald-50 border border-emerald-100"
+                                          : "bg-slate-50 border border-slate-100"
+                                      }`}
+                                    ></div>
+                                  )}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                          {hora === 4 && (
+                            <tr>
+                              <td className="px-2 py-1 text-[9px] font-bold text-amber-700 bg-amber-50 text-center">
                                 RECREO
                               </td>
-                              {NOMBRES_DIAS.map((dia) => (
+                              {NOMBRES_DIAS.map((d, di) => (
                                 <td
-                                  key={dia.id}
-                                  className="px-0.5 py-1 bg-amber-50/60"
-                                ></td>
+                                  key={d}
+                                  className={`px-0.5 py-1 ${
+                                    di + 1 === DIA_HOY
+                                      ? "bg-amber-50/70"
+                                      : "bg-amber-50/40"
+                                  }`}
+                                >
+                                  <div className="w-full h-3 rounded-md bg-amber-100/70"></div>
+                                </td>
                               ))}
                             </tr>
-                          ) : (
-                            <tr key={`h-${fila.hora}`}>
-                              <td className="px-2 py-1 text-[10px] font-bold text-slate-500 text-center">
-                                {fila.hora}ª
-                              </td>
-                              {NOMBRES_DIAS.map((dia) => {
-                                const a = mapaSemana.get(
-                                  `${dia.id}-${fila.hora}`,
-                                );
-                                const esHoy = DIA_HOY === dia.id;
-                                const sel =
-                                  !!a &&
-                                  slotSeleccionado?.destrezaId ===
-                                    a.destrezaId &&
-                                  slotSeleccionado?.gradoId === a.gradoId;
-                                return (
-                                  <td key={dia.id} className="px-0.5 py-1">
-                                    {a ? (
-                                      <button
-                                        onClick={() => seleccionarSlot(a)}
-                                        title={`${destrezaDe(a.destrezaId)?.nombre || "Materia"} · ${nombreGradoDe(a.gradoId)} · clic para seleccionar`}
-                                        className={`w-full truncate rounded-md px-1 py-1.5 text-[10px] font-semibold border transition-all ${
-                                          esHoy
-                                            ? `${colorDeGrado(a.gradoId)} text-slate-900 border-black/10 hover:brightness-95`
-                                            : "bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200 hover:text-slate-700"
-                                        } ${sel ? "ring-2 ring-blue-500" : ""}`}
-                                      >
-                                        {destrezaDe(a.destrezaId)?.nombre ||
-                                          "Materia"}
-                                        <span className="block text-[9px] font-normal opacity-80 truncate">
-                                          {nombreGradoDe(a.gradoId)}
-                                        </span>
-                                      </button>
-                                    ) : (
-                                      <div className="w-full h-9 rounded-md bg-slate-50 border border-slate-100"></div>
-                                    )}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          ),
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                  <p className="text-[11px] text-slate-500">
-                    <FaInfoCircle className="inline text-[10px] mr-1" />
+                          )}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="px-3 py-2 text-[10px] text-slate-500 border-t border-slate-100">
+                    <FaInfoCircle className="inline mr-1" />
                     La columna de hoy se muestra a color; los demás días en
                     gris, pero todas las materias siguen clickeables para
                     calificar o registrar asistencia de cualquier día (útil en
                     horas libres o para ponerte al día).
                   </p>
-
-                  {slotSeleccionado && (
-                    <div className="bg-white rounded-xl border border-blue-200 shadow-sm p-3 flex items-center gap-2 flex-wrap">
-                      <FaBook className="text-blue-500 shrink-0" />
-                      <span className="font-semibold text-slate-800 text-sm flex-1 min-w-0 truncate">
-                        {slotSeleccionado.etiqueta}
-                      </span>
-                      <button
-                        onClick={() =>
-                          entrarAsistencia(
-                            slotSeleccionado.gradoId,
-                            slotSeleccionado.gradoNombre,
-                            slotSeleccionado.destrezaId,
-                          )
-                        }
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all"
-                      >
-                        <FaUserCheck className="text-[10px]" /> Asistencia
-                      </button>
-                      <button
-                        onClick={() =>
-                          entrarCalificaciones(
-                            slotSeleccionado.gradoId,
-                            slotSeleccionado.gradoNombre,
-                            slotSeleccionado.destrezaId,
-                          )
-                        }
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-semibold transition-all"
-                      >
-                        <FaTasks className="text-[10px]" /> Calificaciones
-                      </button>
-                      <button
-                        onClick={() => setSlotSeleccionado(null)}
-                        className="p-1.5 text-slate-400 hover:text-slate-600"
-                        title="Cerrar"
-                      >
-                        <FaTimes className="text-xs" />
-                      </button>
-                    </div>
-                  )}
-
-                  {materiasSinHorario.length > 0 && (
-                    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-                      <h3 className="text-xs font-semibold text-slate-600 mb-2">
-                        Materias sin horario configurado
-                      </h3>
-                      <div className="flex flex-wrap gap-2">
-                        {materiasSinHorario.map((a) => {
-                          const d = destrezaDe(a.destrezaId);
-                          const sel =
-                            slotSeleccionado?.destrezaId === a.destrezaId &&
-                            slotSeleccionado?.gradoId === a.gradoId;
-                          return (
-                            <button
-                              key={a.id}
-                              onClick={() => seleccionarSlot(a)}
-                              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                                sel
-                                  ? "bg-blue-600 text-white border-blue-600"
-                                  : "bg-slate-50 text-slate-600 border-slate-200 hover:border-blue-300"
-                              }`}
-                            >
-                              {d?.nombre || "Materia"} ·{" "}
-                              {nombreGradoDe(a.gradoId)}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </>
+                </div>
               ) : (
-                <>
+                <div className="space-y-4">
                   {gradosFiltrados.length === 0 ? (
                     <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
                       <FaGraduationCap className="text-4xl text-slate-300 mx-auto mb-3" />
-                      <p className="text-slate-600">No hay grados disponibles.</p>
+                      <p className="text-slate-600">
+                        No hay grados disponibles.
+                      </p>
                     </div>
                   ) : (
                     gradosFiltrados.map((grado) => {
                       const materiasDelGrado = destrezas.filter((d) =>
                         asignaturasDocente.some(
-                          (a) => a.gradoId === grado.id && a.destrezaId === d.id,
+                          (a) =>
+                            a.gradoId === grado.id && a.destrezaId === d.id,
                         ),
                       );
                       const esInicialG = esGradoInicial(grado.nombre);
-                      const esTutorG = (userData?.tutorDe || []).includes(grado.id);
+                      const esTutorG = (userData?.tutorDe || []).includes(
+                        grado.id,
+                      );
                       return (
                         <div
                           key={grado.id}
@@ -1988,11 +1941,6 @@ export default function Calificaciones() {
                                   {materiasDelGrado.length} materia
                                   {materiasDelGrado.length !== 1 ? "s" : ""}
                                 </span>
-                                {sinHorarioGrado(grado.id) && (
-                                  <span className="text-amber-600 font-semibold">
-                                    · Sin horario
-                                  </span>
-                                )}
                               </div>
                             </div>
                             {esInicialG && (
@@ -2002,8 +1950,8 @@ export default function Calificaciones() {
                                 }
                                 className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all"
                               >
-                                <FaUserCheck className="text-[10px]" /> Asistencia
-                                General
+                                <FaUserCheck className="text-[10px]" />{" "}
+                                Asistencia General
                               </button>
                             )}
                           </div>
@@ -2085,32 +2033,13 @@ export default function Calificaciones() {
                       );
                     })
                   )}
-                </>
+                </div>
               )}
             </div>
           )}
 
           {/* ============ PANEL 1: ASISTENCIA ============ */}
-          {panel === 1 && requiereHorario ? (
-            <div className="bg-white rounded-xl border-2 border-amber-300 shadow-sm p-8 text-center">
-              <FaCalendarAlt className="text-5xl text-amber-400 mx-auto mb-4" />
-              <h3 className="text-lg font-bold text-slate-800 mb-2">
-                Configura tu horario antes de iniciar
-              </h3>
-              <p className="text-sm text-slate-600 max-w-md mx-auto mb-5">
-                Para tomar asistencia y validar los días de clase, primero
-                registra las horas de tus materias en este grado. Así evitamos
-                registros en días sin clase y habilitamos el control por horas
-                pedagógicas.
-              </p>
-              <Link
-                to="/mi-horario"
-                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all"
-              >
-                <FaArrowRight className="text-xs" /> Ir a Mi Horario
-              </Link>
-            </div>
-          ) : panel === 1 ? (
+          {panel === 1 && (
             <div className={mostrarBarraSticky ? "pb-28" : ""}>
               <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
                 <button
@@ -2136,30 +2065,19 @@ export default function Calificaciones() {
                   <span className="text-xs text-slate-600 truncate">
                     {gradoActual?.nombre} - {gradoActual?.paralelo}
                   </span>
+                  {horasAsistencia.length > 0 && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold">
+                      {horasAsistencia.map((h) => `${h}ª`).join(" + ")}
+                    </span>
+                  )}
                 </div>
                 <input
                   type="date"
                   value={fechaAsistencia}
-                  max={fechaLocalHoy}
                   onChange={(e) => setFechaAsistencia(e.target.value)}
                   className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 shrink-0"
-                  title="Solo se permite registrar hasta hoy, y en días con clases según tu horario"
                 />
               </div>
-
-              {(fechaFutura || diaSinClase) && (
-                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  <div className="flex items-center gap-2 text-red-800">
-                    <FaExclamationTriangle className="text-sm shrink-0" />
-                    <span className="text-xs font-medium">
-                      {fechaFutura
-                        ? "La fecha seleccionada es futura: solo puedes registrar asistencia hasta hoy."
-                        : `Según tu horario, no tienes clases de esta materia los ${nombreDiaSemana(diaSemanaFecha)}. Elige una fecha válida (de hoy hacia atrás y en un día con horas configuradas).`}
-                    </span>
-                  </div>
-                </div>
-              )}
-
               {!todosConAsistencia &&
                 estudiantes.length > 0 &&
                 (esGradoInicialActual || materiaSeleccionadaEfectiva) && (
@@ -2176,7 +2094,9 @@ export default function Calificaciones() {
               {estudiantes.length === 0 ? (
                 <div className="text-center py-12 text-slate-500">
                   <FaUserCheck className="text-4xl mx-auto mb-3 text-slate-300" />
-                  <p className="font-medium mb-1">No hay estudiantes en este grado</p>
+                  <p className="font-medium mb-1">
+                    No hay estudiantes en este grado
+                  </p>
                   <p className="text-sm">Agrega estudiantes primero</p>
                 </div>
               ) : (
@@ -2213,27 +2133,18 @@ export default function Calificaciones() {
                     return (
                       <div
                         key={est.id}
-                        className={`border rounded-lg p-3 transition-all border-l-4 ${
-                          estado === "J"
-                            ? "border-emerald-200 bg-emerald-50/40 border-l-emerald-500 hover:shadow-md"
-                            : esTutorOnly
-                              ? "border-blue-200 bg-blue-50/40 border-l-blue-500 hover:shadow-md"
-                              : estado === "P"
-                                ? "border-blue-200 bg-blue-50/40 border-l-blue-500 hover:shadow-md"
-                                : estado === "A"
-                                  ? "border-amber-200 bg-amber-50/40 border-l-amber-500 hover:shadow-md"
-                                  : estado === "I"
-                                    ? "border-red-200 bg-red-50/40 border-l-red-500 hover:shadow-md"
-                                    : estado === "F"
-                                      ? "border-rose-200 bg-rose-50/40 border-l-rose-500 hover:shadow-md"
-                                      : "border-blue-200 bg-blue-50/30 border-l-blue-300 hover:shadow-md"
-                        }`}
+                        className={`border rounded-lg p-3 transition-all border-l-4 ${estado === "J" ? "border-emerald-200 bg-emerald-50/40 border-l-emerald-500 hover:shadow-md" : esTutorOnly ? "border-blue-200 bg-blue-50/40 border-l-blue-500 hover:shadow-md" : estado === "P" ? "border-blue-200 bg-blue-50/40 border-l-blue-500 hover:shadow-md" : estado === "A" ? "border-amber-200 bg-amber-50/40 border-l-amber-500 hover:shadow-md" : estado === "I" ? "border-red-200 bg-red-50/40 border-l-red-500 hover:shadow-md" : estado === "F" ? "border-rose-200 bg-rose-50/40 border-l-rose-500 hover:shadow-md" : "border-blue-200 bg-blue-50/30 border-l-blue-300 hover:shadow-md"}`}
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex-1 min-w-0">
                             <div className="font-semibold text-slate-900 text-sm truncate">
                               {est.apellidos} {est.nombres}
                             </div>
+                            {est.conAdaptacion && (
+                              <span className="inline-flex items-center mt-0.5 px-2 py-0.5 bg-purple-100 border border-purple-300 text-purple-700 rounded text-[10px] font-bold">
+                                Adaptación curricular
+                              </span>
+                            )}
                             {estado === "J" ? (
                               <div
                                 className="mt-0.5 flex items-center gap-1 min-w-0 text-[10px] leading-tight text-green-700"
@@ -2251,7 +2162,7 @@ export default function Calificaciones() {
                             ) : (
                               esTutorOnly && (
                                 <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
-                                  <FaLock className="text-[9px]" />
+                                  <FaLock className="text-[9px]" />{" "}
                                   {configEstado?.label}
                                   {!esTutorDelGradoActual && (
                                     <span className="ml-1 opacity-75">
@@ -2291,7 +2202,8 @@ export default function Calificaciones() {
                                 const estadoJustificado = estado === "J";
                                 const estaSeleccionado =
                                   estado === estadoConf.value ||
-                                  (estadoJustificado && estadoConf.value === "I");
+                                  (estadoJustificado &&
+                                    estadoConf.value === "I");
                                 const bloqueadoPorTutoria =
                                   esTutorOnly && !esTutorDelGradoActual;
                                 const disabled = bloqueadoPorTutoria;
@@ -2300,25 +2212,21 @@ export default function Calificaciones() {
                                     key={estadoConf.value}
                                     onClick={() =>
                                       !disabled &&
-                                      actualizarAsistencia(est.id, estadoConf.value)
+                                      actualizarAsistencia(
+                                        est.id,
+                                        estadoConf.value,
+                                      )
                                     }
                                     disabled={disabled}
                                     title={
-                                      estadoJustificado && estadoConf.value === "I"
+                                      estadoJustificado &&
+                                      estadoConf.value === "I"
                                         ? "Inasistencia justificada por el tutor"
                                         : bloqueadoPorTutoria
                                           ? "Estado definido por el tutor (bloqueado)"
                                           : estadoConf.label
                                     }
-                                    className={`h-9 min-w-9 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${
-                                      estaSeleccionado
-                                        ? estadoJustificado && estadoConf.value === "I"
-                                          ? `bg-green-600 text-white ring-1 ring-green-300 ${disabled ? "opacity-90 cursor-not-allowed" : ""}`
-                                          : `${estadoConf.colorSel} ${disabled ? "opacity-70 cursor-not-allowed ring-1 ring-slate-300" : ""}`
-                                        : disabled
-                                          ? "bg-slate-100 text-slate-400 cursor-not-allowed opacity-60"
-                                          : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                                    }`}
+                                    className={`h-9 min-w-9 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-0.5 ${estaSeleccionado ? (estadoJustificado && estadoConf.value === "I" ? `bg-green-600 text-white ring-1 ring-green-300 ${disabled ? "opacity-90 cursor-not-allowed" : ""}` : `${estadoConf.colorSel} ${disabled ? "opacity-70 cursor-not-allowed ring-1 ring-slate-300" : ""}`) : disabled ? "bg-slate-100 text-slate-400 cursor-not-allowed opacity-60" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                                   >
                                     {estadoConf.value}
                                     {estadoJustificado &&
@@ -2332,7 +2240,9 @@ export default function Calificaciones() {
                         </div>
                         {estado &&
                           (() => {
-                            const obsActual = (asistencia?.observacion || "").trim();
+                            const obsActual = (
+                              asistencia?.observacion || ""
+                            ).trim();
                             const tieneObs = obsActual !== "";
                             const expandida = !!obsExpandida[est.id];
                             const bloqueadaObs =
@@ -2375,7 +2285,10 @@ export default function Calificaciones() {
                                           Marcar:
                                         </span>
                                         {[
-                                          { value: "", label: "Sin observación" },
+                                          {
+                                            value: "",
+                                            label: "Sin observación",
+                                          },
                                           {
                                             value: "Permiso de inspección",
                                             label: "📋 Permiso de inspección",
@@ -2393,12 +2306,7 @@ export default function Calificaciones() {
                                                 opt.value,
                                               )
                                             }
-                                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
-                                              (asistencia?.observacion || "") ===
-                                              opt.value
-                                                ? "bg-blue-100 text-blue-700 border border-blue-300"
-                                                : "bg-slate-100 text-slate-600 hover:bg-slate-200 border border-transparent"
-                                            }`}
+                                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${(asistencia?.observacion || "") === opt.value ? "bg-blue-100 text-blue-700 border border-blue-300" : "bg-slate-100 text-slate-600 hover:bg-slate-200 border border-transparent"}`}
                                           >
                                             {opt.label}
                                           </button>
@@ -2421,11 +2329,7 @@ export default function Calificaciones() {
                                           : "Observación libre (opcional)..."
                                       }
                                       disabled={bloqueadaObs}
-                                      className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
-                                        bloqueadaObs
-                                          ? "border-blue-200 bg-blue-50 text-blue-700 cursor-not-allowed"
-                                          : "border-slate-300"
-                                      }`}
+                                      className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${bloqueadaObs ? "border-blue-200 bg-blue-50 text-blue-700 cursor-not-allowed" : "border-slate-300"}`}
                                     />
                                     <button
                                       onClick={() =>
@@ -2467,7 +2371,7 @@ export default function Calificaciones() {
                 </div>
               )}
             </div>
-          ) : null}
+          )}
 
           {/* ============ PANEL 2: CALIFICACIONES ============ */}
           {panel === 2 && (
@@ -2500,21 +2404,13 @@ export default function Calificaciones() {
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     onClick={() => setVistaCalificaciones("lista")}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                      vistaCalificaciones === "lista"
-                        ? "bg-blue-600 text-white shadow"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${vistaCalificaciones === "lista" ? "bg-blue-600 text-white shadow" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                   >
                     <FaListUl className="text-[10px]" /> Lista
                   </button>
                   <button
                     onClick={() => setVistaCalificaciones("matriz")}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                      vistaCalificaciones === "matriz"
-                        ? "bg-blue-600 text-white shadow"
-                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                    }`}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${vistaCalificaciones === "matriz" ? "bg-blue-600 text-white shadow" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                   >
                     <FaTable className="text-[10px]" /> Matriz
                   </button>
@@ -2564,7 +2460,7 @@ export default function Calificaciones() {
                         onClick={() => setShowActividadesModal(true)}
                         className="shrink-0 inline-flex items-center gap-1.5 px-3 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all"
                       >
-                        <FaSyncAlt className="text-[10px]" />
+                        <FaSyncAlt className="text-[10px]" />{" "}
                         {actividadSeleccionada ? "Cambiar" : "Seleccionar"}
                       </button>
                     </div>
@@ -2575,7 +2471,9 @@ export default function Calificaciones() {
                       <p className="font-medium text-sm">
                         Selecciona una actividad del selector de arriba
                       </p>
-                      <p className="text-xs mt-1">o crea una nueva con el botón verde ＋</p>
+                      <p className="text-xs mt-1">
+                        o crea una nueva con el botón verde ＋
+                      </p>
                     </div>
                   ) : (
                     <>
@@ -2596,7 +2494,9 @@ export default function Calificaciones() {
                                   La actividad es{" "}
                                   <strong>de un día anterior</strong>. Puedes
                                   asignar notas{" "}
-                                  <strong>aunque el estudiante haya estado ausente</strong>{" "}
+                                  <strong>
+                                    aunque el estudiante haya estado ausente
+                                  </strong>{" "}
                                   (recuperaciones, trabajos extra, etc.).
                                 </>
                               ) : (
@@ -2611,24 +2511,34 @@ export default function Calificaciones() {
                           const calificacion = calificaciones[est.id];
                           const notaStr = calificacion?.nota || "";
                           const notaNum = parseFloat(notaStr);
-                          const notaOriginal = !isNaN(notaNum) ? notaNum : undefined;
+                          const notaOriginal = !isNaN(notaNum)
+                            ? notaNum
+                            : undefined;
                           const notaFinal = calcularNotaFinal(
                             notaOriginal || 0,
                             calificacion?.refuerzo,
-                            actividadSeleccionada?.estrategiaNota || "promediar",
+                            actividadSeleccionada?.estrategiaNota ||
+                              "promediar",
                           );
                           const letra =
-                            notaOriginal !== undefined ? notaALetra(notaFinal) : "";
+                            notaOriginal !== undefined
+                              ? notaALetra(notaFinal)
+                              : "";
                           const tieneRefuerzo = !!calificacion?.refuerzo;
                           const notaMostrada = tieneRefuerzo
                             ? String(round2(notaFinal))
                             : notaStr;
-                          const notaParaColor = tieneRefuerzo ? notaFinal : notaOriginal;
-                          const estadoAsistencia = asistenciasDiaActividad[est.id];
+                          const notaParaColor = tieneRefuerzo
+                            ? notaFinal
+                            : notaOriginal;
+                          const estadoAsistencia =
+                            asistenciasDiaActividad[est.id];
                           const bloqueadoPorAusenciaHoy =
-                            estadoBloqueaNota(estadoAsistencia) && actividadEsHoy;
+                            estadoBloqueaNota(estadoAsistencia) &&
+                            actividadEsHoy;
                           const ausenteAntiguo =
-                            estadoEsAusencia(estadoAsistencia) && actividadEsAntigua;
+                            estadoEsAusencia(estadoAsistencia) &&
+                            actividadEsAntigua;
                           const necesitaRefuerzo =
                             !esGradoInicialActual &&
                             notaOriginal !== undefined &&
@@ -2643,13 +2553,7 @@ export default function Calificaciones() {
                           return (
                             <div
                               key={est.id}
-                              className={`border rounded-lg p-3 transition-all border-l-4 ${
-                                bloqueadoPorAusenciaHoy
-                                  ? "border-red-200 bg-red-50/40 border-l-red-500 hover:shadow-md"
-                                  : ausenteAntiguo
-                                    ? "border-amber-200 bg-amber-50/40 border-l-amber-500 hover:shadow-md"
-                                    : "border-orange-200 bg-orange-50/40 border-l-orange-400 hover:shadow-md"
-                              }`}
+                              className={`border rounded-lg p-3 transition-all border-l-4 ${bloqueadoPorAusenciaHoy ? "border-red-200 bg-red-50/40 border-l-red-500 hover:shadow-md" : ausenteAntiguo ? "border-amber-200 bg-amber-50/40 border-l-amber-500 hover:shadow-md" : "border-orange-200 bg-orange-50/40 border-l-orange-400 hover:shadow-md"}`}
                             >
                               <div className="flex items-center justify-between gap-3">
                                 <div className="flex-1 min-w-0">
@@ -2663,34 +2567,38 @@ export default function Calificaciones() {
                                   )}
                                   {bloqueadoPorAusenciaHoy && (
                                     <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-red-100 border border-red-300 text-red-700 rounded text-[10px] font-bold">
-                                      <FaUserTimes className="text-[9px]" />
+                                      <FaUserTimes className="text-[9px]" />{" "}
                                       {configEstadoAsistencia?.label} — sin nota
                                       hasta justificar
                                     </div>
                                   )}
                                   {ausenteAntiguo && (
                                     <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-amber-100 border border-amber-300 text-amber-800 rounded text-[10px] font-bold">
-                                      <FaUserTimes className="text-[9px]" />
+                                      <FaUserTimes className="text-[9px]" />{" "}
                                       {configEstadoAsistencia?.label} el{" "}
-                                      {actividadSeleccionada.fecha} — permite nota
+                                      {actividadSeleccionada.fecha} — permite
+                                      nota
                                     </div>
                                   )}
                                   {estadoAsistencia &&
                                     estadoEsTutorOnly(estadoAsistencia) &&
                                     !bloqueadoPorAusenciaHoy && (
                                       <div className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-100 border border-blue-300 text-blue-700">
-                                        <FaUserCheck className="text-[9px]" />
+                                        <FaUserCheck className="text-[9px]" />{" "}
                                         {configEstadoAsistencia?.label}
                                       </div>
                                     )}
-                                  {(esDeOtroDocente || calificacion?.editadoPor) &&
+                                  {(esDeOtroDocente ||
+                                    calificacion?.editadoPor) &&
                                     !bloqueadoPorAusenciaHoy && (
                                       <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
                                         <FaUserEdit className="text-[9px]" />
                                         {esDeOtroDocente && (
                                           <span>
                                             Registró:{" "}
-                                            {nombreDocente(calificacion?.docenteId)}
+                                            {nombreDocente(
+                                              calificacion?.docenteId,
+                                            )}
                                           </span>
                                         )}
                                         {calificacion?.editadoPor &&
@@ -2699,7 +2607,9 @@ export default function Calificaciones() {
                                             <span>
                                               {" "}
                                               | Editó:{" "}
-                                              {nombreDocente(calificacion.editadoPor)}
+                                              {nombreDocente(
+                                                calificacion.editadoPor,
+                                              )}
                                             </span>
                                           )}
                                       </div>
@@ -2711,8 +2621,10 @@ export default function Calificaciones() {
                                     className="inline-flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded text-xs font-semibold transition-all"
                                     title="Ver y calificar todas las actividades"
                                   >
-                                    <FaListUl className="text-xs" />
-                                    <span className="hidden sm:inline">Ficha</span>
+                                    <FaListUl className="text-xs" />{" "}
+                                    <span className="hidden sm:inline">
+                                      Ficha
+                                    </span>
                                   </button>
                                   {bloqueadoPorAusenciaHoy ? (
                                     <span
@@ -2725,11 +2637,7 @@ export default function Calificaciones() {
                                     <>
                                       {letra && (
                                         <div
-                                          className={`px-2 py-1 rounded text-xs font-bold ${
-                                            notaFinal >= 7
-                                              ? "bg-green-100 border border-green-300 text-green-800"
-                                              : "bg-red-100 border border-red-300 text-red-800"
-                                          }`}
+                                          className={`px-2 py-1 rounded text-xs font-bold ${notaFinal >= 7 ? "bg-green-100 border border-green-300 text-green-800" : "bg-red-100 border border-red-300 text-red-800"}`}
                                         >
                                           {letra}
                                         </div>
@@ -2744,9 +2652,14 @@ export default function Calificaciones() {
                                         value={notaMostrada}
                                         readOnly={tieneRefuerzo}
                                         onChange={(e) =>
-                                          actualizarCalificacion(est.id, e.target.value)
+                                          actualizarCalificacion(
+                                            est.id,
+                                            e.target.value,
+                                          )
                                         }
-                                        onKeyDown={(e) => handleNotaKeyDown(e, index)}
+                                        onKeyDown={(e) =>
+                                          handleNotaKeyDown(e, index)
+                                        }
                                         onFocus={(e) => {
                                           if (!tieneRefuerzo) e.target.select();
                                         }}
@@ -2756,15 +2669,7 @@ export default function Calificaciones() {
                                             ? "Nota final después del refuerzo (solo lectura)"
                                             : undefined
                                         }
-                                        className={`w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${
-                                          notaParaColor !== undefined
-                                            ? notaParaColor >= 7
-                                              ? "border-green-500 text-green-700 bg-green-50"
-                                              : "border-red-500 text-red-700 bg-red-50"
-                                            : ausenteAntiguo
-                                              ? "border-amber-400 bg-amber-50"
-                                              : "border-slate-300 bg-white"
-                                        } ${tieneRefuerzo ? "cursor-not-allowed" : ""}`}
+                                        className={`w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none ${notaParaColor !== undefined ? (notaParaColor >= 7 ? "border-green-500 text-green-700 bg-green-50" : "border-red-500 text-red-700 bg-red-50") : ausenteAntiguo ? "border-amber-400 bg-amber-50" : "border-slate-300 bg-white"} ${tieneRefuerzo ? "cursor-not-allowed" : ""}`}
                                       />
                                       {necesitaRefuerzo && (
                                         <button
@@ -2773,7 +2678,9 @@ export default function Calificaciones() {
                                             setRefuerzoForm({
                                               nota: 7,
                                               detalle: "",
-                                              fecha: new Date().toISOString().split("T")[0],
+                                              fecha: new Date()
+                                                .toISOString()
+                                                .split("T")[0],
                                               estrategia:
                                                 actividadSeleccionada?.estrategiaNota ||
                                                 "promediar",
@@ -2783,41 +2690,52 @@ export default function Calificaciones() {
                                           className="inline-flex items-center gap-1 bg-orange-100 hover:bg-orange-200 text-orange-700 px-2 py-1 rounded text-xs font-semibold transition-all"
                                           title="Aplicar refuerzo"
                                         >
-                                          <FaSyncAlt className="text-xs" />
-                                          <span className="hidden sm:inline">Refuerzo</span>
+                                          <FaSyncAlt className="text-xs" />{" "}
+                                          <span className="hidden sm:inline">
+                                            Refuerzo
+                                          </span>
                                         </button>
                                       )}
                                     </>
                                   )}
                                 </div>
                               </div>
-                              {calificacion?.refuerzo && !bloqueadoPorAusenciaHoy && (
-                                <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-xs">
-                                  <div className="font-semibold text-orange-800 mb-1 flex items-center gap-2 flex-wrap">
-                                    <span>
-                                      Refuerzo aplicado ({calificacion.refuerzo.fecha}):
-                                    </span>
-                                    <span className="text-[10px] px-1.5 py-0.5 bg-orange-200 rounded text-orange-900 font-bold">
-                                      {ESTRATEGIAS_NOTA.find(
-                                        (e) =>
-                                          e.value ===
-                                          (calificacion.refuerzo?.estrategiaElegida ||
-                                            actividadSeleccionada?.estrategiaNota ||
-                                            "promediar"),
-                                      )?.label.split(" ")[0] || "Estrategia"}
-                                    </span>
+                              {calificacion?.refuerzo &&
+                                !bloqueadoPorAusenciaHoy && (
+                                  <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-xs">
+                                    <div className="font-semibold text-orange-800 mb-1 flex items-center gap-2 flex-wrap">
+                                      <span>
+                                        Refuerzo aplicado (
+                                        {calificacion.refuerzo.fecha}):
+                                      </span>
+                                      <span className="text-[10px] px-1.5 py-0.5 bg-orange-200 rounded text-orange-900 font-bold">
+                                        {ESTRATEGIAS_NOTA.find(
+                                          (e) =>
+                                            e.value ===
+                                            (calificacion.refuerzo
+                                              ?.estrategiaElegida ||
+                                              actividadSeleccionada?.estrategiaNota ||
+                                              "promediar"),
+                                        )?.label.split(" ")[0] || "Estrategia"}
+                                      </span>
+                                    </div>
+                                    <div className="text-orange-700">
+                                      Original:{" "}
+                                      <strong>
+                                        {round2(notaOriginal ?? 0)}
+                                      </strong>{" "}
+                                      {" → Refuerzo: "}{" "}
+                                      <strong>
+                                        {round2(calificacion.refuerzo.nota)}
+                                      </strong>{" "}
+                                      {" = Final: "}{" "}
+                                      <strong>{round2(notaFinal)}</strong>
+                                    </div>
+                                    <div className="text-orange-600 mt-1">
+                                      {calificacion.refuerzo.detalle}
+                                    </div>
                                   </div>
-                                  <div className="text-orange-700">
-                                    Original: <strong>{round2(notaOriginal ?? 0)}</strong>{" "}
-                                    {" → Refuerzo: "}{" "}
-                                    <strong>{round2(calificacion.refuerzo.nota)}</strong>{" "}
-                                    {" = Final: "} <strong>{round2(notaFinal)}</strong>
-                                  </div>
-                                  <div className="text-orange-600 mt-1">
-                                    {calificacion.refuerzo.detalle}
-                                  </div>
-                                </div>
-                              )}
+                                )}
                               {!bloqueadoPorAusenciaHoy && (
                                 <div className="mt-2">
                                   <input
@@ -2835,11 +2753,7 @@ export default function Calificaciones() {
                                         ? "Observación (sugerido: justificar la nota)"
                                         : "Observación (opcional)..."
                                     }
-                                    className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
-                                      ausenteAntiguo
-                                        ? "border-amber-300 bg-amber-50"
-                                        : "border-slate-300"
-                                    }`}
+                                    className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${ausenteAntiguo ? "border-amber-300 bg-amber-50" : "border-slate-300"}`}
                                   />
                                 </div>
                               )}
@@ -2859,14 +2773,18 @@ export default function Calificaciones() {
                   ) : actividadesMatriz.length === 0 ? (
                     <div className="text-center py-10 text-slate-500">
                       <FaTable className="text-3xl mx-auto mb-2 text-slate-300" />
-                      <p className="font-medium text-sm">Sin actividades para mostrar en la matriz</p>
+                      <p className="font-medium text-sm">
+                        Sin actividades para mostrar en la matriz
+                      </p>
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
                       <table className="w-full text-xs">
                         <thead className="bg-slate-50 border-b border-slate-200">
                           <tr>
-                            <th className="px-2 py-2 text-center font-semibold text-slate-700 w-8">#</th>
+                            <th className="px-2 py-2 text-center font-semibold text-slate-700 w-8">
+                              #
+                            </th>
                             <th className="px-2 py-2 text-left font-semibold text-slate-700 min-w-40 sticky left-0 bg-slate-50">
                               Estudiante
                             </th>
@@ -2876,14 +2794,23 @@ export default function Calificaciones() {
                                 className="px-2 py-2 text-center font-semibold text-slate-700 min-w-28"
                                 title={`${a.tipo}: ${a.detalle} · ${a.fecha}`}
                               >
-                                <div className="text-[10px] font-bold text-slate-800">{a.tipo}</div>
-                                <div className="text-[9px] font-normal text-slate-600 truncate max-w-30" title={a.detalle}>
+                                <div className="text-[10px] font-bold text-slate-800">
+                                  {a.tipo}
+                                </div>
+                                <div
+                                  className="text-[9px] font-normal text-slate-600 truncate max-w-30"
+                                  title={a.detalle}
+                                >
                                   {a.detalle}
                                 </div>
-                                <div className="text-[9px] font-normal text-slate-500">{a.fecha}</div>
+                                <div className="text-[9px] font-normal text-slate-500">
+                                  {a.fecha}
+                                </div>
                               </th>
                             ))}
-                            <th className="px-2 py-2 text-center font-semibold text-slate-700 w-14">Prom</th>
+                            <th className="px-2 py-2 text-center font-semibold text-slate-700 w-14">
+                              Prom
+                            </th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
@@ -2896,9 +2823,11 @@ export default function Calificaciones() {
                               const esCeldaActiva =
                                 celdaActiva?.estudianteId === est.id &&
                                 celdaActiva?.actividadId === a.id;
-                              const estadoAsistencia = asistenciasDiaActividad[est.id];
+                              const estadoAsistencia =
+                                asistenciasDiaActividad[est.id];
                               const bloqueada =
-                                estadoBloqueaNota(estadoAsistencia) && esFechaHoy(a.fecha);
+                                estadoBloqueaNota(estadoAsistencia) &&
+                                esFechaHoy(a.fecha);
                               if (!aplicaActividad(est, a)) {
                                 return (
                                   <td
@@ -2910,9 +2839,16 @@ export default function Calificaciones() {
                                   </td>
                                 );
                               }
-                              if (!cal || cal.nota === undefined || cal.nota === null) {
+                              if (
+                                !cal ||
+                                cal.nota === undefined ||
+                                cal.nota === null
+                              ) {
                                 return (
-                                  <td key={a.id} className="px-2 py-1.5 text-center">
+                                  <td
+                                    key={a.id}
+                                    className="px-2 py-1.5 text-center"
+                                  >
                                     {esCeldaActiva ? (
                                       <input
                                         type="text"
@@ -2922,14 +2858,19 @@ export default function Calificaciones() {
                                         onChange={(e) => {
                                           const v = e.target.value;
                                           if (/^\d*(\.\d{0,2})?$/.test(v)) {
-                                            if (/^\d+(\.\d+)?$/.test(v) && parseFloat(v) > 10) return;
+                                            if (
+                                              /^\d+(\.\d+)?$/.test(v) &&
+                                              parseFloat(v) > 10
+                                            )
+                                              return;
                                             if (v.length > 5) return;
                                             setNotaTemporal(v);
                                           }
                                         }}
                                         onBlur={guardarNotaMatriz}
                                         onKeyDown={(e) => {
-                                          if (e.key === "Enter") guardarNotaMatriz();
+                                          if (e.key === "Enter")
+                                            guardarNotaMatriz();
                                           else if (e.key === "Escape") {
                                             setCeldaActiva(null);
                                             setNotaTemporal("");
@@ -2943,16 +2884,19 @@ export default function Calificaciones() {
                                       <button
                                         onClick={() => {
                                           if (bloqueada) return;
-                                          setCeldaActiva({ estudianteId: est.id, actividadId: a.id });
+                                          setCeldaActiva({
+                                            estudianteId: est.id,
+                                            actividadId: a.id,
+                                          });
                                           setNotaTemporal("");
                                         }}
                                         disabled={bloqueada}
-                                        className={`w-10 h-7 rounded text-[10px] font-bold transition-all ${
+                                        className={`w-10 h-7 rounded text-[10px] font-bold transition-all ${bloqueada ? "bg-red-50 text-red-300 cursor-not-allowed" : "bg-slate-100 text-slate-400 hover:bg-blue-100 hover:text-blue-600 cursor-pointer"}`}
+                                        title={
                                           bloqueada
-                                            ? "bg-red-50 text-red-300 cursor-not-allowed"
-                                            : "bg-slate-100 text-slate-400 hover:bg-blue-100 hover:text-blue-600 cursor-pointer"
-                                        }`}
-                                        title={bloqueada ? "Bloqueado por ausencia" : "Clic para agregar nota"}
+                                            ? "Bloqueado por ausencia"
+                                            : "Clic para agregar nota"
+                                        }
                                       >
                                         {bloqueada ? "🔒" : "+"}
                                       </button>
@@ -2960,7 +2904,11 @@ export default function Calificaciones() {
                                   </td>
                                 );
                               }
-                              const nf = calcularNotaFinal(cal.nota, cal.refuerzo, a.estrategiaNota);
+                              const nf = calcularNotaFinal(
+                                cal.nota,
+                                cal.refuerzo,
+                                a.estrategiaNota,
+                              );
                               suma += nf;
                               conteo++;
                               const cls =
@@ -2972,9 +2920,14 @@ export default function Calificaciones() {
                                       ? "bg-amber-100 text-amber-800"
                                       : "bg-red-100 text-red-800";
                               const necesitaRefuerzo =
-                                !esGradoInicialActual && nf < 7 && !cal.refuerzo;
+                                !esGradoInicialActual &&
+                                nf < 7 &&
+                                !cal.refuerzo;
                               return (
-                                <td key={a.id} className="px-2 py-1.5 text-center">
+                                <td
+                                  key={a.id}
+                                  className="px-2 py-1.5 text-center"
+                                >
                                   {esCeldaActiva ? (
                                     <input
                                       type="text"
@@ -2984,14 +2937,19 @@ export default function Calificaciones() {
                                       onChange={(e) => {
                                         const v = e.target.value;
                                         if (/^\d*(\.\d{0,2})?$/.test(v)) {
-                                          if (/^\d+(\.\d+)?$/.test(v) && parseFloat(v) > 10) return;
+                                          if (
+                                            /^\d+(\.\d+)?$/.test(v) &&
+                                            parseFloat(v) > 10
+                                          )
+                                            return;
                                           if (v.length > 5) return;
                                           setNotaTemporal(v);
                                         }
                                       }}
                                       onBlur={guardarNotaMatriz}
                                       onKeyDown={(e) => {
-                                        if (e.key === "Enter") guardarNotaMatriz();
+                                        if (e.key === "Enter")
+                                          guardarNotaMatriz();
                                         else if (e.key === "Escape") {
                                           setCeldaActiva(null);
                                           setNotaTemporal("");
@@ -3008,13 +2966,19 @@ export default function Calificaciones() {
                                           setRefuerzoForm({
                                             nota: 7,
                                             detalle: "",
-                                            fecha: new Date().toISOString().split("T")[0],
-                                            estrategia: a.estrategiaNota || "promediar",
+                                            fecha: new Date()
+                                              .toISOString()
+                                              .split("T")[0],
+                                            estrategia:
+                                              a.estrategiaNota || "promediar",
                                           });
                                           setSelectedActividadId(a.id || "");
                                           setShowRefuerzoModal(true);
                                         } else {
-                                          setCeldaActiva({ estudianteId: est.id, actividadId: a.id });
+                                          setCeldaActiva({
+                                            estudianteId: est.id,
+                                            actividadId: a.id,
+                                          });
                                           setNotaTemporal(String(cal.nota));
                                         }
                                       }}
@@ -3028,16 +2992,23 @@ export default function Calificaciones() {
                                       }
                                     >
                                       {round2(nf)}
-                                      {cal.refuerzo && <span className="ml-0.5 text-[8px]">✓</span>}
+                                      {cal.refuerzo && (
+                                        <span className="ml-0.5 text-[8px]">
+                                          ✓
+                                        </span>
+                                      )}
                                     </button>
                                   )}
                                 </td>
                               );
                             });
-                            const prom = conteo > 0 ? round2(suma / conteo) : null;
+                            const prom =
+                              conteo > 0 ? round2(suma / conteo) : null;
                             return (
                               <tr key={est.id} className="hover:bg-slate-50">
-                                <td className="px-2 py-1.5 text-center text-slate-500">{idx + 1}</td>
+                                <td className="px-2 py-1.5 text-center text-slate-500">
+                                  {idx + 1}
+                                </td>
                                 <td className="px-2 py-1.5 font-medium text-slate-900 sticky left-0 bg-white truncate max-w-50">
                                   {est.apellidos} {est.nombres}
                                 </td>
@@ -3045,11 +3016,7 @@ export default function Calificaciones() {
                                 <td className="px-2 py-1.5 text-center">
                                   {prom !== null ? (
                                     <span
-                                      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                        prom >= 7
-                                          ? "bg-green-100 text-green-800"
-                                          : "bg-red-100 text-red-800"
-                                      }`}
+                                      className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${prom >= 7 ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}
                                     >
                                       {prom}
                                     </span>
@@ -3076,20 +3043,30 @@ export default function Calificaciones() {
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
             <div className="flex-1 min-w-0">
               <div className="text-sm font-bold text-slate-800">
-                <span className={todosConAsistencia ? "text-green-600" : "text-slate-800"}>
+                <span
+                  className={
+                    todosConAsistencia ? "text-green-600" : "text-slate-800"
+                  }
+                >
                   {asistenciasRegistradas}
                 </span>
-                <span className="text-slate-500 font-normal"> / {estudiantes.length}</span>
+                <span className="text-slate-500 font-normal">
+                  {" "}
+                  / {estudiantes.length}
+                </span>
                 <span className="text-slate-500 font-normal ml-1.5 hidden sm:inline">
                   estudiantes registrados
                 </span>
-                <span className="text-slate-500 font-normal ml-1.5 sm:hidden">registrados</span>
+                <span className="text-slate-500 font-normal ml-1.5 sm:hidden">
+                  registrados
+                </span>
               </div>
               {!todosConAsistencia ? (
                 <div className="text-xs text-amber-600 flex items-center gap-1 mt-0.5">
                   <FaExclamationTriangle className="text-[10px]" />
                   <span className="truncate">
-                    Faltan {estudiantes.length - asistenciasRegistradas} por registrar
+                    Faltan {estudiantes.length - asistenciasRegistradas} por
+                    registrar
                   </span>
                 </div>
               ) : (
@@ -3101,7 +3078,7 @@ export default function Calificaciones() {
             </div>
             <button
               onClick={guardarAsistencia}
-              disabled={isSaving || !todosConAsistencia || fechaFutura || diaSinClase}
+              disabled={isSaving || !todosConAsistencia}
               className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
             >
               {isSaving ? (
@@ -3123,7 +3100,9 @@ export default function Calificaciones() {
         <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-40">
           <div className="border-b border-slate-100 px-3 py-2">
             <div className="max-w-7xl mx-auto flex items-center gap-1.5 overflow-x-auto">
-              <span className="text-xs text-slate-600 font-medium shrink-0 mr-1">Aplicar a todos:</span>
+              <span className="text-xs text-slate-600 font-medium shrink-0 mr-1">
+                Aplicar a todos:
+              </span>
               {[7, 7.5, 8, 8.5, 9, 9.5, 10].map((nota) => (
                 <button
                   key={nota}
@@ -3156,8 +3135,13 @@ export default function Calificaciones() {
                   >
                     {calificacionesRegistradas}
                   </span>
-                  <span className="text-slate-500 font-normal"> / {estudiantesAplicables.length}</span>
-                  <span className="text-slate-500 font-normal ml-1.5 hidden sm:inline">con nota</span>
+                  <span className="text-slate-500 font-normal">
+                    {" "}
+                    / {estudiantesAplicables.length}
+                  </span>
+                  <span className="text-slate-500 font-normal ml-1.5 hidden sm-inline">
+                    con nota
+                  </span>
                 </div>
                 {calificacionesRegistradas === 0 ? (
                   <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
@@ -3168,7 +3152,9 @@ export default function Calificaciones() {
                   <div className="text-xs text-amber-600 flex items-center gap-1 mt-0.5">
                     <FaExclamationTriangle className="text-[10px]" />
                     <span className="truncate">
-                      Faltan {estudiantesAplicables.length - calificacionesRegistradas} por calificar
+                      Faltan{" "}
+                      {estudiantesAplicables.length - calificacionesRegistradas}{" "}
+                      por calificar
                     </span>
                   </div>
                 ) : (
@@ -3199,6 +3185,70 @@ export default function Calificaciones() {
         </div>
       )}
 
+      {/* MODAL: ¿ASISTENCIA PARA LAS DOS HORAS? */}
+      {horasPending && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-100 p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-linear-to-r from-blue-50 to-blue-100 px-6 pt-6 pb-4 border-b border-blue-200">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center shrink-0">
+                  <FaQuestionCircle className="text-blue-600 text-xl" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-lg font-bold text-slate-900 mb-1">
+                    ¿Asistencia para las dos horas?
+                  </h3>
+                  <p className="text-sm text-slate-600 leading-relaxed">
+                    Presionaste la{" "}
+                    <strong>{horasPending.presionada}ª hora</strong> de{" "}
+                    <strong>
+                      {destrezas.find((d) => d.id === horasPending.destrezaId)
+                        ?.nombre || "la materia"}
+                    </strong>
+                    , que es un bloque de{" "}
+                    <strong>
+                      {horasPending.horas.map((h) => `${h}ª`).join(" y ")}
+                    </strong>
+                    .
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 bg-slate-50 flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  entrarAsistencia(
+                    horasPending.gradoId,
+                    horasPending.gradoNombre,
+                    horasPending.destrezaId,
+                    [horasPending.presionada],
+                  );
+                  setHorasPending(null);
+                }}
+                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-sm font-semibold transition-all"
+              >
+                Solo {horasPending.presionada}ª hora
+              </button>
+              <button
+                onClick={() => {
+                  entrarAsistencia(
+                    horasPending.gradoId,
+                    horasPending.gradoNombre,
+                    horasPending.destrezaId,
+                    horasPending.horas,
+                  );
+                  setHorasPending(null);
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2"
+              >
+                <FaCheck className="text-xs" /> Sí, ambas horas
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL LISTADO ACTIVIDADES */}
       {showActividadesModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[85vh] overflow-y-auto">
@@ -3208,9 +3258,12 @@ export default function Calificaciones() {
                   <FaTasks className="text-blue-600 text-xl" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-slate-900">Actividades</h3>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    Actividades
+                  </h3>
                   <p className="text-xs text-slate-500">
-                    {actividades.length} actividad(es) · numeradas por fecha (1 = más antigua)
+                    {actividades.length} actividad(es) · numeradas por fecha (1
+                    = más antigua)
                   </p>
                 </div>
               </div>
@@ -3252,9 +3305,7 @@ export default function Calificaciones() {
                     return (
                       <div
                         key={a.id}
-                        className={`p-3 rounded-lg border-2 transition-all ${
-                          sel ? "bg-blue-50 border-blue-400" : "bg-white border-slate-200 hover:border-blue-300"
-                        }`}
+                        className={`p-3 rounded-lg border-2 transition-all ${sel ? "bg-blue-50 border-blue-400" : "bg-white border-slate-200 hover:border-blue-300"}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <button
@@ -3278,23 +3329,25 @@ export default function Calificaciones() {
                               </span>
                               {(a.dirigidaA || "general") !== "general" && (
                                 <span
-                                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                                    a.dirigidaA === "especial"
-                                      ? "bg-purple-100 text-purple-700"
-                                      : "bg-teal-100 text-teal-700"
-                                  }`}
+                                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${a.dirigidaA === "especial" ? "bg-purple-100 text-purple-700" : "bg-teal-100 text-teal-700"}`}
                                 >
-                                  {a.dirigidaA === "especial" ? "Adaptación" : "Todos"}
+                                  {a.dirigidaA === "especial"
+                                    ? "Adaptación"
+                                    : "Todos"}
                                 </span>
                               )}
-                              <span className="text-[10px] text-slate-500">{a.fecha}</span>
+                              <span className="text-[10px] text-slate-500">
+                                {a.fecha}
+                              </span>
                               {sel && (
                                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-bold">
                                   ✓ Seleccionada
                                 </span>
                               )}
                             </div>
-                            <div className="text-sm font-medium text-slate-900 mt-1">{a.detalle}</div>
+                            <div className="text-sm font-medium text-slate-900 mt-1">
+                              {a.detalle}
+                            </div>
                           </button>
                           <div className="flex gap-1 shrink-0">
                             <button
@@ -3356,10 +3409,14 @@ export default function Calificaciones() {
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Tipo de Actividad *</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Tipo de Actividad *
+                </label>
                 <select
                   value={actividadForm.tipo}
-                  onChange={(e) => setActividadForm({ ...actividadForm, tipo: e.target.value })}
+                  onChange={(e) =>
+                    setActividadForm({ ...actividadForm, tipo: e.target.value })
+                  }
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 >
                   {TIPOS_ACTIVIDAD.map((t) => (
@@ -3370,58 +3427,89 @@ export default function Calificaciones() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Detalle *</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Detalle *
+                </label>
                 <input
                   type="text"
                   value={actividadForm.detalle}
-                  onChange={(e) => setActividadForm({ ...actividadForm, detalle: e.target.value })}
+                  onChange={(e) =>
+                    setActividadForm({
+                      ...actividadForm,
+                      detalle: e.target.value,
+                    })
+                  }
                   placeholder="Ej: Suma y resta de enteros"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Fecha *</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Fecha *
+                </label>
                 <input
                   type="date"
                   value={actividadForm.fecha}
-                  onChange={(e) => setActividadForm({ ...actividadForm, fecha: e.target.value })}
+                  onChange={(e) =>
+                    setActividadForm({
+                      ...actividadForm,
+                      fecha: e.target.value,
+                    })
+                  }
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Aplica a *</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Aplica a *
+                </label>
                 <select
                   value={actividadForm.dirigidaA}
                   onChange={(e) =>
                     setActividadForm({
                       ...actividadForm,
-                      dirigidaA: e.target.value as "general" | "ambos" | "especial",
+                      dirigidaA: e.target.value as
+                        | "general"
+                        | "ambos"
+                        | "especial",
                     })
                   }
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="general">Solo grupo general (por defecto)</option>
+                  <option value="general">
+                    Solo grupo general (por defecto)
+                  </option>
                   <option value="ambos">Generales + con adaptación</option>
-                  <option value="especial">Solo estudiantes con adaptación</option>
+                  <option value="especial">
+                    Solo estudiantes con adaptación
+                  </option>
                 </select>
                 {actividadForm.dirigidaA === "especial" && (
                   <div className="mt-2 p-2 border border-purple-200 bg-purple-50 rounded-lg max-h-40 overflow-y-auto space-y-1">
                     {estudiantesConAdaptacion.length === 0 ? (
                       <p className="text-xs text-purple-700">
-                        No hay estudiantes marcados con adaptación en este grado. Márcalos en el módulo Estudiantes.
+                        No hay estudiantes marcados con adaptación en este
+                        grado. Márcalos en el módulo Estudiantes.
                       </p>
                     ) : (
                       estudiantesConAdaptacion.map((est) => (
-                        <label key={est.id} className="flex items-center gap-2 text-xs text-slate-700">
+                        <label
+                          key={est.id}
+                          className="flex items-center gap-2 text-xs text-slate-700"
+                        >
                           <input
                             type="checkbox"
-                            checked={actividadForm.estudianteIds.includes(est.id)}
+                            checked={actividadForm.estudianteIds.includes(
+                              est.id,
+                            )}
                             onChange={(e) =>
                               setActividadForm({
                                 ...actividadForm,
                                 estudianteIds: e.target.checked
                                   ? [...actividadForm.estudianteIds, est.id]
-                                  : actividadForm.estudianteIds.filter((id) => id !== est.id),
+                                  : actividadForm.estudianteIds.filter(
+                                      (id) => id !== est.id,
+                                    ),
                               })
                             }
                             className="w-4 h-4 text-purple-600 rounded"
@@ -3433,7 +3521,8 @@ export default function Calificaciones() {
                   </div>
                 )}
                 <p className="text-xs text-slate-500 mt-1">
-                  "General" no aparece para estudiantes con adaptación; "Adaptación" solo para los marcados.
+                  "General" no aparece para estudiantes con adaptación;
+                  "Adaptación" solo para los marcados.
                 </p>
               </div>
               {!esGradoInicialActual && (
@@ -3458,7 +3547,8 @@ export default function Calificaciones() {
                     ))}
                   </select>
                   <p className="text-xs text-slate-500 mt-1">
-                    Estrategia por defecto; al aplicar refuerzo podrás cambiarla por estudiante.
+                    Estrategia por defecto; al aplicar refuerzo podrás cambiarla
+                    por estudiante.
                   </p>
                 </div>
               )}
@@ -3496,10 +3586,18 @@ export default function Calificaciones() {
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-slate-900">
-                    {estudiantes.find((e) => e.id === fichaEstudianteId)?.apellidos}{" "}
-                    {estudiantes.find((e) => e.id === fichaEstudianteId)?.nombres}
+                    {
+                      estudiantes.find((e) => e.id === fichaEstudianteId)
+                        ?.apellidos
+                    }{" "}
+                    {
+                      estudiantes.find((e) => e.id === fichaEstudianteId)
+                        ?.nombres
+                    }
                   </h3>
-                  <p className="text-xs text-slate-500">Notas y observaciones de todas las actividades</p>
+                  <p className="text-xs text-slate-500">
+                    Notas y observaciones de todas las actividades
+                  </p>
                 </div>
               </div>
               <button
@@ -3534,11 +3632,14 @@ export default function Calificaciones() {
                     const base = fichaBase[a.id];
                     const valor = fichaNotas[a.id] ?? "";
                     const obsActual = fichaObservaciones[a.id] ?? "";
-                    const obsModificada = obsActual.trim() !== (base?.observacion ?? "").trim();
+                    const obsModificada =
+                      obsActual.trim() !== (base?.observacion ?? "").trim();
                     const modificada =
-                      valor.trim() !== (base?.notaGuardada ?? "").trim() || obsModificada;
+                      valor.trim() !== (base?.notaGuardada ?? "").trim() ||
+                      obsModificada;
                     const estado = fichaAsistencias[a.fecha];
-                    const bloqueada = estadoBloqueaNota(estado) && esFechaHoy(a.fecha);
+                    const bloqueada =
+                      estadoBloqueaNota(estado) && esFechaHoy(a.fecha);
                     const tieneRefuerzo = !!base?.refuerzo;
                     const notaNumerica = parseFloat(valor);
                     const esNotaBaja = !isNaN(notaNumerica) && notaNumerica < 7;
@@ -3552,13 +3653,7 @@ export default function Calificaciones() {
                     return (
                       <div
                         key={a.id}
-                        className={`p-3 rounded-lg border-2 transition-all ${
-                          modificada
-                            ? "border-blue-400 bg-blue-50/50"
-                            : bloqueada
-                              ? "border-red-200 bg-red-50/40"
-                              : "border-slate-200"
-                        }`}
+                        className={`p-3 rounded-lg border-2 transition-all ${modificada ? "border-blue-400 bg-blue-50/50" : bloqueada ? "border-red-200 bg-red-50/40" : "border-slate-200"}`}
                       >
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex-1 min-w-0">
@@ -3566,7 +3661,9 @@ export default function Calificaciones() {
                               <span className="text-xs font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-700">
                                 {a.tipo}
                               </span>
-                              <span className="text-[10px] text-slate-500">{a.fecha}</span>
+                              <span className="text-[10px] text-slate-500">
+                                {a.fecha}
+                              </span>
                               {modificada && (
                                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold">
                                   Modificada
@@ -3593,7 +3690,9 @@ export default function Calificaciones() {
                                 </span>
                               )}
                             </div>
-                            <div className="text-sm font-medium text-slate-900 mt-1 truncate">{a.detalle}</div>
+                            <div className="text-sm font-medium text-slate-900 mt-1 truncate">
+                              {a.detalle}
+                            </div>
                           </div>
                           <div className="shrink-0 flex items-center gap-2">
                             {bloqueada ? (
@@ -3616,9 +3715,16 @@ export default function Calificaciones() {
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   if (!/^\d*(\.\d{0,2})?$/.test(v)) return;
-                                  if (/^\d+(\.\d+)?$/.test(v) && parseFloat(v) > 10) return;
+                                  if (
+                                    /^\d+(\.\d+)?$/.test(v) &&
+                                    parseFloat(v) > 10
+                                  )
+                                    return;
                                   if (v.length > 5) return;
-                                  setFichaNotas((prev) => ({ ...prev, [a.id as string]: v }));
+                                  setFichaNotas((prev) => ({
+                                    ...prev,
+                                    [a.id as string]: v,
+                                  }));
                                 }}
                                 placeholder="0-10"
                                 className="w-20 border-2 rounded px-2 py-1.5 text-center text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none border-slate-300 bg-white"
@@ -3626,30 +3732,27 @@ export default function Calificaciones() {
                             )}
                           </div>
                         </div>
-                        {(valor !== "" || !!base?.notaGuardada) && !bloqueada && (
-                          <div className="mt-2">
-                            <input
-                              type="text"
-                              value={obsActual}
-                              onChange={(e) =>
-                                setFichaObservaciones((prev) => ({
-                                  ...prev,
-                                  [a.id as string]: e.target.value,
-                                }))
-                              }
-                              placeholder={
-                                esNotaBaja ? "Nota baja: indica el motivo..." : "Observación (opcional)..."
-                              }
-                              className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${
-                                esNotaBaja
-                                  ? "border-amber-400 bg-amber-50"
-                                  : obsModificada
-                                    ? "border-blue-400 bg-blue-50"
-                                    : "border-slate-300"
-                              }`}
-                            />
-                          </div>
-                        )}
+                        {(valor !== "" || !!base?.notaGuardada) &&
+                          !bloqueada && (
+                            <div className="mt-2">
+                              <input
+                                type="text"
+                                value={obsActual}
+                                onChange={(e) =>
+                                  setFichaObservaciones((prev) => ({
+                                    ...prev,
+                                    [a.id as string]: e.target.value,
+                                  }))
+                                }
+                                placeholder={
+                                  esNotaBaja
+                                    ? "Nota baja: indica el motivo..."
+                                    : "Observación (opcional)..."
+                                }
+                                className={`w-full border rounded px-2 py-1 text-xs focus:ring-2 focus:ring-blue-500 ${esNotaBaja ? "border-amber-400 bg-amber-50" : obsModificada ? "border-blue-400 bg-blue-50" : "border-slate-300"}`}
+                              />
+                            </div>
+                          )}
                       </div>
                     );
                   })}
@@ -3661,7 +3764,8 @@ export default function Calificaciones() {
                 disabled={isSaving || fichaLoading || cambiosFichaCount === 0}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                {isSaving ? <FaSpinner className="animate-spin" /> : <FaSave />} Guardar cambios
+                {isSaving ? <FaSpinner className="animate-spin" /> : <FaSave />}{" "}
+                Guardar cambios
                 {cambiosFichaCount > 0 && ` (${cambiosFichaCount})`}
               </button>
               <button
@@ -3683,7 +3787,9 @@ export default function Calificaciones() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-100 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-slate-900">Aplicar Refuerzo</h3>
+              <h3 className="text-lg font-bold text-slate-900">
+                Aplicar Refuerzo
+              </h3>
               <button
                 onClick={() => {
                   setShowRefuerzoModal(false);
@@ -3696,17 +3802,29 @@ export default function Calificaciones() {
             </div>
             <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
               <p className="text-sm text-orange-800 font-semibold mb-1">
-                {estudiantes.find((e) => e.id === refuerzoEstudianteId)?.apellidos}{" "}
-                {estudiantes.find((e) => e.id === refuerzoEstudianteId)?.nombres}
+                {
+                  estudiantes.find((e) => e.id === refuerzoEstudianteId)
+                    ?.apellidos
+                }{" "}
+                {
+                  estudiantes.find((e) => e.id === refuerzoEstudianteId)
+                    ?.nombres
+                }
               </p>
               <p className="text-xs text-orange-700">
-                Nota original: <strong>{calificaciones[refuerzoEstudianteId]?.nota || "—"}</strong>
+                Nota original:{" "}
+                <strong>
+                  {calificaciones[refuerzoEstudianteId]?.nota || "—"}
+                </strong>
               </p>
             </div>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Nota de Refuerzo * <span className="text-xs text-slate-500 font-normal">(0-10)</span>
+                  Nota de Refuerzo *{" "}
+                  <span className="text-xs text-slate-500 font-normal">
+                    (0-10)
+                  </span>
                 </label>
                 <input
                   type="text"
@@ -3716,9 +3834,13 @@ export default function Calificaciones() {
                   onChange={(e) => {
                     const v = e.target.value;
                     if (/^\d*(\.\d{0,2})?$/.test(v)) {
-                      if (v === "") setRefuerzoForm({ ...refuerzoForm, nota: 0 });
+                      if (v === "")
+                        setRefuerzoForm({ ...refuerzoForm, nota: 0 });
                       else if (/^\d+(\.\d+)?$/.test(v) && parseFloat(v) <= 10)
-                        setRefuerzoForm({ ...refuerzoForm, nota: parseFloat(v) });
+                        setRefuerzoForm({
+                          ...refuerzoForm,
+                          nota: parseFloat(v),
+                        });
                     }
                   }}
                   placeholder="Ej: 8.5"
@@ -3726,11 +3848,16 @@ export default function Calificaciones() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Estrategia de cálculo *</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Estrategia de cálculo *
+                </label>
                 <select
                   value={refuerzoForm.estrategia}
                   onChange={(e) =>
-                    setRefuerzoForm({ ...refuerzoForm, estrategia: e.target.value as EstrategiaNota })
+                    setRefuerzoForm({
+                      ...refuerzoForm,
+                      estrategia: e.target.value as EstrategiaNota,
+                    })
                   }
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 >
@@ -3742,21 +3869,32 @@ export default function Calificaciones() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Detalle del Refuerzo *</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Detalle del Refuerzo *
+                </label>
                 <input
                   type="text"
                   value={refuerzoForm.detalle}
-                  onChange={(e) => setRefuerzoForm({ ...refuerzoForm, detalle: e.target.value })}
+                  onChange={(e) =>
+                    setRefuerzoForm({
+                      ...refuerzoForm,
+                      detalle: e.target.value,
+                    })
+                  }
                   placeholder="Ej: Ejercicios adicionales"
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Fecha del Refuerzo *</label>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                  Fecha del Refuerzo *
+                </label>
                 <input
                   type="date"
                   value={refuerzoForm.fecha}
-                  onChange={(e) => setRefuerzoForm({ ...refuerzoForm, fecha: e.target.value })}
+                  onChange={(e) =>
+                    setRefuerzoForm({ ...refuerzoForm, fecha: e.target.value })
+                  }
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -3764,10 +3902,17 @@ export default function Calificaciones() {
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
                   <p className="font-semibold mb-1">Estrategia aplicada:</p>
                   <p className="mb-2">
-                    {ESTRATEGIAS_NOTA.find((e) => e.value === estrategiaEfectivaRefuerzo)?.label}
+                    {
+                      ESTRATEGIAS_NOTA.find(
+                        (e) => e.value === estrategiaEfectivaRefuerzo,
+                      )?.label
+                    }
                   </p>
                   <p>
-                    Nota original: <strong>{calificaciones[refuerzoEstudianteId]?.nota || "0"}</strong>{" "}
+                    Nota original:{" "}
+                    <strong>
+                      {calificaciones[refuerzoEstudianteId]?.nota || "0"}
+                    </strong>{" "}
                     {" + "} Refuerzo: <strong>{refuerzoForm.nota}</strong>
                   </p>
                   <p className="mt-2 text-sm">
@@ -3775,7 +3920,9 @@ export default function Calificaciones() {
                     <span className="font-bold text-base">
                       {round2(
                         calcularNotaFinal(
-                          parseFloat(calificaciones[refuerzoEstudianteId]?.nota || "0") || 0,
+                          parseFloat(
+                            calificaciones[refuerzoEstudianteId]?.nota || "0",
+                          ) || 0,
                           {
                             nota: refuerzoForm.nota || 0,
                             detalle: "",
@@ -3794,10 +3941,17 @@ export default function Calificaciones() {
             <div className="flex gap-2 mt-6">
               <button
                 onClick={aplicarRefuerzo}
-                disabled={isSaving || refuerzoForm.nota <= 0 || refuerzoForm.nota > 10}
+                disabled={
+                  isSaving || refuerzoForm.nota <= 0 || refuerzoForm.nota > 10
+                }
                 className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                {isSaving ? <FaSpinner className="animate-spin" /> : <FaCheck />} Aplicar Refuerzo
+                {isSaving ? (
+                  <FaSpinner className="animate-spin" />
+                ) : (
+                  <FaCheck />
+                )}{" "}
+                Aplicar Refuerzo
               </button>
               <button
                 onClick={() => {
@@ -3822,7 +3976,9 @@ export default function Calificaciones() {
                   <ConfirmIcon className="text-red-600 text-xl" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-bold text-slate-900 mb-1">{confirmModal.title}</h3>
+                  <h3 className="text-lg font-bold text-slate-900 mb-1">
+                    {confirmModal.title}
+                  </h3>
                   <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">
                     {confirmModal.message}
                   </p>
@@ -3840,7 +3996,8 @@ export default function Calificaciones() {
                 onClick={confirmModal.onConfirm}
                 className={`px-4 py-2 ${confirmModal.confirmColor || "bg-red-600 hover:bg-red-700"} text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2`}
               >
-                <ConfirmIcon className="text-xs" /> {confirmModal.confirmText || "Confirmar"}
+                <ConfirmIcon className="text-xs" />{" "}
+                {confirmModal.confirmText || "Confirmar"}
               </button>
             </div>
           </div>
@@ -3856,12 +4013,20 @@ export default function Calificaciones() {
               key={toast.id}
               className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
             >
-              <div className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}>
+              <div
+                className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
+              >
                 <Icon className="text-white text-sm" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>{toast.title}</p>
-                {toast.message && <p className={`text-xs ${config.msgColor} mt-0.5`}>{toast.message}</p>}
+                <p className={`font-semibold text-sm ${config.titleColor}`}>
+                  {toast.title}
+                </p>
+                {toast.message && (
+                  <p className={`text-xs ${config.msgColor} mt-0.5`}>
+                    {toast.message}
+                  </p>
+                )}
               </div>
               <button
                 onClick={() => cerrarToast(toast.id)}
