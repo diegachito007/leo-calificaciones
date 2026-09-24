@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from "react";
 import {
   collection,
   query,
@@ -7,12 +7,13 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
-} from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { useAuth } from '../context/AuthContext';
-import { useData } from '../context/DataContext';
-import type { Destreza, Ambito } from '../types';
-import Layout from '../components/Layout';
+  updateDoc,
+} from "firebase/firestore";
+import { db } from "../lib/firebase";
+import { useAuth } from "../context/AuthContext";
+import { useData } from "../context/DataContext";
+import type { Destreza, Ambito } from "../types";
+import Layout from "../components/Layout";
 import {
   FaGraduationCap,
   FaCheck,
@@ -26,7 +27,31 @@ import {
   FaTimesCircle,
   FaInfoCircle,
   FaQuestionCircle,
-} from 'react-icons/fa';
+  FaClock,
+} from "react-icons/fa";
+
+// ==================== CONFIGURACIÓN DE HORARIO ====================
+const DIAS_SEMANA = [
+  { id: 1, nombre: "Lun", nombreLargo: "Lunes" },
+  { id: 2, nombre: "Mar", nombreLargo: "Martes" },
+  { id: 3, nombre: "Mié", nombreLargo: "Miércoles" },
+  { id: 4, nombre: "Jue", nombreLargo: "Jueves" },
+  { id: 5, nombre: "Vie", nombreLargo: "Viernes" },
+];
+const HORAS_DIA = 7; // 1..7
+const RECREO_DESPUES_DE_HORA = 4; // el recreo va entre la 4ta y 5ta hora
+// ✅ Filas del grid: horas 1-7 + una fila RECREO (no asignable) entre 4 y 5
+const FILAS_HORARIO: ({ tipo: "hora"; hora: number } | { tipo: "recreo" })[] =
+  [];
+for (let h = 1; h <= HORAS_DIA; h++) {
+  FILAS_HORARIO.push({ tipo: "hora", hora: h });
+  if (h === RECREO_DESPUES_DE_HORA) FILAS_HORARIO.push({ tipo: "recreo" });
+}
+
+interface BloqueHorario {
+  dia: number; // 1..6
+  horas: number[]; // 1..N
+}
 
 interface AsignaturaDocente {
   id?: string;
@@ -35,11 +60,12 @@ interface AsignaturaDocente {
   destrezaId: string;
   anioLectivoId: string;
   activo: boolean;
+  horario?: BloqueHorario[];
 }
 
 interface Toast {
   id: string;
-  type: 'success' | 'error' | 'warning' | 'info';
+  type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
@@ -58,28 +84,28 @@ interface ConfirmModalState {
 
 export default function MiHorario() {
   const { user, userData } = useAuth();
-
   const { grados, destrezas, ambitos, anioActivo, ready } = useData();
 
   const [asignaturas, setAsignaturas] = useState<AsignaturaDocente[]>([]);
-  // ✅ Cache del grado: ahora alimentado por onSnapshot (tiempo real multi-dispositivo)
+  // ✅ Cache del grado: todas las asignaturas activas del grado+año (mías + de otros docentes)
+  // Alimentado por onSnapshot para detección de conflictos en tiempo real.
   const [asignaturasGradoCache, setAsignaturasGradoCache] = useState<
-    Map<string, string[]>
-  >(new Map());
+    AsignaturaDocente[]
+  >([]);
   const [saving, setSaving] = useState(false);
-  const [selectedGradoId, setSelectedGradoId] = useState<string>('');
+  const [selectedGradoId, setSelectedGradoId] = useState<string>("");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
-    title: '',
-    message: '',
+    title: "",
+    message: "",
     onConfirm: () => {},
     onCancel: () => {},
   });
 
   const gradosFiltrados = (() => {
     if (
-      userData?.role === 'docente' &&
+      userData?.role === "docente" &&
       userData?.gradosAsignados &&
       userData.gradosAsignados.length > 0
     ) {
@@ -90,10 +116,11 @@ export default function MiHorario() {
   })();
 
   const gradoEfectivoId =
-    selectedGradoId || (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : '');
+    selectedGradoId ||
+    (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : "");
 
   const mostrarToast = useCallback(
-    (type: Toast['type'], title: string, message?: string, duration = 4000) => {
+    (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
       const toast: Toast = { id, type, title, message };
       setToasts((prev) => [...prev, toast]);
@@ -124,9 +151,9 @@ export default function MiHorario() {
           isOpen: true,
           title,
           message,
-          confirmText: options?.confirmText || 'Confirmar',
-          cancelText: options?.cancelText || 'Cancelar',
-          confirmColor: options?.confirmColor || 'bg-red-600 hover:bg-red-700',
+          confirmText: options?.confirmText || "Confirmar",
+          cancelText: options?.cancelText || "Cancelar",
+          confirmColor: options?.confirmColor || "bg-red-600 hover:bg-red-700",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -142,14 +169,14 @@ export default function MiHorario() {
     [],
   );
 
-  // ✅ ASIGNATURAS PROPIAS: listener en tiempo real (sin cambios)
+  // ✅ ASIGNATURAS PROPIAS: listener en tiempo real
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
     const q = query(
-      collection(db, 'asignaturasDocente'),
-      where('docenteId', '==', user.uid),
-      where('anioLectivoId', '==', anioActivo.id),
-      where('activo', '==', true),
+      collection(db, "asignaturasDocente"),
+      where("docenteId", "==", user.uid),
+      where("anioLectivoId", "==", anioActivo.id),
+      where("activo", "==", true),
     );
     const unsubscribe = onSnapshot(
       q,
@@ -160,39 +187,35 @@ export default function MiHorario() {
         setAsignaturas(asignaturasData);
       },
       (error) => {
-        console.error('Error escuchando asignaturas:', error);
+        console.error("Error escuchando asignaturas:", error);
       },
     );
     return () => unsubscribe();
   }, [user?.uid, anioActivo?.id]);
 
-  // ✅ CACHE DEL GRADO: ahora con onSnapshot para tiempo real multi-dispositivo.
-  // Si otro docente asigna/quita una materia en el MISMO grado y MISMO año lectivo,
-  // este listener la detecta y actualiza la disponibilidad al instante (<1s).
-  // Reemplaza el getDocs anterior: 0 lecturas extra por recarga manual.
+  // ✅ CACHE DEL GRADO: todas las asignaturas del grado+año (mías + de otros docentes)
+  // Sirve para:
+  //   1) Verificar disponibilidad de destrezas (como antes)
+  //   2) Detectar conflictos de horario (nueva): si otro docente ya tiene día+hora
   useEffect(() => {
     if (!gradoEfectivoId || !anioActivo?.id) return;
     const q = query(
-      collection(db, 'asignaturasDocente'),
-      where('gradoId', '==', gradoEfectivoId),
-      where('anioLectivoId', '==', anioActivo.id),
-      where('activo', '==', true),
+      collection(db, "asignaturasDocente"),
+      where("gradoId", "==", gradoEfectivoId),
+      where("anioLectivoId", "==", anioActivo.id),
+      where("activo", "==", true),
     );
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        const mapa = new Map<string, string[]>();
-        snap.docs.forEach((d) => {
-          const data = d.data();
-          const destrezaId = data.destrezaId as string;
-          const docenteId = data.docenteId as string;
-          if (!mapa.has(destrezaId)) mapa.set(destrezaId, []);
-          mapa.get(destrezaId)!.push(docenteId);
-        });
-        setAsignaturasGradoCache(mapa);
+        setAsignaturasGradoCache(
+          snap.docs.map(
+            (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
+          ),
+        );
       },
       (error) => {
-        console.error('Error escuchando asignaturas del grado:', error);
+        console.error("Error escuchando asignaturas del grado:", error);
       },
     );
     return () => unsubscribe();
@@ -201,15 +224,15 @@ export default function MiHorario() {
   // ✅ HELPERS ====================
   const getAmbitoNombre = (ambitoId: string): string => {
     const ambito = ambitos.find((a) => a.id === ambitoId);
-    return ambito?.nombre || 'Sin ámbito';
+    return ambito?.nombre || "Sin ámbito";
   };
 
   const esGradoInicial = (gradoNombre: string): boolean => {
     const n = gradoNombre.toLowerCase();
     return (
-      n.includes('inicial 1') ||
-      n.includes('inicial 2') ||
-      n.includes('preparatoria')
+      n.includes("inicial 1") ||
+      n.includes("inicial 2") ||
+      n.includes("preparatoria")
     );
   };
 
@@ -244,15 +267,52 @@ export default function MiHorario() {
     return Object.values(grupos);
   })();
 
-  // ✅ VERIFICAR DISPONIBILIDAD: 0 lecturas (todo en memoria, alimentado por listeners)
+  // ✅ DISPONIBILIDAD DE DESTREZA: otro docente ya la tiene en este grado
   const verificarDisponibilidad = (destrezaId: string): boolean => {
     const asignacionPropia = asignaturas.find(
       (a) => a.gradoId === gradoEfectivoId && a.destrezaId === destrezaId,
     );
     if (asignacionPropia) return true;
-    const docentes = asignaturasGradoCache.get(destrezaId) || [];
-    return docentes.length === 0;
+    const ocupadaPorOtro = asignaturasGradoCache.some(
+      (a) => a.destrezaId === destrezaId && a.docenteId !== user?.uid,
+    );
+    return !ocupadaPorOtro;
   };
+
+  // ✅ CONFLICTO DE HORARIO: busca si OTRO docente ya tiene ocupado el mismo día+hora
+  // en este grado. Devuelve { conflict, nombreMateria } o null.
+  const detectarConflictoHorario = (
+    dia: number,
+    hora: number,
+    excluirAsignacionId?: string,
+  ): {
+    conflict: boolean;
+    materiaNombre: string;
+    docenteNombre: string;
+  } | null => {
+    for (const a of asignaturasGradoCache) {
+      if (a.id === excluirAsignacionId) continue;
+      if (a.docenteId === user?.uid) continue;
+      const ocupa = (a.horario || []).some(
+        (b) => b.dia === dia && b.horas.includes(hora),
+      );
+      if (ocupa) {
+        const d = destrezas.find((x) => x.id === a.destrezaId);
+        return {
+          conflict: true,
+          materiaNombre: d?.nombre || "materia",
+          docenteNombre: "otro docente",
+        };
+      }
+    }
+    return null;
+  };
+
+  // ✅ Total de horas semanales del docente en este grado
+  const horasSemanalesTotales = asignaturasDelGrado.reduce((acc, a) => {
+    const h = (a.horario || []).reduce((s, b) => s + b.horas.length, 0);
+    return acc + h;
+  }, 0);
 
   // ==================== ACCIONES ====================
   const asignarMateria = async (destrezaId: string) => {
@@ -262,34 +322,34 @@ export default function MiHorario() {
       const disponible = verificarDisponibilidad(destrezaId);
       if (!disponible) {
         mostrarToast(
-          'warning',
-          'Materia no disponible',
-          'Esta materia ya está asignada a otro docente en este grado.',
+          "warning",
+          "Materia no disponible",
+          "Esta materia ya está asignada a otro docente en este grado.",
         );
         setSaving(false);
         return;
       }
       const destreza = destrezas.find((d) => d.id === destrezaId);
-      await addDoc(collection(db, 'asignaturasDocente'), {
+      await addDoc(collection(db, "asignaturasDocente"), {
         docenteId: user.uid,
         gradoId: gradoEfectivoId,
         destrezaId,
         anioLectivoId: anioActivo.id,
         activo: true,
+        horario: [], // vacío: el docente define el horario después
         createdAt: new Date(),
       });
-      // ✅ Sin actualizarCacheGrado: el onSnapshot del grado lo actualiza solo
       mostrarToast(
-        'success',
-        'Materia asignada',
-        `"${destreza?.nombre || 'Materia'}" se agregó a tu horario.`,
+        "success",
+        "Materia asignada",
+        `"${destreza?.nombre || "Materia"}" se agregó a tu horario. Configura los días y horas.`,
       );
     } catch (error) {
-      console.error('Error asignando materia:', error);
+      console.error("Error asignando materia:", error);
       mostrarToast(
-        'error',
-        'Error al asignar',
-        'No se pudo asignar la materia. Intenta nuevamente.',
+        "error",
+        "Error al asignar",
+        "No se pudo asignar la materia. Intenta nuevamente.",
       );
     } finally {
       setSaving(false);
@@ -303,11 +363,11 @@ export default function MiHorario() {
     const totalDestrezas = grupo.destrezas.length;
     const confirmado = await confirmar(
       `Asignar destrezas de "${grupo.ambito.nombre}"`,
-      `¿Asignar las ${totalDestrezas} destreza(s) de este ámbito a tu horario en este grado? Las destrezas ya asignadas a otro docente se omitirán.`,
+      `¿Asignar las ${totalDestrezas} destreza(s) de este ámbito a tu horario en este grado? Las destrezas ya asignadas a otro docente se omitirán. Luego podrás configurar el horario de cada una.`,
       {
-        confirmText: 'Sí, asignar',
-        cancelText: 'Cancelar',
-        confirmColor: 'bg-purple-600 hover:bg-purple-700',
+        confirmText: "Sí, asignar",
+        cancelText: "Cancelar",
+        confirmColor: "bg-purple-600 hover:bg-purple-700",
         icon: FaPlus,
       },
     );
@@ -317,38 +377,33 @@ export default function MiHorario() {
       let asignadas = 0;
       let omitidas = 0;
       for (const destreza of grupo.destrezas) {
-        // Re-verificar disponibilidad en cada iteración (el cache puede actualizarse
-        // entre escrituras si otro docente asigna en paralelo)
         const disponible = verificarDisponibilidad(destreza.id);
         if (!disponible) {
           omitidas++;
           continue;
         }
-        await addDoc(collection(db, 'asignaturasDocente'), {
+        await addDoc(collection(db, "asignaturasDocente"), {
           docenteId: user.uid,
           gradoId: gradoEfectivoId,
           destrezaId: destreza.id,
           anioLectivoId: anioActivo.id,
           activo: true,
+          horario: [],
           createdAt: new Date(),
         });
-        // ✅ Sin actualizarCacheGrado: el onSnapshot lo actualiza solo
         asignadas++;
       }
       let mensaje = `Se asignaron ${asignadas} destreza(s).`;
       if (omitidas > 0) {
         mensaje += ` ${omitidas} omitida(s) (ya estaban asignadas a otro docente).`;
       }
-      mostrarToast('success', 'Asignación masiva completada', mensaje, 6000);
+      mostrarToast("success", "Asignación masiva completada", mensaje, 6000);
     } catch (error) {
-      console.error(
-        'Error asignando todas las destrezas del ámbito:',
-        error,
-      );
+      console.error("Error asignando todas las destrezas del ámbito:", error);
       mostrarToast(
-        'error',
-        'Error al asignar',
-        'No se pudieron asignar las destrezas del ámbito.',
+        "error",
+        "Error al asignar",
+        "No se pudieron asignar las destrezas del ámbito.",
       );
     } finally {
       setSaving(false);
@@ -361,32 +416,106 @@ export default function MiHorario() {
       ? destrezas.find((d) => d.id === asignatura.destrezaId)
       : null;
     const confirmado = await confirmar(
-      'Quitar materia del horario',
-      `¿Quitar "${destreza?.nombre || 'esta materia'}" de tu horario?\n\nPodrás volver a asignarla después si lo necesitas.`,
+      "Quitar materia del horario",
+      `¿Quitar "${destreza?.nombre || "esta materia"}" de tu horario?\n\nPodrás volver a asignarla después si lo necesitas.`,
       {
-        confirmText: 'Sí, quitar',
-        cancelText: 'Cancelar',
-        confirmColor: 'bg-red-600 hover:bg-red-700',
+        confirmText: "Sí, quitar",
+        cancelText: "Cancelar",
+        confirmColor: "bg-red-600 hover:bg-red-700",
         icon: FaTrash,
       },
     );
     if (!confirmado) return;
     setSaving(true);
     try {
-      await deleteDoc(doc(db, 'asignaturasDocente', asignacionId));
-      // ✅ Sin actualizarCacheGrado: el onSnapshot lo actualiza solo
+      await deleteDoc(doc(db, "asignaturasDocente", asignacionId));
       mostrarToast(
-        'success',
-        'Materia removida',
-        `"${destreza?.nombre || 'Materia'}" se quitó de tu horario.`,
+        "success",
+        "Materia removida",
+        `"${destreza?.nombre || "Materia"}" se quitó de tu horario.`,
       );
     } catch (error) {
-      console.error('Error removiendo materia:', error);
+      console.error("Error removiendo materia:", error);
       mostrarToast(
-        'error',
-        'Error al remover',
-        'No se pudo quitar la materia del horario.',
+        "error",
+        "Error al remover",
+        "No se pudo quitar la materia del horario.",
       );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ✅ TOGGLE DE HORA: asigna o quita una hora de una materia
+  // Valida conflictos con otros docentes del mismo grado en tiempo real.
+  const toggleHoraMateria = async (
+    asignacionId: string,
+    dia: number,
+    hora: number,
+  ) => {
+    if (!user?.uid) return;
+    const asignatura = asignaturas.find((a) => a.id === asignacionId);
+    if (!asignatura) return;
+
+    const horarioActual: BloqueHorario[] = asignatura.horario || [];
+    const bloqueDia = horarioActual.find((b) => b.dia === dia);
+    const yaOcupada = bloqueDia?.horas.includes(hora) || false;
+
+    // Si estamos QUITANDO una hora: no hay conflicto posible
+    if (yaOcupada) {
+      const nuevoHorario = horarioActual
+        .map((b) => {
+          if (b.dia !== dia) return b;
+          return { ...b, horas: b.horas.filter((h) => h !== hora) };
+        })
+        .filter((b) => b.horas.length > 0);
+
+      setSaving(true);
+      try {
+        await updateDoc(doc(db, "asignaturasDocente", asignacionId), {
+          horario: nuevoHorario,
+        });
+      } catch (error) {
+        console.error("Error quitando hora:", error);
+        mostrarToast("error", "Error", "No se pudo quitar la hora.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    // Si estamos AGREGANDO: validar conflicto con otros docentes
+    const conflicto = detectarConflictoHorario(dia, hora, asignacionId);
+    if (conflicto) {
+      const diaNombre =
+        DIAS_SEMANA.find((d) => d.id === dia)?.nombreLargo || "";
+      mostrarToast(
+        "warning",
+        "Conflicto de horario",
+        `El ${diaNombre} en la ${hora}ª hora, otro docente ya está asignado en este grado con "${conflicto.materiaNombre}".`,
+        5000,
+      );
+      return;
+    }
+
+    const nuevoHorario = bloqueDia
+      ? horarioActual.map((b) =>
+          b.dia === dia
+            ? { ...b, horas: [...b.horas, hora].sort((x, y) => x - y) }
+            : b,
+        )
+      : [...horarioActual, { dia, horas: [hora] }].sort(
+          (x, y) => x.dia - y.dia,
+        );
+
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, "asignaturasDocente", asignacionId), {
+        horario: nuevoHorario,
+      });
+    } catch (error) {
+      console.error("Error asignando hora:", error);
+      mostrarToast("error", "Error", "No se pudo asignar la hora.");
     } finally {
       setSaving(false);
     }
@@ -394,31 +523,31 @@ export default function MiHorario() {
 
   const toastConfig = {
     success: {
-      bg: 'bg-green-50 border-green-400',
-      iconBg: 'bg-green-500',
-      titleColor: 'text-green-900',
-      msgColor: 'text-green-700',
+      bg: "bg-green-50 border-green-400",
+      iconBg: "bg-green-500",
+      titleColor: "text-green-900",
+      msgColor: "text-green-700",
       icon: FaCheckCircle,
     },
     error: {
-      bg: 'bg-red-50 border-red-400',
-      iconBg: 'bg-red-500',
-      titleColor: 'text-red-900',
-      msgColor: 'text-red-700',
+      bg: "bg-red-50 border-red-400",
+      iconBg: "bg-red-500",
+      titleColor: "text-red-900",
+      msgColor: "text-red-700",
       icon: FaTimesCircle,
     },
     warning: {
-      bg: 'bg-yellow-50 border-yellow-400',
-      iconBg: 'bg-yellow-500',
-      titleColor: 'text-yellow-900',
-      msgColor: 'text-yellow-700',
+      bg: "bg-yellow-50 border-yellow-400",
+      iconBg: "bg-yellow-500",
+      titleColor: "text-yellow-900",
+      msgColor: "text-yellow-700",
       icon: FaExclamationTriangle,
     },
     info: {
-      bg: 'bg-blue-50 border-blue-400',
-      iconBg: 'bg-blue-500',
-      titleColor: 'text-blue-900',
-      msgColor: 'text-blue-700',
+      bg: "bg-blue-50 border-blue-400",
+      iconBg: "bg-blue-500",
+      titleColor: "text-blue-900",
+      msgColor: "text-blue-700",
       icon: FaInfoCircle,
     },
   };
@@ -472,8 +601,8 @@ export default function MiHorario() {
                     onClick={() => setSelectedGradoId(grado.id)}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border-2 flex items-center gap-2 ${
                       gradoEfectivoId === grado.id
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'bg-white text-slate-700 border-slate-200 hover:border-blue-400'
+                        ? "bg-blue-600 text-white border-blue-600"
+                        : "bg-white text-slate-700 border-slate-200 hover:border-blue-400"
                     }`}
                   >
                     <span>
@@ -488,8 +617,8 @@ export default function MiHorario() {
                       <span
                         className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
                           gradoEfectivoId === grado.id
-                            ? 'bg-white text-blue-600'
-                            : 'bg-blue-100 text-blue-700'
+                            ? "bg-white text-blue-600"
+                            : "bg-blue-100 text-blue-700"
                         }`}
                       >
                         {countAsignadas}
@@ -508,13 +637,19 @@ export default function MiHorario() {
               <div className="flex items-center gap-2">
                 <FaCheckCircle className="text-white text-lg" />
                 <h3 className="text-white font-semibold">
-                  Mis Materias Asignadas en {gradoActual?.nombre} -{' '}
+                  Mis Materias en {gradoActual?.nombre} -{" "}
                   {gradoActual?.paralelo}
                 </h3>
               </div>
-              <span className="bg-white text-green-700 px-3 py-1 rounded-full text-sm font-bold">
-                {asignaturasDelGrado.length}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="bg-white/20 text-white px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
+                  <FaClock className="text-[10px]" />
+                  {horasSemanalesTotales}h/sem
+                </span>
+                <span className="bg-white text-green-700 px-3 py-1 rounded-full text-sm font-bold">
+                  {asignaturasDelGrado.length} materias
+                </span>
+              </div>
             </div>
             <div className="p-4">
               {asignaturasDelGrado.length === 0 ? (
@@ -528,34 +663,137 @@ export default function MiHorario() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                <div className="space-y-3">
                   {asignaturasDelGrado.map((asignatura) => {
                     const destreza = destrezas.find(
                       (d) => d.id === asignatura.destrezaId,
                     );
                     if (!destreza) return null;
                     const ambitoNombre = getAmbitoNombre(destreza.ambitoId);
+                    const horario = asignatura.horario || [];
+                    const horasDeLaMateria = horario.reduce(
+                      (s, b) => s + b.horas.length,
+                      0,
+                    );
                     return (
                       <div
                         key={asignatura.id}
-                        className="flex items-center justify-between p-3 bg-green-50 border border-green-200 rounded-lg group hover:border-green-400 transition-all"
+                        className="border-2 border-green-200 rounded-lg overflow-hidden hover:border-green-400 transition-all"
                       >
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-slate-900 text-sm truncate">
-                            {destreza.nombre}
-                          </p>
-                          <p className="text-xs text-green-700 font-medium truncate">
-                            {ambitoNombre}
+                        {/* Header de la materia */}
+                        <div className="flex items-center justify-between p-3 bg-green-50 border-b border-green-200">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-semibold text-slate-900 text-sm">
+                                {destreza.nombre}
+                              </p>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-200 text-green-800 font-bold">
+                                {horasDeLaMateria}h/sem
+                              </span>
+                            </div>
+                            <p className="text-xs text-green-700 font-medium mt-0.5">
+                              {ambitoNombre}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => removerMateria(asignatura.id || "")}
+                            disabled={saving}
+                            className="ml-2 p-2 text-red-600 hover:bg-red-100 rounded transition-all opacity-70 hover:opacity-100 disabled:opacity-30"
+                            title="Quitar materia del horario"
+                          >
+                            <FaTrash className="text-xs" />
+                          </button>
+                        </div>
+
+                        {/* Grid de horario: días × horas */}
+                        {/* Grid de horario: Lun-Vie × horas 1-7 con RECREO */}
+                        <div className="p-3 bg-white overflow-x-auto">
+                          <div className="min-w-max">
+                            <div className="flex items-stretch gap-1.5">
+                              {/* Columna de etiquetas */}
+                              <div className="flex flex-col gap-1.5 shrink-0 w-14">
+                                <div className="h-6" />
+                                {FILAS_HORARIO.map((fila, i) =>
+                                  fila.tipo === "recreo" ? (
+                                    <div
+                                      key={`rec-${i}`}
+                                      className="h-5 flex items-center justify-center text-[9px] font-bold rounded bg-amber-100 text-amber-700"
+                                    >
+                                      RECREO
+                                    </div>
+                                  ) : (
+                                    <div
+                                      key={`h-${fila.hora}`}
+                                      className="h-8 flex items-center justify-center text-[10px] font-bold text-slate-500"
+                                    >
+                                      {fila.hora}ª
+                                    </div>
+                                  ),
+                                )}
+                              </div>
+
+                              {/* Columnas de días */}
+                              {DIAS_SEMANA.map((dia) => {
+                                const bloque = horario.find(
+                                  (b) => b.dia === dia.id,
+                                );
+                                return (
+                                  <div
+                                    key={dia.id}
+                                    className="flex flex-col gap-1.5 min-w-14"
+                                  >
+                                    <div className="h-6 flex items-center justify-center text-[10px] font-bold text-slate-700 bg-slate-100 rounded">
+                                      {dia.nombre}
+                                    </div>
+                                    {FILAS_HORARIO.map((fila, i) =>
+                                      fila.tipo === "recreo" ? (
+                                        <div
+                                          key={`rec-${i}`}
+                                          className="h-5 w-full rounded bg-amber-50 border border-amber-100"
+                                          title="Recreo (no asignable)"
+                                        />
+                                      ) : (
+                                        <button
+                                          key={`h-${fila.hora}`}
+                                          onClick={() =>
+                                            toggleHoraMateria(
+                                              asignatura.id || "",
+                                              dia.id,
+                                              fila.hora,
+                                            )
+                                          }
+                                          disabled={saving}
+                                          title={
+                                            bloque?.horas.includes(fila.hora)
+                                              ? `${dia.nombreLargo} ${fila.hora}ª hora · clic para quitar`
+                                              : `${dia.nombreLargo} ${fila.hora}ª hora · clic para asignar`
+                                          }
+                                          className={`h-8 w-full rounded text-[10px] font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                                            bloque?.horas.includes(fila.hora)
+                                              ? "bg-green-600 text-white hover:bg-red-500 shadow-sm"
+                                              : "bg-slate-50 text-slate-300 hover:bg-blue-100 hover:text-blue-600 border border-slate-200"
+                                          }`}
+                                        >
+                                          {bloque?.horas.includes(fila.hora)
+                                            ? "✓"
+                                            : "＋"}
+                                        </button>
+                                      ),
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-2 leading-tight">
+                            <FaInfoCircle className="inline text-[9px] mr-1" />
+                            Clic en una celda para asignar/quitar. La fila{" "}
+                            <span className="text-amber-700 font-bold">
+                              RECREO
+                            </span>{" "}
+                            no es asignable.
                           </p>
                         </div>
-                        <button
-                          onClick={() => removerMateria(asignatura.id || '')}
-                          disabled={saving}
-                          className="ml-2 p-1.5 text-red-600 hover:bg-red-100 rounded transition-all opacity-60 group-hover:opacity-100 disabled:opacity-30"
-                          title="Quitar materia"
-                        >
-                          <FaTrash className="text-xs" />
-                        </button>
                       </div>
                     );
                   })}
@@ -579,8 +817,9 @@ export default function MiHorario() {
                 </>
               ) : (
                 <>
-                  Haz clic en "Asignar" para agregar una materia a tu horario de{' '}
-                  {gradoActual?.nombre} - {gradoActual?.paralelo}
+                  Haz clic en "Asignar" para agregar una materia a tu horario de{" "}
+                  {gradoActual?.nombre} - {gradoActual?.paralelo}. Luego
+                  configura los días y horas en la tarjeta de la materia.
                 </>
               )}
             </p>
@@ -611,9 +850,9 @@ export default function MiHorario() {
                             </h4>
                             <p className="text-xs text-purple-700">
                               {destrezasAmbito.length} destreza
-                              {destrezasAmbito.length !== 1 ? 's' : ''}{' '}
+                              {destrezasAmbito.length !== 1 ? "s" : ""}{" "}
                               disponible
-                              {destrezasAmbito.length !== 1 ? 's' : ''}
+                              {destrezasAmbito.length !== 1 ? "s" : ""}
                             </p>
                           </div>
                         </div>
@@ -779,14 +1018,14 @@ export default function MiHorario() {
                 onClick={confirmModal.onCancel}
                 className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-sm font-semibold transition-all"
               >
-                {confirmModal.cancelText || 'Cancelar'}
+                {confirmModal.cancelText || "Cancelar"}
               </button>
               <button
                 onClick={confirmModal.onConfirm}
-                className={`px-4 py-2 ${confirmModal.confirmColor || 'bg-red-600 hover:bg-red-700'} text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2`}
+                className={`px-4 py-2 ${confirmModal.confirmColor || "bg-red-600 hover:bg-red-700"} text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2`}
               >
                 <ConfirmIcon className="text-xs" />
-                {confirmModal.confirmText || 'Confirmar'}
+                {confirmModal.confirmText || "Confirmar"}
               </button>
             </div>
           </div>

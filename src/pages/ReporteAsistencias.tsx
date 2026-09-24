@@ -56,6 +56,10 @@ interface AsistenciaData {
   v2?: boolean;
   observacion?: string;
   registradoPor?: string;
+  editadoPor?: string;
+  editadoEl?: Timestamp | Date;
+  justificadoPor?: string;
+  justificadoEl?: Timestamp | Date;
   representanteAsistio?: boolean;
   representanteNota?: string;
   representantePor?: string;
