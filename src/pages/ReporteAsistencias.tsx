@@ -21,10 +21,9 @@ import {
   FaClock,
   FaCheckCircle,
   FaExclamationTriangle,
-  FaCalendarWeek,
-  FaCalendarAlt,
   FaChevronLeft,
   FaChevronRight,
+  FaChevronDown,
   FaChalkboardTeacher,
   FaUserTie,
   FaBook,
@@ -246,6 +245,7 @@ export default function ReporteAsistencias() {
   const [isGuardandoActa, setIsGuardandoActa] = useState(false);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [showLeyenda, setShowLeyenda] = useState(false);
   const periodoInicializado = useRef(false);
 
   // ✅ Primitiva estable (evita preserve-manual-memoization del React Compiler)
@@ -695,7 +695,7 @@ export default function ReporteAsistencias() {
         Object.values(regsDelDia).forEach((reg) => { if (reg.estado === "I") asistenciasAActualizar.push(reg.asistenciaId); });
       });
       if (asistenciasAActualizar.length === 0) {
-        mostrarToast("info", "Sin inasistencias injustificadas", "No hay inasistencias (i) para justificar en los días seleccionados. Recuerda: las fugas (f) no se justifican.");
+        mostrarToast("info", "Sin inasistencias injustificadas", "No hay inasistencias (i) para justificar. Las fugas (f) no se justifican.");
         setIsJustificando(false);
         return;
       }
@@ -709,13 +709,13 @@ export default function ReporteAsistencias() {
       await batch.commit();
       const fechas = diasSemana.map(formatFechaISO);
       cacheAsistencias.current.delete(`semanal|${gradoTutorEfectivo}|${fechas.join(",")}`);
-      mostrarToast("success", "Justificación completada", `Se justificaron ${asistenciasAActualizar.length} inasistencia(s) correctamente. Pulsa "Refrescar" para ver los cambios.`, 5000);
+      mostrarToast("success", "Justificación completada", `Se justificaron ${asistenciasAActualizar.length} inasistencia(s). Pulsa "Refrescar".`, 5000);
       setShowJustificarModal(false);
       setEstudianteJustificarId(null);
       setDiasJustificar(new Set());
       setMotivoJustificacion("");
     } catch (error) {
-      console.error("Error justificando asistencias:", error);
+      console.error("Error justificando:", error);
       mostrarToast("error", "Error al justificar", "No se pudieron justificar las asistencias.");
     } finally { setIsJustificando(false); }
   }
@@ -807,14 +807,14 @@ export default function ReporteAsistencias() {
       await batch.commit();
       const fechas = diasSemana.map(formatFechaISO);
       cacheAsistencias.current.delete(`semanal|${gradoTutorEfectivo}|${fechas.join(",")}`);
-      mostrarToast("success", "Acta(s) registrada(s)", `Se registraron ${gruposAGuardar.length} acta(s) que cubren ${opsCount} fuga(s). Pulsa "Refrescar" para ver los cambios.`, 5000);
+      mostrarToast("success", "Acta(s) registrada(s)", `Se registraron ${gruposAGuardar.length} acta(s) que cubren ${opsCount} fuga(s). Pulsa "Refrescar".`, 5000);
       setShowActaModal(false);
       setEstudianteActaId(null);
       setDiasSeleccionados(new Set());
       setNotasPorDia({});
     } catch (error) {
-      console.error("Error guardando acta de compromiso:", error);
-      mostrarToast("error", "Error al guardar", "No se pudo registrar el acta de compromiso.");
+      console.error("Error guardando acta:", error);
+      mostrarToast("error", "Error al guardar", "No se pudo registrar el acta.");
     } finally { setIsGuardandoActa(false); }
   }
 
@@ -839,7 +839,6 @@ export default function ReporteAsistencias() {
 
     const fechaGeneracion = new Date().toLocaleDateString("es-EC", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
-    // ✅ Solo genera contenido para vista docente (listado por materia, solo novedades)
     const fechasBase = diasVisibles.map(formatFechaISO);
     const cuerpoTabla = materiasDocenteEnGrado
       .map((materia) => {
@@ -985,7 +984,7 @@ export default function ReporteAsistencias() {
     const html = generarHTMLImpresion();
     const win = window.open("", "_blank");
     if (!win) {
-      mostrarToast("warning", "Ventana emergente bloqueada", "Permite las ventanas emergentes en tu navegador para poder imprimir el reporte.");
+      mostrarToast("warning", "Ventana emergente bloqueada", "Permite ventanas emergentes para imprimir.");
       return;
     }
     win.document.write(html);
@@ -1127,7 +1126,7 @@ export default function ReporteAsistencias() {
     const html = generarHTMLDetalle();
     const win = window.open("", "_blank");
     if (!win) {
-      mostrarToast("warning", "Ventana emergente bloqueada", "Permite las ventanas emergentes en tu navegador para poder imprimir el detalle.");
+      mostrarToast("warning", "Ventana emergente bloqueada", "Permite ventanas emergentes para imprimir el detalle.");
       return;
     }
     win.document.write(html);
@@ -1135,7 +1134,6 @@ export default function ReporteAsistencias() {
     win.focus();
   };
 
-  // ✅ Solo habilita impresión en vista docente (tutor usa Detalle)
   const puedeImprimir = vistaEfectiva === "docente" && gradosDocente.length > 0;
   const puedeImprimirDetalle = vistaEfectiva === "tutor" && estudiantesGradoTutor.length > 0;
 
@@ -1163,153 +1161,145 @@ export default function ReporteAsistencias() {
 
   return (
     <Layout>
-      {/* ============ TOOLBAR: TIPO + ACCIONES ============ */}
+      {/* ============ TOOLBAR COMPACTA: tipo + rango + estados + acciones ============ */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
-        <div className="flex flex-col xl:flex-row gap-2 xl:items-center">
-          <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg xl:flex-1">
-            <button
-              onClick={() => setTipoReporte("semanal")}
-              className={`px-1 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${tipoReporte === "semanal" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-slate-200"}`}
-            >
-              <FaCalendarWeek className="text-[11px] sm:text-sm shrink-0" />
-              <span className="truncate">Semanal</span>
-            </button>
-            <button
-              onClick={() => setTipoReporte("mensual")}
-              className={`px-1 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${tipoReporte === "mensual" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-slate-200"}`}
-            >
-              <FaCalendarAlt className="text-[11px] sm:text-sm shrink-0" />
-              <span className="truncate">Mensual</span>
-            </button>
-            <button
-              onClick={() => setTipoReporte("trimestral")}
-              className={`px-1 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${tipoReporte === "trimestral" ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-slate-200"}`}
-            >
-              <FaCalendarAlt className="text-[11px] sm:text-sm shrink-0" />
-              <span className="truncate">Trimestral<span className="hidden lg:inline">/Quimestral</span></span>
-            </button>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              onClick={refrescarVista}
-              className="px-2 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-700 text-white shadow"
-              title="Refrescar datos desde Firebase"
-            >
-              <FaSync className="text-[11px] sm:text-sm shrink-0" />
-              <span className="truncate">Refrescar</span>
-            </button>
-            {/* ✅ Botón Imprimir SOLO en vista docente */}
-            {vistaEfectiva === "docente" && (
-              <button
-                onClick={handlePrint}
-                disabled={!puedeImprimir}
-                className="px-2 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 bg-slate-700 hover:bg-slate-800 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Imprimir reporte consolidado por materia"
-              >
-                <FaPrint className="text-[11px] sm:text-sm shrink-0" />
-                <span className="truncate">Imprimir</span>
-              </button>
-            )}
-            {/* ✅ Botón Detalle SOLO en vista tutor */}
-            {vistaEfectiva === "tutor" && (
-              <button
-                onClick={handlePrintDetalle}
-                disabled={!puedeImprimirDetalle}
-                className="px-2 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Imprimir listado lineal con detalle por materia"
-              >
-                <FaClipboardList className="text-[11px] sm:text-sm shrink-0" />
-                <span className="truncate">Detalle</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Select de tipo de reporte */}
+          <select
+            value={tipoReporte}
+            onChange={(e) => setTipoReporte(e.target.value as TipoReporte)}
+            className="px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs sm:text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 shrink-0"
+            title="Tipo de reporte"
+          >
+            <option value="semanal">📅 Semanal</option>
+            <option value="mensual">🗓️ Mensual</option>
+            <option value="trimestral">📆 Trimestral/Quimestral</option>
+          </select>
 
-      {/* ============ TARJETA UNIFICADA: RANGO + LEYENDA ============ */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <div className="flex items-center justify-between gap-2 flex-1 min-w-55">
+          {/* Navegador de rango a la derecha */}
+          <div className="flex items-center gap-1 sm:gap-2 ml-auto min-w-0">
             {tipoReporte === "semanal" && (
               <>
-                <div className="flex items-center gap-2 shrink-0">
-                  <FaCalendarWeek className="text-blue-600" />
-                  <span className="text-xs sm:text-sm font-semibold text-slate-700">Semana:</span>
+                <button onClick={() => cambiarSemana(-1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Semana anterior">
+                  <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
+                </button>
+                <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0 max-w-44 sm:max-w-none">
+                  {formatFechaCorta(diasSemana[0])} — {formatFechaCorta(diasSemana[4])}
                 </div>
-                <div className="flex items-center gap-1 sm:gap-2 min-w-0">
-                  <button onClick={() => cambiarSemana(-1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Semana anterior">
-                    <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
-                  </button>
-                  <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
-                    {formatFechaCorta(diasSemana[0])} — {formatFechaCorta(diasSemana[4])}
-                  </div>
-                  <button onClick={() => cambiarSemana(1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Semana siguiente">
-                    <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
-                  </button>
-                  <button onClick={irAHoy} className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0">
-                    Hoy
-                  </button>
-                </div>
+                <button onClick={() => cambiarSemana(1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Semana siguiente">
+                  <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
+                </button>
+                <button onClick={irAHoy} className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0">
+                  Hoy
+                </button>
               </>
             )}
             {tipoReporte === "mensual" && (
               <>
-                <div className="flex items-center gap-2 shrink-0">
-                  <FaCalendarAlt className="text-blue-600" />
-                  <span className="text-xs sm:text-sm font-semibold text-slate-700">Mes:</span>
+                <button onClick={() => cambiarMes(-1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Mes anterior">
+                  <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
+                </button>
+                <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0 max-w-44 sm:max-w-none">
+                  {NOMBRES_MESES[mesActual]} {anioActual}
                 </div>
-                <div className="flex items-center gap-1 sm:gap-2 min-w-0">
-                  <button onClick={() => cambiarMes(-1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Mes anterior">
-                    <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
-                  </button>
-                  <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
-                    {NOMBRES_MESES[mesActual]} {anioActual}
-                  </div>
-                  <button onClick={() => cambiarMes(1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Mes siguiente">
-                    <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
-                  </button>
-                  <button onClick={irAHoy} className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0">
-                    Hoy
-                  </button>
-                </div>
+                <button onClick={() => cambiarMes(1)} className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0" title="Mes siguiente">
+                  <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
+                </button>
+                <button onClick={irAHoy} className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0">
+                  Hoy
+                </button>
               </>
             )}
             {tipoReporte === "trimestral" && (
-              <>
-                <div className="flex items-center gap-2 shrink-0">
-                  <FaCalendarAlt className="text-blue-600" />
-                  <span className="text-xs sm:text-sm font-semibold text-slate-700">Período:</span>
-                </div>
-                <select
-                  value={periodoSeleccionado}
-                  onChange={(e) => setPeriodoSeleccionado(e.target.value)}
-                  className="flex-1 min-w-0 sm:flex-none px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 focus:ring-2 focus:ring-blue-500"
-                >
-                  {periodos.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.nombre} ({formatFechaCorta(parseFechaLocal(p.fechaInicio))} - {formatFechaCorta(parseFechaLocal(p.fechaFin))})
-                    </option>
-                  ))}
-                </select>
-              </>
+              <select
+                value={periodoSeleccionado}
+                onChange={(e) => setPeriodoSeleccionado(e.target.value)}
+                className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 focus:ring-2 focus:ring-blue-500 max-w-52 sm:max-w-none"
+              >
+                {periodos.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.nombre} ({formatFechaCorta(parseFechaLocal(p.fechaInicio))} - {formatFechaCorta(parseFechaLocal(p.fechaFin))})
+                  </option>
+                ))}
+              </select>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] sm:text-xs xl:border-l xl:border-slate-200 xl:pl-4">
-            <span className="font-semibold text-slate-700 text-xs sm:text-sm">Estados:</span>
-            {ESTADOS_ASISTENCIA.map((e) => {
-              const cfg = ESTADO_CONFIG[e.value];
-              const Icon = cfg.icon;
-              return (
-                <div key={e.value} className="flex items-center gap-1 sm:gap-1.5">
-                  <div className={`w-4 h-4 sm:w-5 sm:h-5 rounded ${cfg.bgColor} flex items-center justify-center shrink-0`}>
-                    <Icon className={`text-[10px] sm:text-xs ${cfg.textColor}`} />
+
+          {/* Fila inferior: Estados + Acciones */}
+          <div className="flex items-center justify-between gap-2 w-full border-t border-slate-200 pt-2 mt-1 sm:w-auto sm:border-t-0 sm:border-l sm:pt-0 sm:mt-0 sm:pl-3">
+            {/* Estados tipo combobox */}
+            <div className="relative">
+              <button
+                onClick={() => setShowLeyenda(!showLeyenda)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg text-xs sm:text-sm font-semibold text-slate-700 transition-colors"
+                title="Ver leyenda de estados"
+              >
+                <FaInfoCircle className="text-[11px] sm:text-xs text-blue-600" />
+                Estados
+                <FaChevronDown className={`text-[9px] text-slate-400 transition-transform ${showLeyenda ? "rotate-180" : ""}`} />
+              </button>
+              {showLeyenda && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowLeyenda(false)} />
+                  <div className="absolute left-0 top-full mt-2 z-50 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 p-3">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Leyenda de estados</p>
+                    <div className="space-y-1.5">
+                      {ESTADOS_ASISTENCIA.map((e) => {
+                        const cfg = ESTADO_CONFIG[e.value];
+                        const Icon = cfg.icon;
+                        return (
+                          <div key={e.value} className="flex items-center gap-2">
+                            <div className={`w-5 h-5 rounded ${cfg.bgColor} flex items-center justify-center shrink-0`}>
+                              <Icon className={`text-xs ${cfg.textColor}`} />
+                            </div>
+                            <span className="text-xs text-slate-600">
+                              <strong>{e.codigo || e.value}</strong> = {cfg.label}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-2 pt-2 border-t border-slate-100">
+                      Pasa el cursor sobre cualquier celda para ver su estado.
+                    </p>
                   </div>
-                  <span className="text-slate-600 whitespace-nowrap">
-                    <strong>{e.codigo || e.value}</strong> = {cfg.label}
-                  </span>
-                </div>
-              );
-            })}
+                </>
+              )}
+            </div>
+
+            {/* Acciones */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={refrescarVista}
+                className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-green-600 hover:bg-green-700 text-white shadow inline-flex items-center gap-1.5 transition-colors"
+                title="Refrescar datos"
+              >
+                <FaSync className="text-[11px] sm:text-xs" />
+                <span className="hidden sm:inline">Refrescar</span>
+              </button>
+              {vistaEfectiva === "docente" && (
+                <button
+                  onClick={handlePrint}
+                  disabled={!puedeImprimir}
+                  className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-700 hover:bg-slate-800 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 transition-colors"
+                  title="Imprimir consolidado por materia"
+                >
+                  <FaPrint className="text-[11px] sm:text-xs" />
+                  <span className="hidden sm:inline">Imprimir</span>
+                </button>
+              )}
+              {vistaEfectiva === "tutor" && (
+                <button
+                  onClick={handlePrintDetalle}
+                  disabled={!puedeImprimirDetalle}
+                  className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 transition-colors"
+                  title="Imprimir detalle lineal"
+                >
+                  <FaClipboardList className="text-[11px] sm:text-xs" />
+                  <span className="hidden sm:inline">Detalle</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -1491,7 +1481,7 @@ export default function ReporteAsistencias() {
                                 <button
                                   onClick={() => abrirModalActa(est.id)}
                                   className="inline-flex items-center gap-1 px-2 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-all shadow-sm"
-                                  title="Ver actas registradas / registrar nuevas actas"
+                                  title="Ver / registrar actas"
                                 >
                                   <FaFileSignature className="text-[10px]" />
                                   Acta
@@ -1514,7 +1504,7 @@ export default function ReporteAsistencias() {
                 <FaInfoCircle className="inline mr-1" />
                 <strong>Nota:</strong>{" "}
                 {tipoReporte === "semanal"
-                  ? "Vista detallada de la semana. «Inas.» cuenta solo inasistencias injustificadas (i), que sí se justifican. «Fugas» (f) no se justifican: se deja constancia mediante acta de compromiso firmada."
+                  ? "Vista detallada de la semana. «Inas.» cuenta solo inasistencias injustificadas (i). «Fugas» (f) requieren acta de compromiso."
                   : `Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length} días hábiles del período.`}{" "}
                 {tipoReporte !== "semanal" && "La justificación solo está disponible en vista semanal."}
               </div>
@@ -1701,7 +1691,7 @@ export default function ReporteAsistencias() {
 
                 <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
                   <FaInfoCircle className="inline mr-1" />
-                  <strong>Vista Docente:</strong> Solo se muestran estudiantes con atrasos (a), inasistencias (i), fugas (f) o justificaciones (j) en tus materias. Los presentes (P) no aparecen para reducir ruido.
+                  <strong>Vista Docente:</strong> Solo se muestran estudiantes con atrasos (a), inasistencias (i), fugas (f) o justificaciones (j) en tus materias. Los presentes (P) no aparecen.
                   {tipoReporte !== "semanal" && ` Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length}.`}
                 </div>
               </div>
@@ -1738,7 +1728,7 @@ export default function ReporteAsistencias() {
             <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
               <p className="text-sm text-purple-800 font-semibold">{estudianteJustificar.apellidos} {estudianteJustificar.nombres}</p>
               <p className="text-xs text-purple-600 mt-1">
-                Inasistencias injustificadas (i) esta semana: <strong>{ausenciasPorEstudiante[estudianteJustificar.id] ?? 0}</strong>
+                Inasistencias injustificadas (i): <strong>{ausenciasPorEstudiante[estudianteJustificar.id] ?? 0}</strong>
                 {(fugasPorEstudiante[estudianteJustificar.id] ?? 0) > 0 && (
                   <span className="ml-2 text-purple-700">
                     • Fugas (f): <strong>{fugasPorEstudiante[estudianteJustificar.id]}</strong> (no se justifican)
@@ -1749,7 +1739,7 @@ export default function ReporteAsistencias() {
 
             <div className="mb-4">
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-semibold text-slate-700">Selecciona los días a justificar *</label>
+                <label className="text-sm font-semibold text-slate-700">Selecciona los días *</label>
                 <button onClick={seleccionarTodosDiasConAusencia} className="text-xs text-blue-600 hover:text-blue-700 font-medium">Seleccionar todos</button>
               </div>
               <div className="space-y-2">
@@ -1776,7 +1766,7 @@ export default function ReporteAsistencias() {
                           {ausenciasDia} inasistencia{ausenciasDia !== 1 ? "s" : ""}
                         </span>
                       ) : (
-                        <span className="text-xs text-slate-400 italic">Sin inasistencias injustificadas</span>
+                        <span className="text-xs text-slate-400 italic">Sin inasistencias</span>
                       )}
                     </label>
                   );
@@ -1806,12 +1796,12 @@ export default function ReporteAsistencias() {
 
             <div className="mb-5">
               <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Detalle del motivo <span className="text-slate-400 font-normal">(opcional — puedes personalizar)</span>
+                Detalle del motivo <span className="text-slate-400 font-normal">(opcional)</span>
               </label>
               <textarea
                 value={motivoJustificacion}
                 onChange={(e) => setMotivoJustificacion(e.target.value)}
-                placeholder="Ej: Enfermedad. Cita médica programada en el IESS a las 10:00..."
+                placeholder="Ej: Enfermedad. Cita médica programada..."
                 rows={3}
                 disabled={isJustificando}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
@@ -1821,7 +1811,7 @@ export default function ReporteAsistencias() {
             {diasJustificar.size > 0 && (
               <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
                 <FaInfoCircle className="inline mr-1" />
-                Se justificarán todas las inasistencias (i) de <strong>{diasJustificar.size} día(s)</strong> en <strong>todas las materias</strong> registradas. Las fugas (f) no se justifican aquí.
+                Se justificarán todas las inasistencias (i) de <strong>{diasJustificar.size} día(s)</strong> en <strong>todas las materias</strong> registradas.
               </div>
             )}
 
@@ -1962,29 +1952,21 @@ export default function ReporteAsistencias() {
                           {seleccionado && (
                             <>
                               <div className="mb-2">
-                                <div className="text-[11px] font-semibold text-purple-700 mb-1">Plantillas de acta (clic para agregar):</div>
+                                <div className="text-[11px] font-semibold text-purple-700 mb-1">Plantillas de acta:</div>
                                 <div className="flex flex-wrap gap-1.5">
-                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, `Acta de compromiso N° ${formatoNumeroActa(num)} firmada con el representante`)} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 hover:bg-purple-200 border border-purple-300 hover:border-purple-500 text-purple-800 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">
-                                    📄 Acta N° {formatoNumeroActa(num)}
-                                  </button>
-                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, "Se establece compromiso de mejorar la asistencia y comportamiento")} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">
-                                    ✍️ Compromiso
-                                  </button>
-                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, "El representante se compromete a dar seguimiento")} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">
-                                    👨‍👩‍👧 Seguimiento
-                                  </button>
-                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, "Se notifica a Dirección Distrital por reincidencia")} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">
-                                    ⚠️ Notificación DD
-                                  </button>
+                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, `Acta de compromiso N° ${formatoNumeroActa(num)} firmada con el representante`)} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 hover:bg-purple-200 border border-purple-300 text-purple-800 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">📄 Acta N° {formatoNumeroActa(num)}</button>
+                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, "Se establece compromiso de mejorar la asistencia y comportamiento")} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">✍️ Compromiso</button>
+                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, "El representante se compromete a dar seguimiento")} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">👨‍👩‍👧 Seguimiento</button>
+                                  <button type="button" onClick={() => agregarTextoDia(grupo.fecha, "Se notifica a Dirección Distrital por reincidencia")} disabled={isGuardandoActa} className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50">⚠️ Notificación DD</button>
                                 </div>
                               </div>
                               <textarea
                                 value={notasPorDia[grupo.fecha] || ""}
                                 onChange={(e) => setNotasPorDia((prev) => ({ ...prev, [grupo.fecha]: e.target.value }))}
-                                placeholder="Ej: Acta de compromiso N° 001 firmada con el representante. Se establece..."
+                                placeholder="Ej: Acta de compromiso N° 001 firmada..."
                                 rows={2}
                                 disabled={isGuardandoActa}
-                                className="w-full border border-purple-200 rounded-md px-2 py-1.5 text-xs focus:ring-2 focus:ring-purple-400 focus:border-purple-400 disabled:bg-slate-100"
+                                className="w-full border border-purple-200 rounded-md px-2 py-1.5 text-xs focus:ring-2 focus:ring-purple-400 disabled:bg-slate-100"
                               />
                             </>
                           )}
@@ -1994,7 +1976,7 @@ export default function ReporteAsistencias() {
                   </div>
                 ) : (
                   <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg text-center text-sm text-green-700">
-                    ✅ Todas las fugas de este estudiante ya tienen acta registrada (solo lectura).
+                    ✅ Todas las fugas de este estudiante ya tienen acta registrada.
                   </div>
                 )}
               </>
@@ -2003,7 +1985,7 @@ export default function ReporteAsistencias() {
             {registrosFugas.length > 0 && (
               <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800">
                 <FaInfoCircle className="inline mr-1" />
-                El estado <strong>F (fuga)</strong> NO cambia. Las fugas del <strong>mismo día</strong> se agrupan en <strong>una sola acta</strong>; cada día nuevo genera el siguiente número. Una vez registrada, el acta queda <strong>bloqueada</strong> (solo lectura).
+                El estado <strong>F (fuga)</strong> NO cambia. Las fugas del mismo día se agrupan en una sola acta. Una vez registrada, queda bloqueada (solo lectura).
               </div>
             )}
 
