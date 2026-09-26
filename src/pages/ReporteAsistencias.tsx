@@ -99,7 +99,7 @@ type RegistroFuga = {
 const MOTIVOS_JUSTIFICACION = [
   { label: "Enfermedad", icon: "🤒" },
   { label: "Cita médica", icon: "🏥" },
-  { label: "Problemas familiares", icon: "👨‍👩‍" },
+  { label: "Problemas familiares", icon: "👨‍👩‍👦" },
   { label: "Calamidad doméstica", icon: "🏠" },
   { label: "Fallecimiento familiar", icon: "🕯️" },
   { label: "Trámite personal", icon: "📋" },
@@ -311,7 +311,6 @@ export default function ReporteAsistencias() {
   const periodoInicializado = useRef(false);
 
   // ✅ OPTIMIZADO: Listener EN VIVO para asignaturas del docente.
-  // Si el docente modifica materias en MiHorario, se refleja aquí al instante.
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
 
@@ -504,7 +503,6 @@ export default function ReporteAsistencias() {
 
         const todas: AsistenciaData[] = [];
 
-        // ✅ 1 sola query en vez de N queries por grado
         if (fechasAFiltrar.length <= 30) {
           const q = query(
             collection(db, "asistencias"),
@@ -665,7 +663,6 @@ export default function ReporteAsistencias() {
       const cacheKey = `${tipoReporte}|${gradoEfectivo}|${fechasAFiltrar.join(",")}`;
       cacheAsistencias.current.delete(cacheKey);
     } else {
-      // Vista docente: limpiar cache
       let fechasAFiltrar: string[] = [];
 
       if (tipoReporte === "semanal") {
@@ -875,7 +872,6 @@ export default function ReporteAsistencias() {
     [user, userData],
   );
 
-  // ✅ Vista docente: datos consolidados por grado
   const datosDocenteConsolidado = useMemo(() => {
     return gradosDocente.map((grado) => {
       const asistenciasGrado = asistencias.filter(
@@ -1063,7 +1059,6 @@ export default function ReporteAsistencias() {
         ? `Justificado por tutor: ${motivoJustificacion.trim()}`
         : "Justificado por tutor";
 
-      // ✅ OPTIMIZADO: writeBatch para atomicidad (todas o ninguna)
       const batch = writeBatch(db);
       asistenciasAActualizar.forEach((asistenciaId) => {
         batch.update(doc(db, "asistencias", asistenciaId), {
@@ -1199,7 +1194,6 @@ export default function ReporteAsistencias() {
         return;
       }
 
-      // ✅ OPTIMIZADO: writeBatch para atomicidad (todas o ninguna)
       const batch = writeBatch(db);
       let opsCount = 0;
 
@@ -1817,6 +1811,7 @@ export default function ReporteAsistencias() {
 
   return (
     <Layout>
+      {/* ============ TOOLBAR: TIPO DE REPORTE + ACCIONES ============ */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
         <div className="flex flex-col xl:flex-row gap-2 xl:items-center">
           {/* Selector de tipo (segmentado) */}
@@ -1889,142 +1884,134 @@ export default function ReporteAsistencias() {
         </div>
       </div>
 
+      {/* ✅ TARJETA UNIFICADA: selector de rango + leyenda de estados */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
-        {tipoReporte === "semanal" && (
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 shrink-0">
-              <FaCalendarWeek className="text-blue-600" />
-              <span className="text-xs sm:text-sm font-semibold text-slate-700">
-                Semana:
-              </span>
-            </div>
-            <div className="flex items-center gap-1 sm:gap-2 min-w-0">
-              <button
-                onClick={() => cambiarSemana(-1)}
-                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                title="Semana anterior"
-              >
-                <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
-              </button>
-              <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
-                {formatFechaCorta(diasSemana[0])} —{" "}
-                {formatFechaCorta(diasSemana[4])}
-              </div>
-              <button
-                onClick={() => cambiarSemana(1)}
-                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                title="Semana siguiente"
-              >
-                <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
-              </button>
-              <button
-                onClick={irAHoy}
-                className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
-              >
-                Hoy
-              </button>
-            </div>
-          </div>
-        )}
-
-        {tipoReporte === "mensual" && (
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 shrink-0">
-              <FaCalendarAlt className="text-blue-600" />
-              <span className="text-xs sm:text-sm font-semibold text-slate-700">
-                Mes:
-              </span>
-            </div>
-            <div className="flex items-center gap-1 sm:gap-2 min-w-0">
-              <button
-                onClick={() => cambiarMes(-1)}
-                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                title="Mes anterior"
-              >
-                <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
-              </button>
-              <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
-                {NOMBRES_MESES[mesActual]} {anioActual}
-              </div>
-              <button
-                onClick={() => cambiarMes(1)}
-                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                title="Mes siguiente"
-              >
-                <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
-              </button>
-              <button
-                onClick={irAHoy}
-                className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
-              >
-                Hoy
-              </button>
-            </div>
-          </div>
-        )}
-
-        {tipoReporte === "trimestral" && (
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-            <div className="flex items-center gap-2 shrink-0">
-              <FaCalendarAlt className="text-blue-600" />
-              <span className="text-xs sm:text-sm font-semibold text-slate-700">
-                Período:
-              </span>
-            </div>
-            <select
-              value={periodoSeleccionado}
-              onChange={(e) => setPeriodoSeleccionado(e.target.value)}
-              className="w-full sm:w-auto min-w-0 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 focus:ring-2 focus:ring-blue-500"
-            >
-              {periodos.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.nombre} ({formatFechaCorta(parseFechaLocal(p.fechaInicio))}{" "}
-                  - {formatFechaCorta(parseFechaLocal(p.fechaFin))})
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
-
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] sm:text-xs">
-          <span className="font-semibold text-slate-700 text-xs sm:text-sm">
-            Estados:
-          </span>
-          {ESTADOS_ASISTENCIA.map((e) => {
-            const cfg = ESTADO_CONFIG[e.value];
-            const Icon = cfg.icon;
-            return (
-              <div key={e.value} className="flex items-center gap-1 sm:gap-1.5">
-                <div
-                  className={`w-4 h-4 sm:w-5 sm:h-5 rounded ${cfg.bgColor} flex items-center justify-center shrink-0`}
-                >
-                  <Icon className={`text-[10px] sm:text-xs ${cfg.textColor}`} />
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+          {/* Selector de rango */}
+          <div className="flex items-center justify-between gap-2 flex-1 min-w-55">
+            {tipoReporte === "semanal" && (
+              <>
+                <div className="flex items-center gap-2 shrink-0">
+                  <FaCalendarWeek className="text-blue-600" />
+                  <span className="text-xs sm:text-sm font-semibold text-slate-700">
+                    Semana:
+                  </span>
                 </div>
-                <span className="text-slate-600 whitespace-nowrap">
-                  <strong>{e.codigo || e.value}</strong> = {cfg.label}
-                </span>
-              </div>
-            );
-          })}
-          <div className="flex items-center gap-1 sm:gap-1.5">
-            <div className="w-4 h-4 sm:w-5 sm:h-5 rounded bg-slate-100 flex items-center justify-center text-slate-300 text-[10px] sm:text-xs shrink-0">
-              —
-            </div>
-            <span className="text-slate-600">Sin registro</span>
+                <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+                  <button
+                    onClick={() => cambiarSemana(-1)}
+                    className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
+                    title="Semana anterior"
+                  >
+                    <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
+                  </button>
+                  <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
+                    {formatFechaCorta(diasSemana[0])} —{" "}
+                    {formatFechaCorta(diasSemana[4])}
+                  </div>
+                  <button
+                    onClick={() => cambiarSemana(1)}
+                    className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
+                    title="Semana siguiente"
+                  >
+                    <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
+                  </button>
+                  <button
+                    onClick={irAHoy}
+                    className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
+                  >
+                    Hoy
+                  </button>
+                </div>
+              </>
+            )}
+
+            {tipoReporte === "mensual" && (
+              <>
+                <div className="flex items-center gap-2 shrink-0">
+                  <FaCalendarAlt className="text-blue-600" />
+                  <span className="text-xs sm:text-sm font-semibold text-slate-700">
+                    Mes:
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+                  <button
+                    onClick={() => cambiarMes(-1)}
+                    className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
+                    title="Mes anterior"
+                  >
+                    <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
+                  </button>
+                  <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
+                    {NOMBRES_MESES[mesActual]} {anioActual}
+                  </div>
+                  <button
+                    onClick={() => cambiarMes(1)}
+                    className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
+                    title="Mes siguiente"
+                  >
+                    <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
+                  </button>
+                  <button
+                    onClick={irAHoy}
+                    className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
+                  >
+                    Hoy
+                  </button>
+                </div>
+              </>
+            )}
+
+            {tipoReporte === "trimestral" && (
+              <>
+                <div className="flex items-center gap-2 shrink-0">
+                  <FaCalendarAlt className="text-blue-600" />
+                  <span className="text-xs sm:text-sm font-semibold text-slate-700">
+                    Período:
+                  </span>
+                </div>
+                <select
+                  value={periodoSeleccionado}
+                  onChange={(e) => setPeriodoSeleccionado(e.target.value)}
+                  className="flex-1 min-w-0 sm:flex-none px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 focus:ring-2 focus:ring-blue-500"
+                >
+                  {periodos.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombre} ({formatFechaCorta(parseFechaLocal(p.fechaInicio))}{" "}
+                      - {formatFechaCorta(parseFechaLocal(p.fechaFin))})
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
           </div>
-        </div>
-        <div className="mt-2 text-[10px] sm:text-[11px] text-slate-500 flex items-start gap-1">
-          <FaInfoCircle className="text-[10px] mt-0.5 shrink-0" />
-          <span>
-            Las fugas (f) <strong>no se justifican</strong>: se levanta acta de
-            compromiso física firmada con el representante. Celda con borde
-            verde = acta firmada (inmutable).
-          </span>
+
+          {/* Leyenda de estados: solo los chips, sin nota de fugas ni "Sin registro" */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] sm:text-xs xl:border-l xl:border-slate-200 xl:pl-4">
+            <span className="font-semibold text-slate-700 text-xs sm:text-sm">
+              Estados:
+            </span>
+            {ESTADOS_ASISTENCIA.map((e) => {
+              const cfg = ESTADO_CONFIG[e.value];
+              const Icon = cfg.icon;
+              return (
+                <div key={e.value} className="flex items-center gap-1 sm:gap-1.5">
+                  <div
+                    className={`w-4 h-4 sm:w-5 sm:h-5 rounded ${cfg.bgColor} flex items-center justify-center shrink-0`}
+                  >
+                    <Icon className={`text-[10px] sm:text-xs ${cfg.textColor}`} />
+                  </div>
+                  <span className="text-slate-600 whitespace-nowrap">
+                    <strong>{e.codigo || e.value}</strong> = {cfg.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
+      {/* ============ TOGGLE VISTA TUTOR / DOCENTE ============ */}
       {(esTutor || gradosDocente.length > 0) && (
         <div className="grid grid-cols-2 gap-2 mb-4 sm:mb-6 lg:flex lg:gap-2">
           {esTutor && (
@@ -2078,6 +2065,7 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
+      {/* ============ VISTA TUTOR ============ */}
       {vistaEfectiva === "tutor" && esTutor && (
         <div className="space-y-4">
           {gradosTutor.length > 1 && (
@@ -2333,6 +2321,7 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
+      {/* ============ VISTA DOCENTE ============ */}
       {vistaEfectiva === "docente" && (
         <div className="space-y-4">
           {gradosDocente.length === 0 ? (
@@ -2521,6 +2510,7 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
+      {/* ============ MODAL: JUSTIFICAR INASISTENCIAS ============ */}
       {showJustificarModal && estudianteJustificar && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -2723,6 +2713,7 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
+      {/* ============ MODAL: ACTA DE COMPROMISO ============ */}
       {showActaModal && estudianteActa && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
@@ -3038,6 +3029,7 @@ export default function ReporteAsistencias() {
         </div>
       )}
 
+      {/* ============ TOASTS ============ */}
       <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
