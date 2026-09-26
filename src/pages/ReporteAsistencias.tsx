@@ -1817,104 +1817,109 @@ export default function ReporteAsistencias() {
 
   return (
     <Layout>
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
-        <div className="flex flex-wrap gap-2 items-center">
-          <button
-            onClick={() => setTipoReporte("semanal")}
-            className={`flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
-              tipoReporte === "semanal"
-                ? "bg-blue-600 text-white shadow"
-                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-            }`}
-          >
-            <FaCalendarWeek className="text-sm" />
-            Semanal
-          </button>
-          <button
-            onClick={() => setTipoReporte("mensual")}
-            className={`flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
-              tipoReporte === "mensual"
-                ? "bg-blue-600 text-white shadow"
-                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-            }`}
-          >
-            <FaCalendarAlt className="text-sm" />
-            Mensual
-          </button>
-          <button
-            onClick={() => setTipoReporte("trimestral")}
-            className={`flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
-              tipoReporte === "trimestral"
-                ? "bg-blue-600 text-white shadow"
-                : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-            }`}
-          >
-            <FaCalendarAlt className="text-sm" />
-            Trimestral/Quimestral
-          </button>
-
-          <button
-            onClick={refrescarVista}
-            className="flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white shadow"
-            title="Refrescar datos desde Firebase"
-          >
-            <FaSync className="text-sm" />
-            Refrescar
-          </button>
-
-          <button
-            onClick={handlePrint}
-            disabled={!puedeImprimir}
-            className="flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-800 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Imprimir reporte"
-          >
-            <FaPrint className="text-sm" />
-            Imprimir
-          </button>
-
-          <button
-            onClick={handlePrintDetalle}
-            disabled={!puedeImprimir || vistaEfectiva !== "tutor"}
-            className="flex-1 min-w-32 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Imprimir listado lineal con detalle por materia (solo vista tutor)"
-          >
-            <FaClipboardList className="text-sm" />
-            Detalle
-          </button>
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
+        <div className="flex flex-col xl:flex-row gap-2 xl:items-center">
+          {/* Selector de tipo (segmentado) */}
+          <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-lg xl:flex-1">
+            <button
+              onClick={() => setTipoReporte("semanal")}
+              className={`px-1 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                tipoReporte === "semanal"
+                  ? "bg-blue-600 text-white shadow"
+                  : "text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              <FaCalendarWeek className="text-[11px] sm:text-sm shrink-0" />
+              <span className="truncate">Semanal</span>
+            </button>
+            <button
+              onClick={() => setTipoReporte("mensual")}
+              className={`px-1 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                tipoReporte === "mensual"
+                  ? "bg-blue-600 text-white shadow"
+                  : "text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              <FaCalendarAlt className="text-[11px] sm:text-sm shrink-0" />
+              <span className="truncate">Mensual</span>
+            </button>
+            <button
+              onClick={() => setTipoReporte("trimestral")}
+              className={`px-1 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                tipoReporte === "trimestral"
+                  ? "bg-blue-600 text-white shadow"
+                  : "text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              <FaCalendarAlt className="text-[11px] sm:text-sm shrink-0" />
+              <span className="truncate">
+                Trimestral<span className="hidden lg:inline">/Quimestral</span>
+              </span>
+            </button>
+          </div>
+          {/* Acciones */}
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={refrescarVista}
+              className="px-2 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-700 text-white shadow"
+              title="Refrescar datos desde Firebase"
+            >
+              <FaSync className="text-[11px] sm:text-sm shrink-0" />
+              <span className="truncate">Refrescar</span>
+            </button>
+            <button
+              onClick={handlePrint}
+              disabled={!puedeImprimir}
+              className="px-2 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 bg-slate-700 hover:bg-slate-800 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Imprimir reporte"
+            >
+              <FaPrint className="text-[11px] sm:text-sm shrink-0" />
+              <span className="truncate">Imprimir</span>
+            </button>
+            <button
+              onClick={handlePrintDetalle}
+              disabled={!puedeImprimir || vistaEfectiva !== "tutor"}
+              className="px-2 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Imprimir listado lineal con detalle por materia (solo vista tutor)"
+            >
+              <FaClipboardList className="text-[11px] sm:text-sm shrink-0" />
+              <span className="truncate">Detalle</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
         {tipoReporte === "semanal" && (
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <FaCalendarWeek className="text-blue-600 text-lg" />
-              <span className="text-sm font-semibold text-slate-700">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <FaCalendarWeek className="text-blue-600" />
+              <span className="text-xs sm:text-sm font-semibold text-slate-700">
                 Semana:
               </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2 min-w-0">
               <button
                 onClick={() => cambiarSemana(-1)}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
                 title="Semana anterior"
               >
-                <FaChevronLeft className="text-slate-600" />
+                <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
               </button>
-              <div className="px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm font-semibold text-blue-900 min-w-55 text-center">
+              <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
                 {formatFechaCorta(diasSemana[0])} —{" "}
                 {formatFechaCorta(diasSemana[4])}
               </div>
               <button
                 onClick={() => cambiarSemana(1)}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
                 title="Semana siguiente"
               >
-                <FaChevronRight className="text-slate-600" />
+                <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
               </button>
               <button
                 onClick={irAHoy}
-                className="ml-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors"
+                className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
               >
                 Hoy
               </button>
@@ -1923,32 +1928,34 @@ export default function ReporteAsistencias() {
         )}
 
         {tipoReporte === "mensual" && (
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <FaCalendarAlt className="text-blue-600 text-lg" />
-              <span className="text-sm font-semibold text-slate-700">Mes:</span>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <FaCalendarAlt className="text-blue-600" />
+              <span className="text-xs sm:text-sm font-semibold text-slate-700">
+                Mes:
+              </span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2 min-w-0">
               <button
                 onClick={() => cambiarMes(-1)}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
                 title="Mes anterior"
               >
-                <FaChevronLeft className="text-slate-600" />
+                <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
               </button>
-              <div className="px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm font-semibold text-blue-900 min-w-55 text-center">
+              <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0">
                 {NOMBRES_MESES[mesActual]} {anioActual}
               </div>
               <button
                 onClick={() => cambiarMes(1)}
-                className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
                 title="Mes siguiente"
               >
-                <FaChevronRight className="text-slate-600" />
+                <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
               </button>
               <button
                 onClick={irAHoy}
-                className="ml-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors"
+                className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
               >
                 Hoy
               </button>
@@ -1957,17 +1964,17 @@ export default function ReporteAsistencias() {
         )}
 
         {tipoReporte === "trimestral" && (
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <FaCalendarAlt className="text-blue-600 text-lg" />
-              <span className="text-sm font-semibold text-slate-700">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <FaCalendarAlt className="text-blue-600" />
+              <span className="text-xs sm:text-sm font-semibold text-slate-700">
                 Período:
               </span>
             </div>
             <select
               value={periodoSeleccionado}
               onChange={(e) => setPeriodoSeleccionado(e.target.value)}
-              className="px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm font-semibold text-blue-900 focus:ring-2 focus:ring-blue-500"
+              className="w-full sm:w-auto min-w-0 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 focus:ring-2 focus:ring-blue-500"
             >
               {periodos.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -1980,46 +1987,50 @@ export default function ReporteAsistencias() {
         )}
       </div>
 
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-6">
-        <div className="flex flex-wrap items-center gap-4 text-xs">
-          <span className="font-semibold text-slate-700">Estados:</span>
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] sm:text-xs">
+          <span className="font-semibold text-slate-700 text-xs sm:text-sm">
+            Estados:
+          </span>
           {ESTADOS_ASISTENCIA.map((e) => {
             const cfg = ESTADO_CONFIG[e.value];
             const Icon = cfg.icon;
             return (
-              <div key={e.value} className="flex items-center gap-1.5">
+              <div key={e.value} className="flex items-center gap-1 sm:gap-1.5">
                 <div
-                  className={`w-5 h-5 rounded ${cfg.bgColor} flex items-center justify-center`}
+                  className={`w-4 h-4 sm:w-5 sm:h-5 rounded ${cfg.bgColor} flex items-center justify-center shrink-0`}
                 >
-                  <Icon className={`text-xs ${cfg.textColor}`} />
+                  <Icon className={`text-[10px] sm:text-xs ${cfg.textColor}`} />
                 </div>
-                <span className="text-slate-600">
+                <span className="text-slate-600 whitespace-nowrap">
                   <strong>{e.codigo || e.value}</strong> = {cfg.label}
                 </span>
               </div>
             );
           })}
-          <div className="flex items-center gap-1.5">
-            <div className="w-5 h-5 rounded bg-slate-100 flex items-center justify-center text-slate-300 text-xs">
+          <div className="flex items-center gap-1 sm:gap-1.5">
+            <div className="w-4 h-4 sm:w-5 sm:h-5 rounded bg-slate-100 flex items-center justify-center text-slate-300 text-[10px] sm:text-xs shrink-0">
               —
             </div>
             <span className="text-slate-600">Sin registro</span>
           </div>
         </div>
-        <div className="mt-2 text-[11px] text-slate-500 flex items-center gap-1">
-          <FaInfoCircle className="text-[10px]" />
-          Las fugas (f) <strong>no se justifican</strong>: se levanta acta de
-          compromiso física firmada con el representante. Celda con borde verde
-          = acta firmada (inmutable).
+        <div className="mt-2 text-[10px] sm:text-[11px] text-slate-500 flex items-start gap-1">
+          <FaInfoCircle className="text-[10px] mt-0.5 shrink-0" />
+          <span>
+            Las fugas (f) <strong>no se justifican</strong>: se levanta acta de
+            compromiso física firmada con el representante. Celda con borde
+            verde = acta firmada (inmutable).
+          </span>
         </div>
       </div>
 
       {(esTutor || gradosDocente.length > 0) && (
-        <div className="flex gap-2 mb-6">
+        <div className="grid grid-cols-2 gap-2 mb-4 sm:mb-6 lg:flex lg:gap-2">
           {esTutor && (
             <button
               onClick={() => setVistaActiva("tutor")}
-              className={`flex-1 sm:flex-none px-5 py-3 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+              className={`px-3 sm:px-5 py-2 sm:py-3 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${
                 vistaEfectiva === "tutor"
                   ? "bg-purple-600 text-white shadow-lg"
                   : "bg-white text-slate-700 border border-slate-200 hover:border-purple-300"
@@ -2029,7 +2040,7 @@ export default function ReporteAsistencias() {
               Vista Tutor
               {gradosTutor.length > 0 && (
                 <span
-                  className={`px-2 py-0.5 rounded-full text-xs ${
+                  className={`px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] sm:text-xs ${
                     vistaEfectiva === "tutor"
                       ? "bg-white text-purple-700"
                       : "bg-purple-100 text-purple-700"
@@ -2043,7 +2054,7 @@ export default function ReporteAsistencias() {
           {gradosDocente.length > 0 && (
             <button
               onClick={() => setVistaActiva("docente")}
-              className={`flex-1 sm:flex-none px-5 py-3 rounded-xl text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+              className={`px-3 sm:px-5 py-2 sm:py-3 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${
                 vistaEfectiva === "docente"
                   ? "bg-cyan-600 text-white shadow-lg"
                   : "bg-white text-slate-700 border border-slate-200 hover:border-cyan-300"
@@ -2053,7 +2064,7 @@ export default function ReporteAsistencias() {
               Vista Docente
               {gradosDocente.length > 0 && (
                 <span
-                  className={`px-2 py-0.5 rounded-full text-xs ${
+                  className={`px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] sm:text-xs ${
                     vistaEfectiva === "docente"
                       ? "bg-white text-cyan-700"
                       : "bg-cyan-100 text-cyan-700"
