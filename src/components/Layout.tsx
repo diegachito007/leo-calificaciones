@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import type { ReactNode } from 'react';
-import { useAuth } from '../context/AuthContext';
-import { useData } from '../context/DataContext';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useState, useEffect } from "react";
+import type { ReactNode } from "react";
+import { useAuth } from "../context/AuthContext";
+import { useData } from "../context/DataContext";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   FaTrophy,
   FaSignOutAlt,
@@ -25,7 +25,7 @@ import {
   FaBars,
   FaTimes,
   FaExchangeAlt,
-} from 'react-icons/fa';
+} from "react-icons/fa";
 
 interface LayoutProps {
   children: ReactNode;
@@ -37,39 +37,105 @@ interface LayoutProps {
   showFooter?: boolean;
 }
 
-const RAIL_KEY = 'eduX_rail_open';
+const RAIL_KEY = "eduX_rail_open";
+const ACTIVE_ROLE_KEY = "eduX_activeRole";
+
+// ✅ LOGOS: versión completa (rail expandido + móvil) e isotipo (rail colapsado)
+// ⚠️ Ajusta aquí la extensión/nombre real de tus archivos en /public
+const LOGO_FULL = "/logo.eduX.png";
+const LOGO_ICON = "/logo.eduX.mini.png";
 
 interface NavItem {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  roles: ('super_admin' | 'docente')[];
+  roles: ("super_admin" | "docente")[];
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: '/', label: 'Inicio', icon: FaHome, roles: ['super_admin', 'docente'] },
-  { to: '/calificaciones', label: 'Asistencia · Notas', icon: FaChartBar, roles: ['super_admin', 'docente'] },
-  { to: '/reporte-asistencias', label: 'Reporte Asistencias', icon: FaClipboardCheck, roles: ['super_admin', 'docente'] },
-  { to: '/reporte-notas', label: 'Reporte Notas', icon: FaExclamationTriangle, roles: ['super_admin', 'docente'] },
-  { to: '/mi-horario', label: 'Mi Horario', icon: FaChalkboardTeacher, roles: ['super_admin', 'docente'] },
-  { to: '/estudiantes', label: 'Estudiantes', icon: FaUsers, roles: ['super_admin', 'docente'] },
-  { to: '/gestion-usuarios', label: 'Gestión Usuarios', icon: FaUserShield, roles: ['super_admin'] },
-  { to: '/gestion-materias', label: 'Gestión Materias', icon: FaChalkboardTeacher, roles: ['super_admin'] },
-  { to: '/matriculas', label: 'Matrículas', icon: FaUserGraduate, roles: ['super_admin'] },
-  { to: '/grados', label: 'Grados', icon: FaGraduationCap, roles: ['super_admin'] },
-  { to: '/ambitos-destrezas', label: 'Ámbitos · Destrezas', icon: FaBook, roles: ['super_admin'] },
-  { to: '/anios-lectivos', label: 'Años Lectivos', icon: FaCalendarAlt, roles: ['super_admin'] },
-  { to: '/configuracion-institucional', label: 'Config. Institucional', icon: FaCogs, roles: ['super_admin'] },
+  { to: "/", label: "Inicio", icon: FaHome, roles: ["super_admin", "docente"] },
+  {
+    to: "/calificaciones",
+    label: "Asistencia · Notas",
+    icon: FaChartBar,
+    roles: ["super_admin", "docente"],
+  },
+  {
+    to: "/reporte-asistencias",
+    label: "Reporte Asistencias",
+    icon: FaClipboardCheck,
+    roles: ["super_admin", "docente"],
+  },
+  {
+    to: "/reporte-notas",
+    label: "Reporte Notas",
+    icon: FaExclamationTriangle,
+    roles: ["super_admin", "docente"],
+  },
+  {
+    to: "/mi-horario",
+    label: "Mi Horario",
+    icon: FaChalkboardTeacher,
+    roles: ["super_admin", "docente"],
+  },
+  {
+    to: "/estudiantes",
+    label: "Estudiantes",
+    icon: FaUsers,
+    roles: ["super_admin", "docente"],
+  },
+  {
+    to: "/gestion-usuarios",
+    label: "Gestión Usuarios",
+    icon: FaUserShield,
+    roles: ["super_admin"],
+  },
+  {
+    to: "/gestion-materias",
+    label: "Gestión Materias",
+    icon: FaChalkboardTeacher,
+    roles: ["super_admin"],
+  },
+  {
+    to: "/matriculas",
+    label: "Matrículas",
+    icon: FaUserGraduate,
+    roles: ["super_admin"],
+  },
+  {
+    to: "/grados",
+    label: "Grados",
+    icon: FaGraduationCap,
+    roles: ["super_admin"],
+  },
+  {
+    to: "/ambitos-destrezas",
+    label: "Ámbitos · Destrezas",
+    icon: FaBook,
+    roles: ["super_admin"],
+  },
+  {
+    to: "/anios-lectivos",
+    label: "Años Lectivos",
+    icon: FaCalendarAlt,
+    roles: ["super_admin"],
+  },
+  {
+    to: "/configuracion-institucional",
+    label: "Config. Institucional",
+    icon: FaCogs,
+    roles: ["super_admin"],
+  },
 ];
 
-const PENDING_ROLE_DIALOG_KEY = 'eduX_pendingRoleDialog';
+const PENDING_ROLE_DIALOG_KEY = "eduX_pendingRoleDialog";
 
 export default function Layout({
   children,
   title,
   subtitle,
   showBack = false,
-  backTo = '/',
+  backTo = "/",
   action,
 }: LayoutProps) {
   const { user, userData, logout } = useAuth();
@@ -77,10 +143,11 @@ export default function Layout({
   const location = useLocation();
   const [showDropdown, setShowDropdown] = useState(false);
   const [logoError, setLogoError] = useState(false);
+  const [logoIconError, setLogoIconError] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [railOpen, setRailOpen] = useState<boolean>(() => {
     try {
-      return localStorage.getItem(RAIL_KEY) === '1';
+      return localStorage.getItem(RAIL_KEY) === "1";
     } catch {
       return false;
     }
@@ -89,25 +156,52 @@ export default function Layout({
 
   const nombreUsuario = userData?.nombreDocumento
     ? userData.nombreDocumento
-    : user?.displayName || 'Usuario';
+    : user?.displayName || "Usuario";
 
   const tutorDeAnioActivo = (() => {
     if (!userData?.tutorDe) return [];
-    return grados.filter((g) => userData.tutorDe?.includes(g.id)).map((g) => g.id);
+    return grados
+      .filter((g) => userData.tutorDe?.includes(g.id))
+      .map((g) => g.id);
   })();
 
-  const rol = userData?.role === 'super_admin' ? 'super_admin' : 'docente';
   const hasDualRole =
-    userData?.role === 'super_admin' &&
+    userData?.role === "super_admin" &&
     ((userData?.gradosAsignados?.length ?? 0) > 0 ||
       (userData?.tutorDe?.length ?? 0) > 0);
+  // ✅ Rol activo elegido en Dashboard (solo aplica a usuarios con doble rol)
+  const [rolOverride, setRolOverride] = useState<
+    "super_admin" | "docente" | null
+  >(() => {
+    try {
+      return localStorage.getItem(ACTIVE_ROLE_KEY) as
+        | "super_admin"
+        | "docente"
+        | null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    const onRole = (e: Event) => {
+      setRolOverride((e as CustomEvent<"super_admin" | "docente">).detail);
+    };
+    window.addEventListener("eduX:activeRole", onRole);
+    return () => window.removeEventListener("eduX:activeRole", onRole);
+  }, []);
+  const rol =
+    hasDualRole && rolOverride
+      ? rolOverride
+      : userData?.role === "super_admin"
+        ? "super_admin"
+        : "docente";
   const navItems = NAV_ITEMS.filter((n) => n.roles.includes(rol));
 
   const toggleRail = () => {
     setRailOpen((v) => {
       const next = !v;
       try {
-        localStorage.setItem(RAIL_KEY, next ? '1' : '0');
+        localStorage.setItem(RAIL_KEY, next ? "1" : "0");
       } catch {
         /* sin almacenamiento */
       }
@@ -118,11 +212,11 @@ export default function Layout({
   const cambiarRolCrossPage = () => {
     setShowDropdown(false);
     try {
-      localStorage.setItem(PENDING_ROLE_DIALOG_KEY, '1');
+      localStorage.setItem(PENDING_ROLE_DIALOG_KEY, "1");
     } catch {
       /* sin almacenamiento */
     }
-    navigate('/');
+    navigate("/");
   };
 
   const mostrarBarraNavegacion = title || subtitle || action || showBack;
@@ -135,7 +229,7 @@ export default function Layout({
       <div className="px-4 py-3 border-b border-slate-100">
         <div className="flex items-center gap-3">
           <img
-            src={user?.photoURL || 'https://via.placeholder.com/150'}
+            src={user?.photoURL || "https://via.placeholder.com/150"}
             alt="avatar"
             className="w-14 h-14 rounded-full border-2 border-blue-500 object-cover"
           />
@@ -146,7 +240,7 @@ export default function Layout({
             <p className="text-xs text-slate-500 truncate">{user?.email}</p>
             <div className="flex gap-1 mt-1 flex-wrap">
               <span className="inline-block px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
-                {rol === 'super_admin' ? 'Super Admin' : 'Docente'}
+                {rol === "super_admin" ? "Super Admin" : "Docente"}
               </span>
               {tutorDeAnioActivo.length > 0 && (
                 <span className="inline-block px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
@@ -161,7 +255,7 @@ export default function Layout({
         <button
           onClick={() => {
             setShowDropdown(false);
-            navigate('/configuracion');
+            navigate("/configuracion");
           }}
           className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
         >
@@ -170,7 +264,9 @@ export default function Layout({
           </div>
           <div className="text-left flex-1">
             <p className="font-medium">Mi Perfil</p>
-            <p className="text-xs text-slate-500">Editar nombre para documentos</p>
+            <p className="text-xs text-slate-500">
+              Editar nombre para documentos
+            </p>
           </div>
         </button>
         {hasDualRole && (
@@ -187,11 +283,11 @@ export default function Layout({
             </div>
           </button>
         )}
-        {rol === 'super_admin' && (
+        {rol === "super_admin" && (
           <button
             onClick={() => {
               setShowDropdown(false);
-              navigate('/configuracion-institucional');
+              navigate("/configuracion-institucional");
             }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
           >
@@ -229,29 +325,59 @@ export default function Layout({
       <aside
         className={`hidden lg:flex lg:flex-col shrink-0 bg-white border-r border-slate-200 shadow-sm z-30 transition-all duration-200
           lg:sticky lg:top-0 lg:h-screen
-          ${railOpen ? 'lg:w-56' : 'lg:w-16'}`}
+          ${railOpen ? "lg:w-56" : "lg:w-16"}`}
       >
         {/* Logo + toggle */}
-        <div className={`flex items-center px-2 py-3 border-b border-slate-100 ${railOpen ? 'justify-between' : 'justify-center'}`}>
-          <Link to="/" className="flex items-center group shrink-0" title="eduX">
-            {logoError ? (
-              <div className="bg-linear-to-br from-blue-600 to-purple-600 p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
-                <FaTrophy className="text-white text-xl" />
+        <div
+          className={`flex px-2 py-3 border-b border-slate-100 ${
+            railOpen
+              ? "flex-row items-center justify-between"
+              : "flex-col items-center gap-1.5"
+          }`}
+        >
+          <Link
+            to="/"
+            className={`flex items-center group shrink-0 ${
+              railOpen ? "" : "w-12 justify-center"
+            }`}
+            title="eduX"
+          >
+            {railOpen ? (
+              // ✅ Rail expandido: logo completo horizontal
+              logoError ? (
+                <div className="bg-linear-to-br from-blue-600 to-purple-600 p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
+                  <FaTrophy className="text-white text-xl" />
+                </div>
+              ) : (
+                <img
+                  src={LOGO_FULL}
+                  alt="eduX"
+                  className="h-9 w-auto object-contain group-hover:scale-105 transition-transform"
+                  onError={() => setLogoError(true)}
+                />
+              )
+            ) : // ✅ Rail colapsado: isotipo cuadrado (solo la letra)
+            logoIconError ? (
+              <div className="bg-linear-to-br from-blue-600 to-purple-600 p-1.5 rounded-lg shadow-md group-hover:scale-105 transition-transform">
+                <FaTrophy className="text-white text-sm" />
               </div>
             ) : (
               <img
-                src="/logo.eduX.png"
-                className={`h-9 w-auto object-contain group-hover:scale-105 transition-transform ${!railOpen && 'max-w-9'}`}
-                onError={() => setLogoError(true)}
+                src={LOGO_ICON}
+                alt="eduX"
+                className="h-9 w-9 object-contain group-hover:scale-105 transition-transform"
+                onError={() => setLogoIconError(true)}
               />
             )}
           </Link>
           <button
             onClick={toggleRail}
             className="flex items-center justify-center w-7 h-7 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors shrink-0"
-            title={railOpen ? 'Colapsar menú' : 'Expandir menú'}
+            title={railOpen ? "Colapsar menú" : "Expandir menú"}
           >
-            <FaChevronDown className={`text-[10px] transition-transform ${railOpen ? '-rotate-90' : 'rotate-90'}`} />
+            <FaChevronDown
+              className={`text-[10px] transition-transform ${railOpen ? "-rotate-90" : "rotate-90"}`}
+            />
           </button>
         </div>
 
@@ -266,44 +392,59 @@ export default function Layout({
                 to={item.to}
                 title={item.label}
                 className={`flex items-center gap-2 rounded-lg transition-colors shrink-0
-                  ${railOpen ? 'w-full px-2 py-2' : 'justify-center w-12 h-10 mx-auto'}
-                  ${activo ? 'bg-blue-600 text-white shadow' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}
+                  ${railOpen ? "w-full px-2 py-2" : "justify-center w-12 h-10 mx-auto"}
+                  ${activo ? "bg-blue-600 text-white shadow" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"}`}
               >
                 <Icon className="text-sm shrink-0" />
-                {railOpen && <span className="text-xs font-semibold truncate">{item.label}</span>}
+                {railOpen && (
+                  <span className="text-xs font-semibold truncate">
+                    {item.label}
+                  </span>
+                )}
               </Link>
             );
           })}
         </nav>
 
         {/* Avatar al pie del rail */}
-        <div className={`border-t border-slate-100 p-2 relative ${railOpen ? '' : 'flex justify-center'}`}>
+        <div
+          className={`border-t border-slate-100 p-2 relative ${railOpen ? "" : "flex justify-center"}`}
+        >
           <button
             onClick={() => setShowDropdown(!showDropdown)}
-            className={`flex items-center gap-2 rounded-lg hover:bg-slate-100 transition-colors ${railOpen ? 'w-full px-2 py-2' : 'justify-center w-12 h-12'}`}
+            className={`flex items-center gap-2 rounded-lg hover:bg-slate-100 transition-colors ${railOpen ? "w-full px-2 py-2" : "justify-center w-12 h-12"}`}
             title={nombreUsuario}
           >
             <img
-              src={user?.photoURL || 'https://via.placeholder.com/150'}
+              src={user?.photoURL || "https://via.placeholder.com/150"}
               alt="avatar"
               className="w-10 h-10 rounded-full border-2 border-blue-500 shadow-md object-cover shrink-0"
             />
             {railOpen && (
               <div className="flex-1 min-w-0 text-left">
-                <span className="block text-xs font-semibold text-slate-800 truncate">{nombreUsuario}</span>
+                <span className="block text-xs font-semibold text-slate-800 truncate">
+                  {nombreUsuario}
+                </span>
                 <span className="block text-[10px] text-slate-500 truncate">
-                  {rol === 'super_admin' ? 'Super Admin' : 'Docente'}
-                  {tutorDeAnioActivo.length > 0 ? ` · Tutor` : ''}
+                  {rol === "super_admin" ? "Super Admin" : "Docente"}
+                  {tutorDeAnioActivo.length > 0 ? ` · Tutor` : ""}
                 </span>
               </div>
             )}
-            {railOpen && <FaChevronDown className={`text-[10px] text-slate-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`} />}
+            {railOpen && (
+              <FaChevronDown
+                className={`text-[10px] text-slate-400 transition-transform ${showDropdown ? "rotate-180" : ""}`}
+              />
+            )}
           </button>
 
           {showDropdown && (
             <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowDropdown(false)} />
-              {renderDropdown('left-2 bottom-16')}
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setShowDropdown(false)}
+              />
+              {renderDropdown("left-2 bottom-16")}
             </>
           )}
         </div>
@@ -313,14 +454,18 @@ export default function Layout({
       <div className="lg:hidden w-full flex flex-col min-h-screen">
         <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-sm">
           <div className="flex items-center justify-between px-3 py-2.5">
-            {/* Izquierda: hamburguesa + logo */}
+            {/* Izquierda: hamburguesa + logo completo (hay espacio horizontal) */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                 className="w-10 h-10 flex items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100"
-                title={mobileMenuOpen ? 'Cerrar menú' : 'Abrir menú'}
+                title={mobileMenuOpen ? "Cerrar menú" : "Abrir menú"}
               >
-                {mobileMenuOpen ? <FaTimes className="text-base" /> : <FaBars className="text-base" />}
+                {mobileMenuOpen ? (
+                  <FaTimes className="text-base" />
+                ) : (
+                  <FaBars className="text-base" />
+                )}
               </button>
               <Link to="/" className="flex items-center" title="eduX">
                 {logoError ? (
@@ -329,7 +474,8 @@ export default function Layout({
                   </div>
                 ) : (
                   <img
-                    src="/logo.eduX.png"
+                    src={LOGO_FULL}
+                    alt="eduX"
                     className="h-9 w-auto object-contain"
                     onError={() => setLogoError(true)}
                   />
@@ -345,15 +491,18 @@ export default function Layout({
                 title={nombreUsuario}
               >
                 <img
-                  src={user?.photoURL || 'https://via.placeholder.com/150'}
+                  src={user?.photoURL || "https://via.placeholder.com/150"}
                   alt="avatar"
                   className="w-10 h-10 rounded-full border-2 border-blue-500 object-cover"
                 />
               </button>
               {showDropdown && (
                 <>
-                  <div className="fixed inset-0 z-40" onClick={() => setShowDropdown(false)} />
-                  {renderDropdown('right-2 top-12')}
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setShowDropdown(false)}
+                  />
+                  {renderDropdown("right-2 top-12")}
                 </>
               )}
             </div>
@@ -371,11 +520,15 @@ export default function Layout({
                     to={item.to}
                     onClick={() => setMobileMenuOpen(false)}
                     className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-lg transition-colors ${
-                      activo ? 'bg-blue-600 text-white' : 'text-slate-700 hover:bg-slate-100'
+                      activo
+                        ? "bg-blue-600 text-white"
+                        : "text-slate-700 hover:bg-slate-100"
                     }`}
                   >
                     <Icon className="text-sm shrink-0" />
-                    <span className="text-sm font-semibold truncate">{item.label}</span>
+                    <span className="text-sm font-semibold truncate">
+                      {item.label}
+                    </span>
                   </Link>
                 );
               })}
@@ -400,12 +553,22 @@ export default function Layout({
                   )}
                   {(title || subtitle) && (
                     <div>
-                      {title && <h2 className="text-xl sm:text-2xl font-bold text-slate-800">{title}</h2>}
-                      {subtitle && <p className="text-slate-600 text-sm mt-1">{subtitle}</p>}
+                      {title && (
+                        <h2 className="text-xl sm:text-2xl font-bold text-slate-800">
+                          {title}
+                        </h2>
+                      )}
+                      {subtitle && (
+                        <p className="text-slate-600 text-sm mt-1">
+                          {subtitle}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
-                {action && <div className="flex items-center gap-3">{action}</div>}
+                {action && (
+                  <div className="flex items-center gap-3">{action}</div>
+                )}
               </div>
             )}
             {children}
@@ -430,12 +593,20 @@ export default function Layout({
                 )}
                 {(title || subtitle) && (
                   <div>
-                    {title && <h2 className="text-2xl font-bold text-slate-800">{title}</h2>}
-                    {subtitle && <p className="text-slate-600 text-sm mt-1">{subtitle}</p>}
+                    {title && (
+                      <h2 className="text-2xl font-bold text-slate-800">
+                        {title}
+                      </h2>
+                    )}
+                    {subtitle && (
+                      <p className="text-slate-600 text-sm mt-1">{subtitle}</p>
+                    )}
                   </div>
                 )}
               </div>
-              {action && <div className="flex items-center gap-3">{action}</div>}
+              {action && (
+                <div className="flex items-center gap-3">{action}</div>
+              )}
             </div>
           )}
           {children}

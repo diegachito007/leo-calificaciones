@@ -1767,10 +1767,10 @@ export default function Calificaciones() {
 
               {vistaPanel0 === "horario" ? (
                 <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
-                  <table className="w-full text-xs">
+                  <table className="w-full table-fixed text-xs min-w-160">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        <th className="px-2 py-2 w-16"></th>
+                        <th className="px-2 py-2 w-14"></th>
                         {NOMBRES_DIAS.map((d, di) => {
                           const esHoy = di + 1 === DIA_HOY;
                           return (
