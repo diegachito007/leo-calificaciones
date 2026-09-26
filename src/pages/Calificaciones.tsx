@@ -268,14 +268,19 @@ export default function Calificaciones() {
   const [fechaAsistencia, setFechaAsistencia] = useState(
     new Date().toISOString().split("T")[0],
   );
-  // ✅ Horas pedagógicas del bloque que se está registrando
-  const [horasAsistencia, setHorasAsistencia] = useState<number[]>([]);
+  // ✅ Horas elegidas manualmente, atadas a una fecha específica
+  const [horasManualOverride, setHorasManualOverride] = useState<{
+    fecha: string;
+    horas: number[];
+  } | null>(null);
+
   const [horasPending, setHorasPending] = useState<{
     gradoId: string;
     gradoNombre: string;
     destrezaId: string | null;
     horas: number[];
     presionada: number;
+    fecha: string;
   } | null>(null);
   const [asistencias, setAsistencias] = useState<
     Record<
@@ -406,16 +411,97 @@ export default function Calificaciones() {
   const materiaSeleccionadaEfectiva = esGradoBachillerato
     ? materiaEfectivaId
     : ambitoEfectivoId;
+
+  // ✅ Asignatura del grado actual que SÍ tiene horario configurado
+  const asignaturaConHorario = useMemo(() => {
+    return asignaturasDocente.find((a) => {
+      if (a.gradoId !== gradoEfectivoId) return false;
+      if (!a.horario || a.horario.length === 0) return false;
+      if (esGradoBachillerato) return a.destrezaId === materiaEfectivaId;
+      const d = destrezas.find((x) => x.id === a.destrezaId);
+      return d?.ambitoId === ambitoEfectivoId;
+    });
+  }, [
+    asignaturasDocente,
+    gradoEfectivoId,
+    esGradoBachillerato,
+    materiaEfectivaId,
+    ambitoEfectivoId,
+    destrezas,
+  ]);
+
+  // ✅ Horas derivadas: si hay override manual VIGENTE (misma fecha), se respeta;
+  // si el usuario cambia la fecha, se recalcula desde el horario
+  const horasAsistencia = useMemo(() => {
+    // ✅ El override solo aplica si seguimos en la fecha para la que se eligió
+    if (horasManualOverride && horasManualOverride.fecha === fechaAsistencia) {
+      return horasManualOverride.horas;
+    }
+    if (esGradoInicialActual || !asignaturaConHorario) {
+      return [];
+    }
+    const js = fechaAsistencia
+      ? new Date(fechaAsistencia + "T00:00:00").getDay()
+      : 0;
+    const bloque =
+      js >= 1 && js <= 5
+        ? asignaturaConHorario.horario?.find((b) => b.dia === js)
+        : undefined;
+    return bloque?.horas?.length ? [...bloque.horas].sort((x, y) => x - y) : [];
+  }, [
+    horasManualOverride,
+    esGradoInicialActual,
+    asignaturaConHorario,
+    fechaAsistencia,
+  ]);
+
+  // ✅ Fecha sin clase para esta materia (hay horario pero ningún bloque ese día)
+  const diaSinClasePanel1 =
+    !esGradoInicialActual &&
+    !!asignaturaConHorario &&
+    horasAsistencia.length === 0;
+
   // ✅ Día de hoy (1=Lun ... 5=Vie); 0 = fin de semana
   const DIA_HOY = (() => {
     const js = new Date().getDay();
     return js >= 1 && js <= 5 ? js : 0;
   })();
+
+  // ✅ Fecha ISO local de hoy
+  const hoyLocalISO = () => {
+    const d = new Date();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${m}-${dd}`;
+  };
+
+  // ✅ Fecha ISO del día de la semana (1=Lun) de la semana actual
+  // (si hoy es sáb/dom, la "semana actual" es la que acaba de pasar)
+  const fechaDeDiaSemana = (dia: number): string => {
+    const hoy = new Date();
+    const jsHoy = hoy.getDay();
+    const lunes = new Date(hoy);
+    lunes.setDate(hoy.getDate() + (jsHoy === 0 ? -6 : 1 - jsHoy));
+    const d = new Date(lunes);
+    d.setDate(lunes.getDate() + (dia - 1));
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${m}-${dd}`;
+  };
+
+  const formatFechaLegible = (iso: string): string =>
+    new Date(iso + "T00:00:00").toLocaleDateString("es-EC", {
+      weekday: "long",
+      day: "2-digit",
+      month: "short",
+    });
+
   // ✅ Suma de horas pedagógicas semanales de todas las materias
   const totalHorasPedagogicas = asignaturasDocente.reduce(
     (sum, a) => sum + (a.horario?.reduce((s, b) => s + b.horas.length, 0) || 0),
     0,
   );
+
   // ✅ Paleta de colores por grado (para pintar la columna de hoy)
   const PALETA_COLORES = [
     "bg-yellow-300",
@@ -431,6 +517,7 @@ export default function Calificaciones() {
     const idx = grados.findIndex((g) => g.id === gradoId);
     return PALETA_COLORES[Math.abs(idx) % PALETA_COLORES.length];
   };
+
   const actividadSeleccionada = actividades.find(
     (a) => a.id === selectedActividadId,
   );
@@ -540,6 +627,7 @@ export default function Calificaciones() {
     gradoNombre: string,
     destrezaId: string | null,
     horas: number[] = [],
+    fecha?: string,
   ) => {
     const esBach = esBachillerato(gradoNombre);
     const d = destrezaId ? destrezas.find((x) => x.id === destrezaId) : null;
@@ -550,7 +638,12 @@ export default function Calificaciones() {
     setSelectedDestrezaId(d?.id || "");
     setSelectedActividadId("");
     setObsExpandida({});
-    setHorasAsistencia(horas);
+    // ✅ Override atado a la fecha de entrada: si cambias la fecha, se resincroniza
+    const fechaFinal = fecha || hoyLocalISO();
+    setHorasManualOverride(
+      horas.length > 0 ? { fecha: fechaFinal, horas } : null,
+    );
+    setFechaAsistencia(fechaFinal);
     setPanel(1);
   };
   const entrarCalificaciones = (
@@ -573,33 +666,77 @@ export default function Calificaciones() {
   };
   const volverListado = () => setPanel(0);
 
-  // ✅ Al presionar una celda del horario: detecta el bloque consecutivo
-  const presionarCeldaHorario = (
+  // ✅ Al presionar una celda del horario:
+  // - Calcula la fecha real del día (pasado = ayer, etc.)
+  // - Bloquea días futuros
+  // - Si el bloque tiene 2+ horas: solo pregunta si AÚN no hay asistencia ese día
+  const presionarCeldaHorario = async (
     asignatura: AsignaturaDocente,
     dia: number,
     hora: number,
   ) => {
+    const gradoNombre =
+      grados.find((g) => g.id === asignatura.gradoId)?.nombre || "";
+    const fechaISO = fechaDeDiaSemana(dia);
+
+    if (fechaISO > hoyLocalISO()) {
+      mostrarToast(
+        "warning",
+        "Día futuro",
+        `Aún no puedes registrar asistencia para el ${formatFechaLegible(fechaISO)} (es posterior a hoy).`,
+      );
+      return;
+    }
+
     const bloque = asignatura.horario?.find(
       (b) => b.dia === dia && b.horas.includes(hora),
     );
     const horas = bloque?.horas?.length ? bloque.horas : [hora];
+
     if (horas.length > 1) {
-      setHorasPending({
-        gradoId: asignatura.gradoId,
-        gradoNombre:
-          grados.find((g) => g.id === asignatura.gradoId)?.nombre || "",
-        destrezaId: asignatura.destrezaId,
-        horas,
-        presionada: hora,
-      });
-    } else {
-      entrarAsistencia(
-        asignatura.gradoId,
-        grados.find((g) => g.id === asignatura.gradoId)?.nombre || "",
-        asignatura.destrezaId,
-        [hora],
-      );
+      const esBach = esBachillerato(gradoNombre);
+      const esInicial = esGradoInicial(gradoNombre);
+      const ambitoIdBuscado = esInicial
+        ? "general"
+        : esBach
+          ? asignatura.destrezaId
+          : destrezas.find((x) => x.id === asignatura.destrezaId)?.ambitoId ||
+            "";
+      let yaRegistrada = false;
+      try {
+        const snap = await getDocs(
+          query(
+            collection(db, "asistencias"),
+            where("gradoId", "==", asignatura.gradoId),
+            where("fecha", "==", fechaISO),
+            where("ambitoId", "==", ambitoIdBuscado),
+          ),
+        );
+        yaRegistrada = !snap.empty;
+      } catch (e) {
+        console.error(e);
+      }
+      if (!yaRegistrada) {
+        setHorasPending({
+          gradoId: asignatura.gradoId,
+          gradoNombre,
+          destrezaId: asignatura.destrezaId,
+          horas,
+          presionada: hora,
+          fecha: fechaISO,
+        });
+        return;
+      }
     }
+
+    // ✅ Sin modal: entra directo con la fecha del día presionado
+    entrarAsistencia(
+      asignatura.gradoId,
+      gradoNombre,
+      asignatura.destrezaId,
+      horas,
+      fechaISO,
+    );
   };
 
   // ==================== CARGA ====================
@@ -687,6 +824,14 @@ export default function Calificaciones() {
         "warning",
         "Materia requerida",
         "Debes seleccionar una materia/ámbito antes de guardar.",
+      );
+      return;
+    }
+    if (diaSinClasePanel1) {
+      mostrarToast(
+        "warning",
+        "Día sin clases",
+        "Según tu horario, no tienes clases de esta materia en la fecha seleccionada. Cambia la fecha.",
       );
       return;
     }
@@ -1093,7 +1238,7 @@ export default function Calificaciones() {
           updatedAt: serverTimestamp(),
         });
       } else {
-        await updateDoc(doc(collection(db, "calificaciones")), {
+        await addDoc(collection(db, "calificaciones"), {
           estudianteId,
           actividadId,
           nota: round2(notaNum),
@@ -2078,6 +2223,18 @@ export default function Calificaciones() {
                   className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 shrink-0"
                 />
               </div>
+              {diaSinClasePanel1 && (
+                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-2 text-red-800">
+                    <FaExclamationTriangle className="text-sm shrink-0" />
+                    <span className="text-xs font-medium">
+                      Según tu horario, no tienes clases de esta materia en la
+                      fecha seleccionada. Cambia la fecha o entra desde el día
+                      correspondiente del horario.
+                    </span>
+                  </div>
+                </div>
+              )}
               {!todosConAsistencia &&
                 estudiantes.length > 0 &&
                 (esGradoInicialActual || materiaSeleccionadaEfectiva) && (
@@ -3078,7 +3235,7 @@ export default function Calificaciones() {
             </div>
             <button
               onClick={guardarAsistencia}
-              disabled={isSaving || !todosConAsistencia}
+              disabled={isSaving || !todosConAsistencia || diaSinClasePanel1}
               className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
             >
               {isSaving ? (
@@ -3139,7 +3296,7 @@ export default function Calificaciones() {
                     {" "}
                     / {estudiantesAplicables.length}
                   </span>
-                  <span className="text-slate-500 font-normal ml-1.5 hidden sm-inline">
+                  <span className="text-slate-500 font-normal ml-1.5 hidden sm:inline">
                     con nota
                   </span>
                 </div>
@@ -3208,6 +3365,10 @@ export default function Calificaciones() {
                     , que es un bloque de{" "}
                     <strong>
                       {horasPending.horas.map((h) => `${h}ª`).join(" y ")}
+                    </strong>{" "}
+                    del día{" "}
+                    <strong className="capitalize">
+                      {formatFechaLegible(horasPending.fecha)}
                     </strong>
                     .
                   </p>
@@ -3222,6 +3383,7 @@ export default function Calificaciones() {
                     horasPending.gradoNombre,
                     horasPending.destrezaId,
                     [horasPending.presionada],
+                    horasPending.fecha,
                   );
                   setHorasPending(null);
                 }}
@@ -3236,6 +3398,7 @@ export default function Calificaciones() {
                     horasPending.gradoNombre,
                     horasPending.destrezaId,
                     horasPending.horas,
+                    horasPending.fecha,
                   );
                   setHorasPending(null);
                 }}
@@ -3305,7 +3468,11 @@ export default function Calificaciones() {
                     return (
                       <div
                         key={a.id}
-                        className={`p-3 rounded-lg border-2 transition-all ${sel ? "bg-blue-50 border-blue-400" : "bg-white border-slate-200 hover:border-blue-300"}`}
+                        className={`p-3 rounded-lg border-2 transition-all ${
+                          sel
+                            ? "bg-blue-50 border-blue-400"
+                            : "bg-white border-slate-200 hover:border-blue-300"
+                        }`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <button
@@ -3329,7 +3496,11 @@ export default function Calificaciones() {
                               </span>
                               {(a.dirigidaA || "general") !== "general" && (
                                 <span
-                                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${a.dirigidaA === "especial" ? "bg-purple-100 text-purple-700" : "bg-teal-100 text-teal-700"}`}
+                                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                                    a.dirigidaA === "especial"
+                                      ? "bg-purple-100 text-purple-700"
+                                      : "bg-teal-100 text-teal-700"
+                                  }`}
                                 >
                                   {a.dirigidaA === "especial"
                                     ? "Adaptación"
