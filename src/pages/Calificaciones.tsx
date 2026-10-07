@@ -268,19 +268,14 @@ export default function Calificaciones() {
   const [fechaAsistencia, setFechaAsistencia] = useState(
     new Date().toISOString().split("T")[0],
   );
-  // ✅ Horas elegidas manualmente, atadas a una fecha específica
-  const [horasManualOverride, setHorasManualOverride] = useState<{
-    fecha: string;
-    horas: number[];
-  } | null>(null);
-
+  // ✅ Horas pedagógicas del bloque que se está registrando (scope activo)
+  const [horasAsistencia, setHorasAsistencia] = useState<number[]>([]);
   const [horasPending, setHorasPending] = useState<{
     gradoId: string;
     gradoNombre: string;
     destrezaId: string | null;
     horas: number[];
     presionada: number;
-    fecha: string;
   } | null>(null);
   const [asistencias, setAsistencias] = useState<
     Record<
@@ -363,6 +358,12 @@ export default function Calificaciones() {
     Record<string, EstadoAsistencia | undefined>
   >({});
   const notaInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  // ✅ Registros crudos del día (para filtrar por hora sin re-consultar)
+  const rawAsistenciasDiaRef = useRef<AsistenciaData[]>([]);
+  // ✅ Scope de horas activo (ref espejo para el listener)
+  const horasScopeRef = useRef<number[]>([]);
+  // ✅ Estudiantes con estados que difieren entre horas del bloque
+  const [conflictoHoras, setConflictoHoras] = useState<Set<string>>(new Set());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
@@ -412,11 +413,61 @@ export default function Calificaciones() {
     ? materiaEfectivaId
     : ambitoEfectivoId;
 
-  // ✅ Asignatura del grado actual que SÍ tiene horario configurado
-  const asignaturaConHorario = useMemo(() => {
+  // ✅ Reconstruye el mapa de asistencias visibles filtrando por el scope de horas
+  const reconstruirAsistencias = useCallback((scope: number[]) => {
+    const map: Record<
+      string,
+      {
+        estado: EstadoAsistencia | undefined;
+        observacion: string;
+        registradoPor?: string;
+        editadoPor?: string;
+        justificadoPor?: string;
+        esTutorOnly?: boolean;
+      }
+    > = {};
+    const conflictos = new Set<string>();
+    const porEstudiante = new Map<string, AsistenciaData[]>();
+    rawAsistenciasDiaRef.current.forEach((r) => {
+      const hora = r.hora ?? null;
+      const aplica =
+        scope.length === 0 || hora === null || scope.includes(hora);
+      if (!aplica) return;
+      const arr = porEstudiante.get(r.estudianteId) || [];
+      arr.push(r);
+      porEstudiante.set(r.estudianteId, arr);
+    });
+    porEstudiante.forEach((regs, estId) => {
+      regs.sort((a, b) => (a.hora ?? 0) - (b.hora ?? 0));
+      const estados = new Set(
+        regs.map((r) => normalizarEstado(r.estado, r.v2)),
+      );
+      const tieneLegacy = regs.some((r) => r.hora == null);
+      const coberturaCompleta =
+        tieneLegacy || scope.length === 0 || regs.length >= scope.length;
+      if (estados.size > 1 || (scope.length > 1 && !coberturaCompleta)) {
+        conflictos.add(estId);
+      }
+      const principal = regs[0];
+      const est = normalizarEstado(principal.estado, principal.v2);
+      map[estId] = {
+        estado: est,
+        observacion: principal.observacion || "",
+        registradoPor: principal.registradoPor,
+        editadoPor: principal.editadoPor,
+        justificadoPor: principal.justificadoPor,
+        esTutorOnly: estadoConfig(est)?.quien === "tutor",
+      };
+    });
+    setAsistencias(map);
+    setConflictoHoras(conflictos);
+  }, []);
+
+  // ✅ Asignatura del grado/materia actual (para conocer el bloque de horas del día)
+  const asignaturaDelPanel = useMemo(() => {
+    if (!gradoEfectivoId) return undefined;
     return asignaturasDocente.find((a) => {
       if (a.gradoId !== gradoEfectivoId) return false;
-      if (!a.horario || a.horario.length === 0) return false;
       if (esGradoBachillerato) return a.destrezaId === materiaEfectivaId;
       const d = destrezas.find((x) => x.id === a.destrezaId);
       return d?.ambitoId === ambitoEfectivoId;
@@ -430,71 +481,28 @@ export default function Calificaciones() {
     destrezas,
   ]);
 
-  // ✅ Horas derivadas: si hay override manual VIGENTE (misma fecha), se respeta;
-  // si el usuario cambia la fecha, se recalcula desde el horario
-  const horasAsistencia = useMemo(() => {
-    // ✅ El override solo aplica si seguimos en la fecha para la que se eligió
-    if (horasManualOverride && horasManualOverride.fecha === fechaAsistencia) {
-      return horasManualOverride.horas;
-    }
-    if (esGradoInicialActual || !asignaturaConHorario) {
-      return [];
-    }
-    const js = fechaAsistencia
-      ? new Date(fechaAsistencia + "T00:00:00").getDay()
-      : 0;
-    const bloque =
-      js >= 1 && js <= 5
-        ? asignaturaConHorario.horario?.find((b) => b.dia === js)
-        : undefined;
-    return bloque?.horas?.length ? [...bloque.horas].sort((x, y) => x - y) : [];
-  }, [
-    horasManualOverride,
-    esGradoInicialActual,
-    asignaturaConHorario,
-    fechaAsistencia,
-  ]);
+  // ✅ Horas del bloque correspondientes al día de la fecha seleccionada
+  const horasBloqueDia = useMemo(() => {
+    if (!asignaturaDelPanel?.horario?.length || !fechaAsistencia)
+      return [] as number[];
+    const js = new Date(fechaAsistencia + "T00:00:00").getDay();
+    if (js < 1 || js > 5) return [] as number[];
+    const bloque = asignaturaDelPanel.horario.find((b) => b.dia === js);
+    return bloque?.horas?.length ? [...bloque.horas].sort((a, b) => a - b) : [];
+  }, [asignaturaDelPanel, fechaAsistencia]);
 
-  // ✅ Fecha sin clase para esta materia (hay horario pero ningún bloque ese día)
-  const diaSinClasePanel1 =
-    !esGradoInicialActual &&
-    !!asignaturaConHorario &&
-    horasAsistencia.length === 0;
+  // ✅ Cambia el scope de horas y reconstruye la vista al instante
+  const cambiarScopeHoras = (scope: number[]) => {
+    horasScopeRef.current = scope;
+    setHorasAsistencia(scope);
+    reconstruirAsistencias(scope);
+  };
 
   // ✅ Día de hoy (1=Lun ... 5=Vie); 0 = fin de semana
   const DIA_HOY = (() => {
     const js = new Date().getDay();
     return js >= 1 && js <= 5 ? js : 0;
   })();
-
-  // ✅ Fecha ISO local de hoy
-  const hoyLocalISO = () => {
-    const d = new Date();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${d.getFullYear()}-${m}-${dd}`;
-  };
-
-  // ✅ Fecha ISO del día de la semana (1=Lun) de la semana actual
-  // (si hoy es sáb/dom, la "semana actual" es la que acaba de pasar)
-  const fechaDeDiaSemana = (dia: number): string => {
-    const hoy = new Date();
-    const jsHoy = hoy.getDay();
-    const lunes = new Date(hoy);
-    lunes.setDate(hoy.getDate() + (jsHoy === 0 ? -6 : 1 - jsHoy));
-    const d = new Date(lunes);
-    d.setDate(lunes.getDate() + (dia - 1));
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${d.getFullYear()}-${m}-${dd}`;
-  };
-
-  const formatFechaLegible = (iso: string): string =>
-    new Date(iso + "T00:00:00").toLocaleDateString("es-EC", {
-      weekday: "long",
-      day: "2-digit",
-      month: "short",
-    });
 
   // ✅ Suma de horas pedagógicas semanales de todas las materias
   const totalHorasPedagogicas = asignaturasDocente.reduce(
@@ -627,10 +635,23 @@ export default function Calificaciones() {
     gradoNombre: string,
     destrezaId: string | null,
     horas: number[] = [],
-    fecha?: string,
   ) => {
     const esBach = esBachillerato(gradoNombre);
     const d = destrezaId ? destrezas.find((x) => x.id === destrezaId) : null;
+    // ✅ Si no se indica scope, usar el bloque de hoy del horario (si existe)
+    let scope = horas;
+    if (scope.length === 0 && destrezaId && !esGradoInicial(gradoNombre)) {
+      const asig = asignaturasDocente.find(
+        (a) => a.gradoId === gradoId && a.destrezaId === destrezaId,
+      );
+      const js = new Date().getDay();
+      const bloque =
+        js >= 1 && js <= 5
+          ? asig?.horario?.find((b) => b.dia === js)
+          : undefined;
+      if (bloque?.horas?.length)
+        scope = [...bloque.horas].sort((a, b) => a - b);
+    }
     setSelectedGradoId(gradoId);
     setSelectedGradoNombre(gradoNombre);
     setSelectedMateriaId(esBach && d ? d.id : "");
@@ -638,12 +659,8 @@ export default function Calificaciones() {
     setSelectedDestrezaId(d?.id || "");
     setSelectedActividadId("");
     setObsExpandida({});
-    // ✅ Override atado a la fecha de entrada: si cambias la fecha, se resincroniza
-    const fechaFinal = fecha || hoyLocalISO();
-    setHorasManualOverride(
-      horas.length > 0 ? { fecha: fechaFinal, horas } : null,
-    );
-    setFechaAsistencia(fechaFinal);
+    setHorasAsistencia(scope);
+    horasScopeRef.current = scope;
     setPanel(1);
   };
   const entrarCalificaciones = (
@@ -667,9 +684,9 @@ export default function Calificaciones() {
   const volverListado = () => setPanel(0);
 
   // ✅ Al presionar una celda del horario:
-  // - Calcula la fecha real del día (pasado = ayer, etc.)
-  // - Bloquea días futuros
-  // - Si el bloque tiene 2+ horas: solo pregunta si AÚN no hay asistencia ese día
+  // - Sin registros del día → pregunta ambas vs una
+  // - Con registros COMPLETOS del bloque → entra con todo el bloque
+  // - Con registros PARCIALES → entra enfocado en la hora presionada
   const presionarCeldaHorario = async (
     asignatura: AsignaturaDocente,
     dia: number,
@@ -677,17 +694,6 @@ export default function Calificaciones() {
   ) => {
     const gradoNombre =
       grados.find((g) => g.id === asignatura.gradoId)?.nombre || "";
-    const fechaISO = fechaDeDiaSemana(dia);
-
-    if (fechaISO > hoyLocalISO()) {
-      mostrarToast(
-        "warning",
-        "Día futuro",
-        `Aún no puedes registrar asistencia para el ${formatFechaLegible(fechaISO)} (es posterior a hoy).`,
-      );
-      return;
-    }
-
     const bloque = asignatura.horario?.find(
       (b) => b.dia === dia && b.horas.includes(hora),
     );
@@ -702,7 +708,8 @@ export default function Calificaciones() {
           ? asignatura.destrezaId
           : destrezas.find((x) => x.id === asignatura.destrezaId)?.ambitoId ||
             "";
-      let yaRegistrada = false;
+      const fechaISO = new Date().toISOString().split("T")[0];
+      let horasConRegistro: number[] = [];
       try {
         const snap = await getDocs(
           query(
@@ -712,31 +719,36 @@ export default function Calificaciones() {
             where("ambitoId", "==", ambitoIdBuscado),
           ),
         );
-        yaRegistrada = !snap.empty;
+        const setH = new Set<number>();
+        snap.docs.forEach((d) => setH.add((d.data().hora as number) ?? 1));
+        horasConRegistro = Array.from(setH);
       } catch (e) {
         console.error(e);
       }
-      if (!yaRegistrada) {
+
+      if (horasConRegistro.length === 0) {
         setHorasPending({
           gradoId: asignatura.gradoId,
           gradoNombre,
           destrezaId: asignatura.destrezaId,
           horas,
           presionada: hora,
-          fecha: fechaISO,
         });
         return;
       }
+      const bloqueCompleto = horas.every((h) => horasConRegistro.includes(h));
+      const scope = bloqueCompleto ? horas : [hora];
+      entrarAsistencia(
+        asignatura.gradoId,
+        gradoNombre,
+        asignatura.destrezaId,
+        scope,
+      );
+      return;
     }
-
-    // ✅ Sin modal: entra directo con la fecha del día presionado
-    entrarAsistencia(
-      asignatura.gradoId,
-      gradoNombre,
-      asignatura.destrezaId,
-      horas,
-      fechaISO,
-    );
+    entrarAsistencia(asignatura.gradoId, gradoNombre, asignatura.destrezaId, [
+      hora,
+    ]);
   };
 
   // ==================== CARGA ====================
@@ -817,21 +829,13 @@ export default function Calificaciones() {
     }
   }, []);
 
-  // ✅ GUARDAR ASISTENCIA: un registro por estudiante POR HORA del bloque
+  // ✅ GUARDAR ASISTENCIA: un registro por estudiante POR HORA del scope
   const guardarAsistencia = async () => {
     if (!esGradoInicialActual && !materiaSeleccionadaEfectiva) {
       mostrarToast(
         "warning",
         "Materia requerida",
         "Debes seleccionar una materia/ámbito antes de guardar.",
-      );
-      return;
-    }
-    if (diaSinClasePanel1) {
-      mostrarToast(
-        "warning",
-        "Día sin clases",
-        "Según tu horario, no tienes clases de esta materia en la fecha seleccionada. Cambia la fecha.",
       );
       return;
     }
@@ -1688,6 +1692,7 @@ export default function Calificaciones() {
   const calificacionesMatrizEfectiva =
     !destrezaEfectivaId || actividades.length === 0 ? {} : calificacionesMatriz;
 
+  // ✅ Listener de asistencias del día: guarda crudo y filtra por scope de horas
   useEffect(() => {
     if (panel !== 1) return;
     if (!gradoEfectivoId || !fechaAsistencia) return;
@@ -1709,30 +1714,11 @@ export default function Calificaciones() {
     return onSnapshot(
       q,
       (s) => {
-        const map: Record<
-          string,
-          {
-            estado: EstadoAsistencia | undefined;
-            observacion: string;
-            registradoPor?: string;
-            editadoPor?: string;
-            justificadoPor?: string;
-            esTutorOnly?: boolean;
-          }
-        > = {};
-        s.docs.forEach((d) => {
-          const data = d.data() as AsistenciaData;
-          const est = normalizarEstado(data.estado, data.v2);
-          map[data.estudianteId] = {
-            estado: est,
-            observacion: data.observacion || "",
-            registradoPor: data.registradoPor,
-            editadoPor: data.editadoPor,
-            justificadoPor: data.justificadoPor,
-            esTutorOnly: estadoConfig(est)?.quien === "tutor",
-          };
+        rawAsistenciasDiaRef.current = s.docs.map((d) => {
+          const data = d.data() as unknown as AsistenciaData;
+          return { ...data, id: d.id };
         });
-        setAsistencias(map);
+        reconstruirAsistencias(horasScopeRef.current);
       },
       (e) => console.error(e),
     );
@@ -1744,6 +1730,7 @@ export default function Calificaciones() {
     ambitoEfectivoId,
     esGradoInicialActual,
     esGradoBachillerato,
+    reconstruirAsistencias,
   ]);
 
   useEffect(() => {
@@ -2215,6 +2202,37 @@ export default function Calificaciones() {
                       {horasAsistencia.map((h) => `${h}ª`).join(" + ")}
                     </span>
                   )}
+                  {/* ✅ Chips de scope por hora */}
+                  {horasBloqueDia.length > 1 && (
+                    <span className="flex items-center gap-1 shrink-0">
+                      {horasBloqueDia.map((h) => (
+                        <button
+                          key={h}
+                          onClick={() => cambiarScopeHoras([h])}
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all ${
+                            horasAsistencia.length === 1 &&
+                            horasAsistencia[0] === h
+                              ? "bg-blue-600 text-white border-blue-600"
+                              : "bg-white text-slate-600 border-slate-300 hover:border-blue-400"
+                          }`}
+                          title={`Ver y editar solo la ${h}ª hora`}
+                        >
+                          {h}ª
+                        </button>
+                      ))}
+                      <button
+                        onClick={() => cambiarScopeHoras(horasBloqueDia)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-all ${
+                          horasAsistencia.length === horasBloqueDia.length
+                            ? "bg-blue-600 text-white border-blue-600"
+                            : "bg-white text-slate-600 border-slate-300 hover:border-blue-400"
+                        }`}
+                        title="Ver y editar todas las horas del bloque"
+                      >
+                        Todas
+                      </button>
+                    </span>
+                  )}
                 </div>
                 <input
                   type="date"
@@ -2223,18 +2241,6 @@ export default function Calificaciones() {
                   className="border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 shrink-0"
                 />
               </div>
-              {diaSinClasePanel1 && (
-                <div className="mb-4 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  <div className="flex items-center gap-2 text-red-800">
-                    <FaExclamationTriangle className="text-sm shrink-0" />
-                    <span className="text-xs font-medium">
-                      Según tu horario, no tienes clases de esta materia en la
-                      fecha seleccionada. Cambia la fecha o entra desde el día
-                      correspondiente del horario.
-                    </span>
-                  </div>
-                </div>
-              )}
               {!todosConAsistencia &&
                 estudiantes.length > 0 &&
                 (esGradoInicialActual || materiaSeleccionadaEfectiva) && (
@@ -2300,6 +2306,15 @@ export default function Calificaciones() {
                             {est.conAdaptacion && (
                               <span className="inline-flex items-center mt-0.5 px-2 py-0.5 bg-purple-100 border border-purple-300 text-purple-700 rounded text-[10px] font-bold">
                                 Adaptación curricular
+                              </span>
+                            )}
+                            {conflictoHoras.has(est.id) && (
+                              <span
+                                className="inline-flex items-center gap-1 mt-0.5 px-2 py-0.5 bg-amber-100 border border-amber-300 text-amber-800 rounded text-[10px] font-bold"
+                                title="Este estudiante tiene estados distintos (u horas sin registro) dentro del bloque. Usa los filtros de hora para editar cada hora por separado."
+                              >
+                                <FaExclamationTriangle className="text-[9px]" />{" "}
+                                Estados difieren por hora
                               </span>
                             )}
                             {estado === "J" ? (
@@ -3235,7 +3250,7 @@ export default function Calificaciones() {
             </div>
             <button
               onClick={guardarAsistencia}
-              disabled={isSaving || !todosConAsistencia || diaSinClasePanel1}
+              disabled={isSaving || !todosConAsistencia}
               className="shrink-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
             >
               {isSaving ? (
@@ -3365,10 +3380,6 @@ export default function Calificaciones() {
                     , que es un bloque de{" "}
                     <strong>
                       {horasPending.horas.map((h) => `${h}ª`).join(" y ")}
-                    </strong>{" "}
-                    del día{" "}
-                    <strong className="capitalize">
-                      {formatFechaLegible(horasPending.fecha)}
                     </strong>
                     .
                   </p>
@@ -3383,7 +3394,6 @@ export default function Calificaciones() {
                     horasPending.gradoNombre,
                     horasPending.destrezaId,
                     [horasPending.presionada],
-                    horasPending.fecha,
                   );
                   setHorasPending(null);
                 }}
@@ -3398,7 +3408,6 @@ export default function Calificaciones() {
                     horasPending.gradoNombre,
                     horasPending.destrezaId,
                     horasPending.horas,
-                    horasPending.fecha,
                   );
                   setHorasPending(null);
                 }}
@@ -3468,11 +3477,7 @@ export default function Calificaciones() {
                     return (
                       <div
                         key={a.id}
-                        className={`p-3 rounded-lg border-2 transition-all ${
-                          sel
-                            ? "bg-blue-50 border-blue-400"
-                            : "bg-white border-slate-200 hover:border-blue-300"
-                        }`}
+                        className={`p-3 rounded-lg border-2 transition-all ${sel ? "bg-blue-50 border-blue-400" : "bg-white border-slate-200 hover:border-blue-300"}`}
                       >
                         <div className="flex items-start justify-between gap-2">
                           <button
@@ -3496,11 +3501,7 @@ export default function Calificaciones() {
                               </span>
                               {(a.dirigidaA || "general") !== "general" && (
                                 <span
-                                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                                    a.dirigidaA === "especial"
-                                      ? "bg-purple-100 text-purple-700"
-                                      : "bg-teal-100 text-teal-700"
-                                  }`}
+                                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${a.dirigidaA === "especial" ? "bg-purple-100 text-purple-700" : "bg-teal-100 text-teal-700"}`}
                                 >
                                   {a.dirigidaA === "especial"
                                     ? "Adaptación"
