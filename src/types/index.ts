@@ -7,6 +7,7 @@ export interface AnioLectivo {
   activo: boolean;
   createdAt: string;
 }
+
 export interface PeriodoEvaluacion {
   id: string;
   nombre: string;
@@ -18,6 +19,7 @@ export interface PeriodoEvaluacion {
   activo: boolean;
   createdAt: string;
 }
+
 export interface Grado {
   id: string;
   nombre: string;
@@ -28,6 +30,7 @@ export interface Grado {
   abiertoMatricula?: boolean;
   createdAt: string;
 }
+
 // ✅ ESTUDIANTE COMPLETO (con gradoId y anioLectivoId)
 export interface Estudiante {
   id: string;
@@ -39,8 +42,10 @@ export interface Estudiante {
   activo: boolean;
   createdAt: string;
   updatedAt?: string;
+  
   // ✅ ADAPTACIÓN CURRICULAR (NECE): true = estudiante con adaptación
   conAdaptacion?: boolean;
+  
   // ✅ CAMPOS ADICIONALES DE LA FICHA DE MATRÍCULA
   representantePrincipalId?: string;
   representanteSecundarioId?: string;
@@ -51,7 +56,13 @@ export interface Estudiante {
   direccion?: string;
   celular?: string;
   fichaMatricula?: FichaMatricula;
+
+  // ✅ NUEVOS CAMPOS PARA DATOS DIRECTOS DEL REPRESENTANTE (Vista rápida en listas)
+  cedulaRepresentante?: string;
+  nombreRepresentante?: string;
+  celularRepresentante?: string;
 }
+
 export interface Ambito {
   id: string;
   nombre: string;
@@ -60,6 +71,7 @@ export interface Ambito {
   activo: boolean;
   createdAt: string;
 }
+
 export interface Destreza {
   id: string;
   nombre: string;
@@ -70,6 +82,7 @@ export interface Destreza {
   activo: boolean;
   createdAt: string;
 }
+
 export interface Calificacion {
   id: string;
   estudianteId: string;
@@ -81,6 +94,7 @@ export interface Calificacion {
   docenteId: string;
   fechaActualizacion: string;
 }
+
 export interface Representante {
   id: string;
   cedula: string;
@@ -95,6 +109,7 @@ export interface Representante {
   telefonos: string[];
   createdAt: string;
 }
+
 export interface FichaMatricula {
   convivencia: {
     viveCon: string[];
@@ -121,6 +136,7 @@ export interface FichaMatricula {
     aniosRepitidos: string;
   };
 }
+
 export interface SolicitudMatricula {
   id: string;
   tipo: "renovacion" | "nuevo";
@@ -145,6 +161,7 @@ export interface SolicitudMatricula {
   fichaMatricula: FichaMatricula;
   whatsappEnviado: boolean;
 }
+
 // ✅ AppUser con status 'deleted' para usuarios archivados
 export interface AppUser {
   uid: string;

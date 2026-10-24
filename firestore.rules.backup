@@ -1,0 +1,44 @@
+// COPIA DE SEGURIDAD — Reglas de producción ANTERIORES al corrective deploy.
+// Restaurar: pegar este contenido en Consola Firebase → Firestore → Reglas → Publicar,
+// o copiar este archivo sobre firestore.rules y ejecutar: firebase deploy --only firestore:rules
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ✅ Usuarios: Cada usuario puede leer y escribir SU PROPIO documento
+    match /usuarios/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // ✅ Configuración Institucional: Lectura pública (para el logo en login)
+    match /configuracionInstitucional/{document} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // ✅ Grados: Lectura pública (necesario para que el formulario público de matrícula muestre las opciones)
+    match /grados/{gradoId} {
+      allow read: if true;
+      allow write: if request.auth != null; // Solo admins/docentes autenticados pueden escribir
+    }
+
+    // ✅ Solicitudes de Matrícula: Cualquiera puede crear una solicitud (formulario público)
+    match /solicitudesMatriculas/{solicitudId} {
+      allow read: if request.auth != null; // Solo el admin puede verlas
+      allow create: if true;               // Permite que los padres envíen la solicitud sin estar logueados
+      allow update, delete: if request.auth != null;
+    }
+
+    // ✅ Representantes: Se crean durante el flujo público de matrícula
+    match /representantes/{representanteId} {
+      allow read: if request.auth != null;
+      allow create: if true;               // Permite crear representantes desde el formulario público
+      allow update, delete: if request.auth != null;
+    }
+
+    // ✅ Todas las demás colecciones (estudiantes, calificaciones, ámbitos, etc.): Solo usuarios autenticados
+    match /{collection}/{document} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

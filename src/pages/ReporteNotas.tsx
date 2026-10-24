@@ -12,15 +12,21 @@ import {
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
+import {
+  construirRefuerzoConHistorial,
+  recalcularInsumos,
+  type EntradaRefuerzo,
+  type RefuerzoConHistorial,
+} from "../utils/refuerzo";
 import type { Estudiante, Grado } from "../types";
 import Layout from "../components/Layout";
 import * as XLSX from "xlsx";
+import { useNavigate } from "react-router-dom";
 import {
   FaExclamationTriangle,
   FaGraduationCap,
   FaBook,
   FaUserGraduate,
-  FaPrint,
   FaInfoCircle,
   FaSpinner,
   FaCheckCircle,
@@ -29,10 +35,11 @@ import {
   FaSyncAlt,
   FaTimes,
   FaFileExcel,
+  FaEye,
+  FaClipboardList,
+  FaCheck,
 } from "react-icons/fa";
-
 // ==================== INTERFACES ====================
-
 interface ActividadData {
   id: string;
   tipo: string;
@@ -43,8 +50,11 @@ interface ActividadData {
   gradoId: string;
   periodoId?: string;
   estrategiaNota?: string;
+  dirigidaA?: "general" | "ambos" | "especial";
+  estudianteIds?: string[];
+  esConsolidado?: boolean;
+  actividadesAgrupadas?: string[];
 }
-
 interface CalificacionData {
   id: string;
   estudianteId: string;
@@ -56,10 +66,12 @@ interface CalificacionData {
     detalle: string;
     fecha: string;
     estrategiaElegida?: string;
+    aplicadoPor?: string;
+    origen?: "formal" | "informal";
+    historial?: EntradaRefuerzo[];
   } | null;
   docenteId?: string;
 }
-
 interface AsignaturaDocente {
   id: string;
   docenteId: string;
@@ -68,11 +80,10 @@ interface AsignaturaDocente {
   anioLectivoId: string;
   activo: boolean;
 }
-
-// Para vista tutor: registro lineal de nota < 7
 interface RegistroRiesgo {
   calificacionId: string;
   estudianteId: string;
+  actividadId: string;
   estudianteNombre: string;
   gradoId: string;
   gradoNombre: string;
@@ -87,18 +98,15 @@ interface RegistroRiesgo {
   notaOriginal: number;
   notaFinal: number;
   tieneRefuerzo: boolean;
+  esConsolidado: boolean;
   observacion?: string;
 }
-
-// Para vista docente: sección de materia
 interface UnidadSeccion {
   id: string;
   nombre: string;
   ambitoNombre: string;
   actividades: ActividadData[];
 }
-
-// Grupo de registros por materia (vista tutor)
 interface GrupoMateriaRiesgo {
   destrezaId: string;
   materiaNombre: string;
@@ -108,11 +116,8 @@ interface GrupoMateriaRiesgo {
   conRefuerzo: number;
   notaPromedio: number;
 }
-
 type ModoVista = "tutor" | "docente";
-
 // ==================== HELPERS ====================
-
 const esGradoInicial = (nombre: string): boolean => {
   const n = (nombre || "").toLowerCase();
   return (
@@ -121,15 +126,12 @@ const esGradoInicial = (nombre: string): boolean => {
     n.includes("preparatoria")
   );
 };
-
 const round2 = (n: number): number => Math.round(n * 100) / 100;
-
 const ESTRATEGIAS_NOTA = [
   { value: "promediar", label: "Promediar (Original + Refuerzo) / 2" },
   { value: "reemplazar", label: "Reemplazar (Refuerzo reemplaza Original)" },
   { value: "maxima", label: "Máxima (Mayor entre Original y Refuerzo)" },
 ];
-
 const calcularNotaFinalRefuerzo = (
   notaOriginal: number,
   notaRefuerzo: number,
@@ -145,14 +147,28 @@ const calcularNotaFinalRefuerzo = (
       return round2((notaOriginal + notaRefuerzo) / 2);
   }
 };
-
 // ==================== COMPONENTE ====================
+// Misma regla de aplicabilidad que utiliza la matriz de Calificaciones.
+const aplicaActividad = (
+  est: Estudiante | undefined | null,
+  act: Pick<ActividadData, "dirigidaA" | "estudianteIds"> | undefined | null,
+): boolean => {
+  if (!est) return false;
+  const aud = act?.dirigidaA || "general";
+  if (aud === "ambos") return true;
+  const esEspecial = !!est.conAdaptacion;
+  if (aud === "especial")
+    return act?.estudianteIds?.length
+      ? act.estudianteIds.includes(est.id)
+      : esEspecial;
+  return !esEspecial;
+};
 
 export default function ReporteNotas() {
   const { user, userData } = useAuth();
   const { grados, ambitos, destrezas, anioActivo, periodoActual, ready } =
     useData();
-
+  const navigate = useNavigate();
   const [asignaturasDocente, setAsignaturasDocente] = useState<
     AsignaturaDocente[]
   >([]);
@@ -163,11 +179,13 @@ export default function ReporteNotas() {
   const [modoVista, setModoVista] = useState<ModoVista>("tutor");
   const [gradoTutorSel, setGradoTutorSel] = useState<string>("");
   const [gradoDocenteSel, setGradoDocenteSel] = useState<string>("");
-
-  // Modal de refuerzo (compartido por ambas vistas)
+  const [estudianteDetalleId, setEstudianteDetalleId] = useState<string | null>(
+    null,
+  );
   const [showRefuerzoModal, setShowRefuerzoModal] = useState(false);
   const [refuerzoRegistro, setRefuerzoRegistro] = useState<{
     calificacionId: string;
+    actividadId: string;
     estudianteNombre: string;
     materiaNombre: string;
     actividadDetalle: string;
@@ -181,17 +199,25 @@ export default function ReporteNotas() {
     estrategia: "promediar",
   });
   const [isGuardandoRefuerzo, setIsGuardandoRefuerzo] = useState(false);
-
+  const [aviso, setAviso] = useState<{
+    type: "success" | "error" | "info" | "warning";
+    message: string;
+  } | null>(null);
+  const mostrarAviso = (
+    type: "success" | "error" | "info" | "warning",
+    message: string,
+  ) => {
+    setAviso({ type, message });
+    setTimeout(() => setAviso(null), 6000);
+  };
   const esAdmin = userData?.role === "super_admin";
   const esTutor = (userData?.tutorDe || []).length > 0;
   const tieneMaterias = asignaturasDocente.length > 0;
-
   const modoEfectivo = useMemo<ModoVista>(() => {
     if (modoVista === "tutor" && !esTutor) return "docente";
     if (modoVista === "docente" && !tieneMaterias && esTutor) return "tutor";
     return modoVista;
   }, [modoVista, esTutor, tieneMaterias]);
-
   const gradosDisponibles = useMemo(() => {
     if (!anioActivo) return [] as Grado[];
     const anioGrados = grados.filter(
@@ -203,23 +229,19 @@ export default function ReporteNotas() {
     (userData?.tutorDe || []).forEach((id) => idsSet.add(id));
     return anioGrados.filter((g) => idsSet.has(g.id));
   }, [grados, anioActivo, asignaturasDocente, userData, esAdmin]);
-
   const gradosTutorizados = useMemo(() => {
     const tutorIds = new Set(userData?.tutorDe || []);
     return gradosDisponibles.filter((g) => tutorIds.has(g.id));
   }, [gradosDisponibles, userData]);
-
   const gradosDocenteMios = useMemo(() => {
     const misGradoIds = new Set(asignaturasDocente.map((a) => a.gradoId));
     return gradosDisponibles.filter((g) => misGradoIds.has(g.id));
   }, [gradosDisponibles, asignaturasDocente]);
-
   const gradoTutorEfectivo = useMemo(() => {
     if (gradoTutorSel && gradosTutorizados.some((g) => g.id === gradoTutorSel))
       return gradoTutorSel;
     return gradosTutorizados[0]?.id || "";
   }, [gradoTutorSel, gradosTutorizados]);
-
   const gradoDocenteEfectivo = useMemo(() => {
     if (
       gradoDocenteSel &&
@@ -228,11 +250,9 @@ export default function ReporteNotas() {
       return gradoDocenteSel;
     return gradosDocenteMios[0]?.id || "";
   }, [gradoDocenteSel, gradosDocenteMios]);
-
   const gradoTutorActual = grados.find((g) => g.id === gradoTutorEfectivo);
   const gradoDocenteActual = grados.find((g) => g.id === gradoDocenteEfectivo);
   const esInicialDocente = esGradoInicial(gradoDocenteActual?.nombre || "");
-
   const misDestrezasDelGrado = useMemo(() => {
     return new Set(
       asignaturasDocente
@@ -240,57 +260,40 @@ export default function ReporteNotas() {
         .map((a) => a.destrezaId),
     );
   }, [asignaturasDocente, gradoDocenteEfectivo]);
-
   const misDestrezasTodas = useMemo(
     () => new Set(asignaturasDocente.map((a) => a.destrezaId)),
     [asignaturasDocente],
   );
-
-  // ✅ SIN useMemo: derivación directa (React Compiler auto-memoiza y evita el lint error)
-  const misUnidadesDelGrado = esInicialDocente
-    ? new Set(
-        destrezas
-          .filter((d) => misDestrezasDelGrado.has(d.id))
-          .map((d) => d.ambitoId),
-      )
-    : misDestrezasDelGrado;
-
-  // ✅ SIN useMemo: derivación directa
-  const misUnidadesNombres = esInicialDocente
-    ? ambitos
-        .filter((a) => misUnidadesDelGrado.has(a.id))
-        .map((a) => a.nombre)
-    : destrezas
-        .filter((d) => misUnidadesDelGrado.has(d.id))
-        .map((d) => d.nombre);
+  const misUnidadesDelGrado = useMemo(() => {
+    return esInicialDocente
+      ? new Set(
+          destrezas
+            .filter((d) => misDestrezasDelGrado.has(d.id))
+            .map((d) => d.ambitoId),
+        )
+      : misDestrezasDelGrado;
+  }, [esInicialDocente, destrezas, misDestrezasDelGrado]);
 
   const shouldLoadData = ready && gradosDisponibles.length > 0;
-
   const loadKey = useMemo(
     () =>
       JSON.stringify({
         admin: esAdmin,
         grados: gradosDisponibles.map((g) => g.id),
         materias: asignaturasDocente.map((a) => a.destrezaId),
+        periodo: periodoActual?.id || "",
       }),
-    [esAdmin, gradosDisponibles, asignaturasDocente],
+    [esAdmin, gradosDisponibles, asignaturasDocente, periodoActual?.id],
   );
-
   const loading = shouldLoadData && loadedKey !== loadKey;
-
-  // ==================== CARGA DE ASIGNATURAS ====================
-
-  // ✅ OPTIMIZADO: Listener EN VIVO para asignaturas del docente.
   useEffect(() => {
     if (!user?.uid || esAdmin || !anioActivo?.id) return;
-
     const q = query(
       collection(db, "asignaturasDocente"),
       where("docenteId", "==", user.uid),
       where("anioLectivoId", "==", anioActivo.id),
       where("activo", "==", true),
     );
-
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
@@ -304,19 +307,14 @@ export default function ReporteNotas() {
         console.error("Error escuchando asignaturas:", error);
       },
     );
-
     return () => unsubscribe();
   }, [user?.uid, anioActivo?.id, esAdmin]);
-
-  // ==================== LISTENER EN TIEMPO REAL PARA ESTUDIANTES ====================
   useEffect(() => {
     if (!shouldLoadData) return;
     const gradoIds = gradosDisponibles.map((g) => g.id);
     if (gradoIds.length === 0) return;
-
     const unsubscribers: (() => void)[] = [];
     const estudiantesMap = new Map<string, Estudiante>();
-
     for (let i = 0; i < gradoIds.length; i += 10) {
       const lote = gradoIds.slice(i, i + 10);
       const q = query(
@@ -324,7 +322,6 @@ export default function ReporteNotas() {
         where("activo", "==", true),
         where("gradoId", "in", lote),
       );
-
       const unsubscribe = onSnapshot(
         q,
         (snapshot) => {
@@ -338,7 +335,6 @@ export default function ReporteNotas() {
               } as Estudiante);
             }
           });
-
           const todos = Array.from(estudiantesMap.values()).sort((a, b) =>
             a.apellidos.localeCompare(b.apellidos),
           );
@@ -350,22 +346,16 @@ export default function ReporteNotas() {
       );
       unsubscribers.push(unsubscribe);
     }
-
     return () => {
       unsubscribers.forEach((u) => u());
     };
   }, [shouldLoadData, gradosDisponibles]);
-
   const estudiantesFiltrados = useMemo(() => {
     const gradoIds = new Set(gradosDisponibles.map((g) => g.id));
     return estudiantes.filter((e) => gradoIds.has(e.gradoId));
   }, [estudiantes, gradosDisponibles]);
-
-  // ==================== CARGA DE ACTIVIDADES Y CALIFICACIONES ====================
-
   useEffect(() => {
     if (!shouldLoadData || loadedKey === loadKey) return;
-
     const cargarReporte = async () => {
       try {
         const gradoIds = gradosDisponibles.map((g) => g.id);
@@ -375,14 +365,11 @@ export default function ReporteNotas() {
           new Set(asignaturasDocente.map((a) => a.destrezaId)),
         );
         const periodoIdActivo = periodoActual?.id;
-
         const actividadesMap = new Map<string, ActividadData>();
-        // ✅ OPTIMIZADO: Filtrar por periodoId en la query (no en memoria).
         const agregarActividad = (act: ActividadData) => {
           if (!gradoIds.includes(act.gradoId)) return;
           actividadesMap.set(act.id, act);
         };
-
         if (esAdmin) {
           for (let i = 0; i < gradoIds.length; i += 10) {
             const lote = gradoIds.slice(i, i + 10);
@@ -437,28 +424,8 @@ export default function ReporteNotas() {
             );
           }
         }
-
         const actividadesBatch = Array.from(actividadesMap.values());
         setActividades(actividadesBatch);
-
-        const actividadIds = actividadesBatch.map((a) => a.id);
-        const calificacionesBatch: CalificacionData[] = [];
-        for (let i = 0; i < actividadIds.length; i += 30) {
-          const lote = actividadIds.slice(i, i + 30);
-          const snap = await getDocs(
-            query(
-              collection(db, "calificaciones"),
-              where("actividadId", "in", lote),
-            ),
-          );
-          snap.docs.forEach((d) =>
-            calificacionesBatch.push({
-              id: d.id,
-              ...d.data(),
-            } as CalificacionData),
-          );
-        }
-        setCalificaciones(calificacionesBatch);
       } catch (error) {
         console.error("Error cargando reporte:", error);
       } finally {
@@ -476,55 +443,113 @@ export default function ReporteNotas() {
     userData,
     periodoActual,
   ]);
-
+  // ==================== CALIFICACIONES EN VIVO ====================
+  useEffect(() => {
+    if (!shouldLoadData || loadedKey !== loadKey) return;
+    const actividadIds = actividades.map((a) => a.id).filter(Boolean);
+    if (actividadIds.length === 0) return;
+    const calsMap = new Map<string, CalificacionData>();
+    const unsubscribers: (() => void)[] = [];
+    for (let i = 0; i < actividadIds.length; i += 30) {
+      const lote = actividadIds.slice(i, i + 30);
+      const unsubscribe = onSnapshot(
+        query(
+          collection(db, "calificaciones"),
+          where("actividadId", "in", lote),
+        ),
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === "removed") {
+              calsMap.delete(change.doc.id);
+            } else {
+              calsMap.set(change.doc.id, {
+                id: change.doc.id,
+                ...change.doc.data(),
+              } as CalificacionData);
+            }
+          });
+          setCalificaciones(Array.from(calsMap.values()));
+        },
+        (error) => {
+          console.error("Error escuchando calificaciones:", error);
+        },
+      );
+      unsubscribers.push(unsubscribe);
+    }
+    return () => {
+      unsubscribers.forEach((u) => u());
+    };
+  }, [shouldLoadData, loadKey, loadedKey, actividades]);
+  // ==================== FILTRO DE INSUMOS ====================
+  const idsAgrupados = useMemo(() => {
+    const s = new Set<string>();
+    actividades.forEach((a) => {
+      if (a.esConsolidado && a.actividadesAgrupadas) {
+        a.actividadesAgrupadas.forEach((id) => s.add(id));
+      }
+    });
+    return s;
+  }, [actividades]);
+  const actividadesVisibles = useMemo(
+    () => actividades.filter((a) => a.id && !idsAgrupados.has(a.id)),
+    [actividades, idsAgrupados],
+  );
+  const calificacionesVisibles = useMemo(
+    () => calificaciones.filter((c) => !idsAgrupados.has(c.actividadId)),
+    [calificaciones, idsAgrupados],
+  );
   // ==================== MAPA DE CALIFICACIONES ====================
-
   const calMap = useMemo(() => {
     const map = new Map<string, CalificacionData>();
-    calificaciones.forEach((c) => {
+    calificacionesVisibles.forEach((c) => {
       map.set(`${c.estudianteId}|${c.actividadId}`, c);
     });
     return map;
-  }, [calificaciones]);
-
+  }, [calificacionesVisibles]);
   const notaFinalDe = (c: CalificacionData): number => {
-    if (c.refuerzo) {
+    const refuerzo = c.refuerzo as
+      | (typeof c.refuerzo & {
+          notaFinalAplicada?: number;
+          historial?: Array<Record<string, unknown>>;
+        })
+      | undefined;
+    if (typeof refuerzo?.notaFinalAplicada === "number") {
+      return refuerzo.notaFinalAplicada;
+    }
+    if (refuerzo && typeof refuerzo.nota === "number") {
       return calcularNotaFinalRefuerzo(
         c.nota,
-        c.refuerzo.nota,
-        c.refuerzo.estrategiaElegida || "promediar",
+        refuerzo.nota,
+        refuerzo.estrategiaElegida || "promediar",
       );
     }
     return c.nota;
   };
-
-  // ==================== VISTA TUTOR: REGISTROS DE RIESGO (< 7) ====================
-
+  // ==================== VISTA TUTOR: REGISTROS DE RIESGO ====================
   const registrosRiesgo = useMemo((): RegistroRiesgo[] => {
     if (!gradoTutorEfectivo) return [];
     const estudiantesMap = new Map(estudiantesFiltrados.map((e) => [e.id, e]));
-    const actividadesMap = new Map(actividades.map((a) => [a.id, a]));
+    const actividadesMap = new Map(actividadesVisibles.map((a) => [a.id, a]));
     const gradosMap = new Map(grados.map((g) => [g.id, g]));
     const destrezasMap = new Map(destrezas.map((d) => [d.id, d]));
     const ambitosMap = new Map(ambitos.map((a) => [a.id, a]));
-
     const registros: RegistroRiesgo[] = [];
-    calificaciones.forEach((cal) => {
+    calificacionesVisibles.forEach((cal) => {
       const nf = notaFinalDe(cal);
-      if (nf >= 7) return; // ✅ Solo menores a 7
+      if (nf >= 7) return;
       const estudiante = estudiantesMap.get(cal.estudianteId);
       const actividad = actividadesMap.get(cal.actividadId);
-      if (!estudiante || !actividad) return;
+      if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad)) return;
       if (estudiante.gradoId !== gradoTutorEfectivo) return;
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
       const ambito = ambitosMap.get(
         actividad.ambitoId || destreza?.ambitoId || "",
       );
-
       registros.push({
         calificacionId: cal.id,
         estudianteId: estudiante.id,
+        actividadId: actividad.id,
         estudianteNombre: `${estudiante.apellidos} ${estudiante.nombres}`,
         gradoId: estudiante.gradoId,
         gradoNombre: grado?.nombre || "—",
@@ -539,6 +564,7 @@ export default function ReporteNotas() {
         notaOriginal: cal.nota,
         notaFinal: nf,
         tieneRefuerzo: !!cal.refuerzo,
+        esConsolidado: !!actividad.esConsolidado,
         observacion: cal.observacion,
       });
     });
@@ -550,14 +576,12 @@ export default function ReporteNotas() {
   }, [
     gradoTutorEfectivo,
     estudiantesFiltrados,
-    actividades,
-    calificaciones,
+    actividadesVisibles,
+    calificacionesVisibles,
     grados,
     destrezas,
     ambitos,
   ]);
-
-  // ✅ Agrupar registros de riesgo por materia
   const gruposPorMateria = useMemo((): GrupoMateriaRiesgo[] => {
     const map = new Map<
       string,
@@ -599,17 +623,18 @@ export default function ReporteNotas() {
         estudiantesUnicos: g.estudiantesSet.size,
         conRefuerzo: g.conRefuerzo,
         notaPromedio:
-          g.registros.length > 0
-            ? round2(g.sumaNotas / g.registros.length)
-            : 0,
+          g.registros.length > 0 ? round2(g.sumaNotas / g.registros.length) : 0,
       }))
       .sort((a, b) => b.registros.length - a.registros.length);
   }, [registrosRiesgo]);
-
   const estudiantesUnicosEnRiesgo = useMemo(() => {
     const map = new Map<
       string,
-      { estudiante: RegistroRiesgo; conteo: number; materias: Set<string> }
+      {
+        estudiante: RegistroRiesgo;
+        conteo: number;
+        materias: Set<string>;
+      }
     >();
     registrosRiesgo.forEach((r) => {
       if (!map.has(r.estudianteId)) {
@@ -625,37 +650,35 @@ export default function ReporteNotas() {
     });
     return Array.from(map.values()).sort((a, b) => b.conteo - a.conteo);
   }, [registrosRiesgo]);
-
-  // ==================== VISTA DOCENTE: SECCIONES (MATRIZ) ====================
-
-  // ✅ SIN useMemo: IIFE de derivación directa (React Compiler auto-memoiza y evita el lint error)
+  // ==================== VISTA DOCENTE: SECCIONES ====================
   const seccionesDocente = ((): UnidadSeccion[] => {
     if (!gradoDocenteEfectivo) return [];
     const esInicial = esInicialDocente;
-
-    const unidades: { id: string; nombre: string; ambitoNombre: string }[] =
-      Array.from(misUnidadesDelGrado).map((id) => {
-        if (esInicial) {
-          const a = ambitos.find((x) => x.id === id);
-          return {
-            id,
-            nombre: a?.nombre || "—",
-            ambitoNombre: a?.nombre || "—",
-          };
-        }
-        const d = destrezas.find((x) => x.id === id);
-        const a = ambitos.find((x) => x.id === (d?.ambitoId || ""));
+    const unidades: {
+      id: string;
+      nombre: string;
+      ambitoNombre: string;
+    }[] = Array.from(misUnidadesDelGrado).map((id) => {
+      if (esInicial) {
+        const a = ambitos.find((x) => x.id === id);
         return {
           id,
-          nombre: d?.nombre || "—",
+          nombre: a?.nombre || "—",
           ambitoNombre: a?.nombre || "—",
         };
-      });
+      }
+      const d = destrezas.find((x) => x.id === id);
+      const a = ambitos.find((x) => x.id === (d?.ambitoId || ""));
+      return {
+        id,
+        nombre: d?.nombre || "—",
+        ambitoNombre: a?.nombre || "—",
+      };
+    });
     unidades.sort((a, b) => a.nombre.localeCompare(b.nombre));
-
     return unidades
       .map((u) => {
-        const acts = actividades
+        const acts = actividadesVisibles
           .filter(
             (a) =>
               a.gradoId === gradoDocenteEfectivo &&
@@ -670,17 +693,64 @@ export default function ReporteNotas() {
       })
       .filter((s) => s.actividades.length > 0);
   })();
-
   const estudiantesDelGradoDocente = useMemo(() => {
     return estudiantesFiltrados
       .filter((e) => e.gradoId === gradoDocenteEfectivo)
       .sort((a, b) => a.apellidos.localeCompare(b.apellidos));
   }, [estudiantesFiltrados, gradoDocenteEfectivo]);
-
-  // ==================== REFUERZO (compartido) ====================
-
+  const estudianteDetalle = useMemo(
+    () =>
+      estudiantesDelGradoDocente.find((e) => e.id === estudianteDetalleId) ||
+      null,
+    [estudiantesDelGradoDocente, estudianteDetalleId],
+  );
+  const notasDetalleEstudiante = useMemo(() => {
+    if (!estudianteDetalleId || !gradoDocenteEfectivo) return [];
+    return actividadesVisibles
+      .filter((a) => {
+        if (a.gradoId !== gradoDocenteEfectivo || !aplicaActividad(estudianteDetalle, a)) return false;
+        if (esInicialDocente) {
+          const destreza = destrezas.find((d) => d.id === a.destrezaId);
+          return misUnidadesDelGrado.has(
+            a.ambitoId || destreza?.ambitoId || "",
+          );
+        }
+        return misDestrezasDelGrado.has(a.destrezaId);
+      })
+      .sort(
+        (a, b) =>
+          a.fecha.localeCompare(b.fecha) || a.detalle.localeCompare(b.detalle),
+      )
+      .map((actividad) => ({
+        actividad,
+        calificacion:
+          calMap.get(`${estudianteDetalleId}|${actividad.id}`) || null,
+        materiaNombre: esInicialDocente
+          ? ambitos.find(
+              (x) =>
+                x.id ===
+                (actividad.ambitoId ||
+                  destrezas.find((d) => d.id === actividad.destrezaId)
+                    ?.ambitoId),
+            )?.nombre || "—"
+          : destrezas.find((d) => d.id === actividad.destrezaId)?.nombre || "—",
+      }));
+  }, [
+    estudianteDetalle,
+    estudianteDetalleId,
+    gradoDocenteEfectivo,
+    actividadesVisibles,
+    esInicialDocente,
+    destrezas,
+    ambitos,
+    misUnidadesDelGrado,
+    misDestrezasDelGrado,
+    calMap,
+  ]);
+  // ==================== REFUERZO ====================
   const abrirRefuerzo = (r: {
     calificacionId: string;
+    actividadId: string;
     estudianteNombre: string;
     materiaNombre: string;
     actividadDetalle: string;
@@ -689,8 +759,22 @@ export default function ReporteNotas() {
     estrategiaActividad: string;
   }) => {
     if (!misDestrezasTodas.has(r.destrezaId)) return;
+    const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificaciones.find((c) => c.id === r.calificacionId)?.estudianteId);
+    const actividadRefuerzo = actividadesVisibles.find((a) => a.id === r.actividadId);
+    if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) return;
+    const calificacionActual = calificaciones.find(
+      (c) => c.id === r.calificacionId,
+    );
+    if (!calificacionActual || notaFinalDe(calificacionActual) >= 7) {
+      mostrarAviso(
+        "info",
+        "La nota final es 7 o más; no se puede aplicar otro refuerzo ni modificar esta calificación.",
+      );
+      return;
+    }
     setRefuerzoRegistro({
       calificacionId: r.calificacionId,
+      actividadId: r.actividadId,
       estudianteNombre: r.estudianteNombre,
       materiaNombre: r.materiaNombre,
       actividadDetalle: r.actividadDetalle,
@@ -705,42 +789,97 @@ export default function ReporteNotas() {
     });
     setShowRefuerzoModal(true);
   };
-
   const aplicarRefuerzo = async () => {
     if (!refuerzoRegistro) return;
     if (!refuerzoForm.detalle.trim()) return;
     setIsGuardandoRefuerzo(true);
     try {
-      const refuerzoData = {
+      const calificacionActual = calificaciones.find(
+        (c) => c.id === refuerzoRegistro.calificacionId,
+      );
+      const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificacionActual?.estudianteId);
+      const actividadRefuerzo = actividadesVisibles.find((a) => a.id === refuerzoRegistro.actividadId);
+      if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) {
+        mostrarAviso("warning", "Esta actividad no corresponde al estudiante. No se aplicó el refuerzo.");
+        setShowRefuerzoModal(false);
+        setRefuerzoRegistro(null);
+        return;
+      }
+      if (!calificacionActual || notaFinalDe(calificacionActual) >= 7) {
+        mostrarAviso(
+          "warning",
+          "La nota final ya es 7 o más. No se aplicó un nuevo refuerzo.",
+        );
+        setShowRefuerzoModal(false);
+        setRefuerzoRegistro(null);
+        return;
+      }
+      const previo = (calificacionActual.refuerzo ||
+        null) as RefuerzoConHistorial | null;
+      const refuerzoData: EntradaRefuerzo = {
         nota: round2(refuerzoForm.nota),
         detalle: refuerzoForm.detalle.trim(),
         fecha: refuerzoForm.fecha,
         aplicadoPor: user?.uid || "",
-        estrategiaElegida: refuerzoForm.estrategia,
+        estrategiaElegida:
+          refuerzoForm.estrategia as EntradaRefuerzo["estrategiaElegida"],
+        origen: "informal",
       };
+      const refuerzoConstruido = construirRefuerzoConHistorial(
+        previo,
+        refuerzoData,
+      );
+      const refuerzoFinal = {
+        ...refuerzoConstruido,
+        historial: (refuerzoConstruido.historial || []).map(
+          (entrada, index) => ({
+            ...entrada,
+            numero: index + 1,
+          }),
+        ),
+      };
+      const actividadAfectada = refuerzoRegistro.actividadId;
       await updateDoc(
         doc(db, "calificaciones", refuerzoRegistro.calificacionId),
         {
-          refuerzo: refuerzoData,
+          refuerzo: refuerzoFinal,
           updatedAt: serverTimestamp(),
         },
       );
       setCalificaciones((prev) =>
         prev.map((c) =>
           c.id === refuerzoRegistro.calificacionId
-            ? { ...c, refuerzo: refuerzoData }
+            ? { ...c, refuerzo: refuerzoFinal }
             : c,
         ),
       );
       setShowRefuerzoModal(false);
       setRefuerzoRegistro(null);
+      mostrarAviso(
+        "success",
+        "Refuerzo aplicado: la nota final de la actividad quedó actualizada.",
+      );
+      const recalc = await recalcularInsumos([actividadAfectada]);
+      if (recalc.actualizados > 0)
+        mostrarAviso(
+          "info",
+          `Se recalculó el promedio de ${recalc.actualizados} insumo(s) consolidado(s).`,
+        );
+      else if (!recalc.ok)
+        mostrarAviso(
+          "warning",
+          `El refuerzo se aplicó, pero falló el recálculo del insumo: ${recalc.error}`,
+        );
     } catch (error) {
       console.error("Error aplicando refuerzo:", error);
+      mostrarAviso(
+        "error",
+        `No se pudo aplicar el refuerzo: ${error instanceof Error ? error.message : String(error)}`,
+      );
     } finally {
       setIsGuardandoRefuerzo(false);
     }
   };
-
   const notaFinalEstimada = refuerzoRegistro
     ? calcularNotaFinalRefuerzo(
         refuerzoRegistro.notaOriginal,
@@ -748,9 +887,7 @@ export default function ReporteNotas() {
         refuerzoForm.estrategia,
       )
     : 0;
-
-  // ==================== DESCARGA EXCEL POR SECCIÓN (VISTA DOCENTE) ====================
-
+  // ==================== DESCARGA EXCEL ====================
   const exportarSeccionExcel = (sec: UnidadSeccion) => {
     try {
       const data = estudiantesDelGradoDocente.map((est, idx) => {
@@ -763,8 +900,9 @@ export default function ReporteNotas() {
         };
         sec.actividades.forEach((a) => {
           const cal = calMap.get(`${est.id}|${a.id}`);
-          const columna = `${a.tipo}: ${a.detalle} (${a.fecha})`;
-          if (!cal) {
+          const etiqueta = a.esConsolidado ? `[INSUMO]` : "";
+          const columna = `${etiqueta}${a.tipo}: ${a.detalle} (${a.fecha})`;
+          if (!aplicaActividad(est, a) || !cal || cal.nota == null) {
             row[columna] = "—";
           } else {
             const nf = notaFinalDe(cal);
@@ -780,7 +918,6 @@ export default function ReporteNotas() {
         row["Promedio"] = conteo > 0 ? round2(suma / conteo) : "—";
         return row;
       });
-
       const ws = XLSX.utils.json_to_sheet(data);
       const colWidths = Object.keys(data[0] || {}).map((col) => {
         const maxWidth = data.reduce((max, row) => {
@@ -790,10 +927,8 @@ export default function ReporteNotas() {
         return { wch: Math.min(maxWidth + 2, 40) };
       });
       ws["!cols"] = colWidths;
-
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, sec.nombre.substring(0, 31));
-
       const now = new Date();
       const fechaStr = now.toISOString().split("T")[0];
       const nombreGrado =
@@ -801,241 +936,45 @@ export default function ReporteNotas() {
       const paralelo = gradoDocenteActual?.paralelo.replace(/ /g, "_") || "";
       const materiaLimpia = sec.nombre.replace(/[^a-zA-Z0-9]/g, "_");
       const nombreArchivo = `${nombreGrado}_${paralelo}_${materiaLimpia}_${fechaStr}.xlsx`;
-
       XLSX.writeFile(wb, nombreArchivo);
     } catch (error) {
       console.error("Error exportando Excel:", error);
     }
   };
-
-  // ==================== IMPRESIÓN ====================
-
-  const handlePrint = () => {
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
-
-    if (modoEfectivo === "tutor") {
-      // Impresión lineal (tabla simple)
-      const filas = registrosRiesgo
-        .map(
-          (r) => `
-          <tr>
-            <td>${r.estudianteNombre}</td>
-            <td>${r.materiaNombre}<br><small>${r.ambitoNombre}</small></td>
-            <td>${r.actividadTipo}: ${r.actividadDetalle}</td>
-            <td>${r.actividadFecha}</td>
-            <td class="nota">${r.notaOriginal}${r.tieneRefuerzo ? `<br><span class="ref">→ ${r.notaFinal} (ref.)</span>` : ""}</td>
-            <td>${r.tieneRefuerzo ? "Reforzada" : "Pendiente"}</td>
-          </tr>`,
-        )
-        .join("");
-
-      const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Estudiantes en Riesgo</title>
-          <style>
-            @page { size: letter portrait; margin: 2cm; }
-            body { font-family: Arial, sans-serif; color: #1f2937; font-size: 10px; }
-            h1 { text-align: center; font-size: 14px; margin: 0 0 5px 0; }
-            h2 { text-align: center; font-size: 11px; font-weight: normal; color: #374151; margin: 0 0 15px 0; }
-            table { width: 100%; border-collapse: collapse; font-size: 10px; }
-            th, td { border: 1px solid #6b7280; padding: 4px 6px; vertical-align: top; }
-            th { background: #fbbf24; color: #78350f; text-align: left; }
-            tr:nth-child(even) { background: #fef3c7; }
-            .nota { font-weight: bold; color: #b91c1c; text-align: center; }
-            .ref { color: #166534; font-size: 9px; }
-            .footer { margin-top: 20px; text-align: right; font-size: 8.5px; color: #6b7280; }
-          </style>
-        </head>
-        <body>
-          <h1>ESTUDIANTES EN RIESGO ACADÉMICO</h1>
-          <h2>Vista Tutor — ${gradoTutorActual?.nombre} "${gradoTutorActual?.paralelo}" · Notas &lt; 7</h2>
-          <p><strong>Total:</strong> ${registrosRiesgo.length} registros · ${estudiantesUnicosEnRiesgo.length} estudiantes</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Estudiante</th>
-                <th>Materia</th>
-                <th>Actividad</th>
-                <th>Fecha</th>
-                <th>Nota</th>
-                <th>Estado</th>
-              </tr>
-            </thead>
-            <tbody>${filas}</tbody>
-          </table>
-          <div class="footer">Generado: ${new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
-        </body>
-        </html>`;
-      printWindow.document.write(html);
-    } else {
-      // Impresión matriz (vista docente)
-      const seccionesHtml = seccionesDocente
-        .map((sec) => {
-          const encabezados = sec.actividades
-            .map(
-              (a) =>
-                `<th class="act">${a.tipo}<br/><span class="det">${a.detalle}</span><br/><span class="fecha">${a.fecha}</span></th>`,
-            )
-            .join("");
-          const filas = estudiantesDelGradoDocente
-            .map((est, idx) => {
-              let suma = 0;
-              let conteo = 0;
-              const celdas = sec.actividades
-                .map((a) => {
-                  const cal = calMap.get(`${est.id}|${a.id}`);
-                  if (!cal) return `<td class="sin">—</td>`;
-                  const nf = notaFinalDe(cal);
-                  suma += nf;
-                  conteo++;
-                  const cls = nf >= 7 ? "ok" : nf >= 5 ? "warn" : "bad";
-                  const ref = cal.refuerzo
-                    ? `<br/><span class="ref">de ${cal.nota}</span>`
-                    : "";
-                  return `<td class="${cls}">${round2(nf)}${ref}</td>`;
-                })
-                .join("");
-              const prom = conteo > 0 ? round2(suma / conteo) : 0;
-              return `<tr>
-                <td class="num">${idx + 1}</td>
-                <td class="name">${est.apellidos} ${est.nombres}</td>
-                ${celdas}
-                <td class="${prom >= 7 ? "ok" : "bad"}"><strong>${conteo > 0 ? prom : "—"}</strong></td>
-              </tr>`;
-            })
-            .join("");
-          return `
-            <div class="seccion">
-              <h3 class="sec-title">${sec.nombre} <small>(${sec.ambitoNombre})</small></h3>
-              <table class="grid">
-                <thead>
-                  <tr>
-                    <th class="num">#</th>
-                    <th class="name">Estudiante</th>
-                    ${encabezados}
-                    <th>Prom</th>
-                  </tr>
-                </thead>
-                <tbody>${filas}</tbody>
-              </table>
-            </div>`;
-        })
-        .join("");
-
-      const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Consolidado de Calificaciones</title>
-          <style>
-            @page { size: letter landscape; margin: 1.5cm 1cm; }
-            body { font-family: Arial, sans-serif; color: #1f2937; font-size: 10px; margin: 0; }
-            h1 { text-align: center; font-size: 14px; letter-spacing: 1px; margin: 0 0 3px 0; }
-            h2 { text-align: center; font-size: 11px; font-weight: normal; color: #374151; margin: 0 0 10px 0; }
-            .seccion { margin-bottom: 18px; page-break-inside: avoid; }
-            .sec-title { font-size: 11px; font-weight: bold; margin: 8px 0 4px 0; border-bottom: 2px solid #06b6d4; padding-bottom: 2px; }
-            .sec-title small { font-weight: normal; color: #6b7280; }
-            table.grid { width: 100%; border-collapse: collapse; }
-            th, td { border: 1px solid #6b7280; padding: 3px 4px; text-align: center; vertical-align: middle; }
-            th { background: #f3f4f6; font-size: 8.5px; text-transform: uppercase; }
-            th.act { min-width: 70px; }
-            th .det { text-transform: none; font-weight: normal; color: #374151; }
-            th .fecha { font-weight: normal; color: #6b7280; }
-            td.name { text-align: left; font-size: 9.5px; min-width: 140px; }
-            td.num { width: 22px; color: #6b7280; }
-            td.sin { color: #d1d5db; }
-            td.ok { color: #166534; font-weight: bold; background: #f0fdf4; }
-            td.warn { color: #92400e; font-weight: bold; background: #fffbeb; }
-            td.bad { color: #991b1b; font-weight: bold; background: #fef2f2; }
-            .ref { color: #6b7280; font-weight: normal; font-size: 8px; }
-            tr { page-break-inside: avoid; }
-            .footer { margin-top: 12px; font-size: 8.5px; color: #6b7280; text-align: right; }
-          </style>
-        </head>
-        <body>
-          <h1>CONSOLIDADO DE CALIFICACIONES</h1>
-          <h2>Vista Docente — ${gradoDocenteActual?.nombre} "${gradoDocenteActual?.paralelo}" · ${periodoActual?.nombre || "Trimestre activo"}</h2>
-          ${seccionesHtml || "<p>Sin actividades registradas.</p>"}
-          <div class="footer">Generado: ${new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
-        </body>
-        </html>`;
-      printWindow.document.write(html);
-    }
-    printWindow.document.close();
-    setTimeout(() => printWindow.print(), 400);
-  };
-
   // ==================== RENDER ====================
-
   if (!ready) {
     return (
       <Layout>
-        <div className="flex items-center justify-center py-20">
-          <FaSpinner className="animate-spin text-3xl text-amber-500" />
+        <div className="flex items-center justify-center py-10">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#244563] border-t-transparent mx-auto mb-3"></div>
+            <p className="text-[#64748B] text-[11px] font-medium">
+              Cargando...
+            </p>
+          </div>
         </div>
       </Layout>
     );
   }
-
   return (
     <Layout>
-      {/* TABS DE MODO + IMPRIMIR */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-        <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center justify-between">
-          <div className="flex gap-2 flex-1">
-            {esTutor && (
-              <button
-                onClick={() => setModoVista("tutor")}
-                className={`flex-1 px-4 py-3 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
-                  modoEfectivo === "tutor"
-                    ? "bg-purple-600 text-white shadow-lg"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                }`}
-              >
-                <FaUserTie />
-                Vista Tutor
-              </button>
-            )}
-            {tieneMaterias && (
-              <button
-                onClick={() => setModoVista("docente")}
-                className={`flex-1 px-4 py-3 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
-                  modoEfectivo === "docente"
-                    ? "bg-cyan-600 text-white shadow-lg"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                }`}
-              >
-                <FaChalkboardTeacher />
-                Vista Docente
-              </button>
-            )}
-          </div>
-          <button
-            onClick={handlePrint}
-            disabled={
-              modoEfectivo === "tutor"
-                ? registrosRiesgo.length === 0
-                : seccionesDocente.length === 0
-            }
-            className="inline-flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-          >
-            <FaPrint /> Imprimir
-          </button>
-        </div>
+      <div className="mb-2 flex flex-wrap items-baseline gap-2">
+        <h1 className="text-base font-semibold tracking-tight text-[#244563]">
+          Reporte de notas
+        </h1>
+        {periodoActual && (
+          <span className="text-[11px] font-medium text-[#9A4518]">
+            {periodoActual.nombre}
+          </span>
+        )}
       </div>
-
-      {/* SELECTOR DE GRADO */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
-        <label className="text-xs font-semibold text-slate-700 mb-2 flex items-center gap-1">
-          <FaGraduationCap className="text-blue-600" />
-          {modoEfectivo === "tutor"
-            ? "Grado que tutoras"
-            : "Grado donde dictas"}
-        </label>
-        <div className="flex flex-wrap gap-2">
+      {/* Grados a la izquierda; selector de vista a la derecha */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold text-[#64748B]">
+            <FaGraduationCap className="text-[10px] text-[#244563]" />
+            Grado:
+          </span>
           {(modoEfectivo === "tutor"
             ? gradosTutorizados
             : gradosDocenteMios
@@ -1052,12 +991,12 @@ export default function ReporteNotas() {
                     ? setGradoTutorSel(g.id)
                     : setGradoDocenteSel(g.id)
                 }
-                className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${
+                className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-medium border transition-colors ${
                   sel
                     ? modoEfectivo === "tutor"
-                      ? "bg-purple-600 text-white border-purple-600"
-                      : "bg-cyan-600 text-white border-cyan-600"
-                    : "bg-white text-slate-700 border-slate-200 hover:border-slate-400"
+                      ? "bg-[#244563] text-[#FFFFFF] border-[#244563]"
+                      : "bg-[#244563] text-[#FFFFFF] border-[#244563]"
+                    : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"
                 }`}
               >
                 {g.nombre} - {g.paralelo}
@@ -1065,53 +1004,54 @@ export default function ReporteNotas() {
             );
           })}
         </div>
-        <div className="mt-3 text-xs text-slate-600 bg-slate-50 rounded-lg p-3 border border-slate-200">
-          <FaInfoCircle className="inline mr-1 text-blue-600" />
-          {modoEfectivo === "tutor" ? (
-            <>
-              <strong>Vista Tutor:</strong> solo calificaciones{" "}
-              <strong className="text-red-600">menores a 7</strong> de{" "}
-              <strong>
-                {gradoTutorActual?.nombre} {gradoTutorActual?.paralelo}
-              </strong>{" "}
-              en todas las materias del grado.
-            </>
-          ) : (
-            <>
-              <strong>Vista Docente:</strong> tus materias en{" "}
-              <strong>
-                {gradoDocenteActual?.nombre} {gradoDocenteActual?.paralelo}
-              </strong>
-              : <strong>{misUnidadesNombres.join(", ") || "—"}</strong>.
-            </>
+        <div className="ml-auto inline-flex shrink-0 items-center gap-0.5 rounded-md border border-[#D8DEE6] bg-[#ECEFF3] p-0.5">
+          {esTutor && (
+            <button
+              onClick={() => setModoVista("tutor")}
+              className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${
+                modoEfectivo === "tutor"
+                  ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70"
+                  : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"
+              }`}
+            >
+              <FaUserTie className="text-[10px]" />
+              Vista Tutor
+            </button>
           )}
-          {periodoActual && (
-            <>
-              {" "}
-              · Trimestre activo: <strong>{periodoActual.nombre}</strong>
-            </>
+          {tieneMaterias && (
+            <button
+              onClick={() => setModoVista("docente")}
+              className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${
+                modoEfectivo === "docente"
+                  ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70"
+                  : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"
+              }`}
+            >
+              <FaChalkboardTeacher className="text-[10px]" />
+              Vista Docente
+            </button>
           )}
         </div>
       </div>
 
+      {/* Loading */}
       {loading ? (
-        <div className="text-center py-16">
-          <FaSpinner className="animate-spin text-4xl text-amber-500 mx-auto mb-3" />
-          <p className="text-slate-600 text-sm font-medium">
+        <div className="text-center py-10">
+          <FaSpinner className="animate-spin text-2xl text-[#244563] mx-auto mb-3" />
+          <p className="text-[#64748B] text-[11px] font-medium">
             Cargando consolidado...
           </p>
         </div>
       ) : modoEfectivo === "tutor" ? (
-        // ==================== VISTA TUTOR: AGRUPADO POR MATERIA ====================
         registrosRiesgo.length === 0 ? (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
-            <div className="bg-green-100 rounded-full p-5 mb-4 inline-block">
-              <FaCheckCircle className="text-4xl text-green-500" />
+          <div className="bg-[#FFFFFF] rounded-lg border border-[#D8DEE6] px-4 py-8 text-center">
+            <div className="bg-[#E2EAF3] rounded-full p-2.5 mb-3 inline-block">
+              <FaCheckCircle className="text-2xl text-[#244563]" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800 mb-2">
+            <h3 className="text-sm font-bold text-[#374151] mb-2">
               ¡Excelente! No hay estudiantes en riesgo
             </h3>
-            <p className="text-slate-600 text-sm">
+            <p className="text-[#64748B] text-[11px]">
               No se encontraron calificaciones menores a 7 en{" "}
               <strong>
                 {gradoTutorActual?.nombre} {gradoTutorActual?.paralelo}
@@ -1120,273 +1060,195 @@ export default function ReporteNotas() {
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {/* Tarjetas resumen */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-                <div className="flex items-center gap-3">
-                  <div className="bg-red-100 p-3 rounded-lg">
-                    <FaExclamationTriangle className="text-red-600 text-xl" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-500 font-semibold uppercase">
-                      Registros &lt; 7
-                    </p>
-                    <p className="text-2xl font-bold text-slate-800">
-                      {registrosRiesgo.length}
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-                <div className="flex items-center gap-3">
-                  <div className="bg-amber-100 p-3 rounded-lg">
-                    <FaUserGraduate className="text-amber-600 text-xl" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-500 font-semibold uppercase">
-                      Estudiantes en riesgo
-                    </p>
-                    <p className="text-2xl font-bold text-slate-800">
-                      {estudiantesUnicosEnRiesgo.length}
-                    </p>
-                  </div>
-                </div>
-              </div>
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5">
-                <div className="flex items-center gap-3">
-                  <div className="bg-green-100 p-3 rounded-lg">
-                    <FaCheckCircle className="text-green-600 text-xl" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-500 font-semibold uppercase">
-                      Con refuerzo
-                    </p>
-                    <p className="text-2xl font-bold text-slate-800">
-                      {registrosRiesgo.filter((r) => r.tieneRefuerzo).length}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Resumen por estudiante */}
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="bg-linear-to-r from-purple-600 to-purple-700 px-5 py-4 flex items-center gap-3">
-                <FaUserGraduate className="text-white text-xl" />
-                <div>
-                  <h3 className="text-white font-semibold">
-                    Resumen por Estudiante
-                  </h3>
-                  <p className="text-white/80 text-xs">
-                    {estudiantesUnicosEnRiesgo.length} estudiante(s) con notas
-                    menores a 7
-                  </p>
-                </div>
-              </div>
-              <div className="divide-y divide-slate-100">
+          <div className="grid min-w-0 items-start gap-3 xl:grid-cols-[260px_minmax(0,1fr)]">
+            {/* Resumen compacto por estudiante */}
+            <section className="min-w-0 overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF]">
+              <header className="flex items-center justify-between gap-2 border-b border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2">
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold text-[#273444]">
+                  <FaUserGraduate className="text-[11px] text-[#244563]" />
+                  Estudiantes en riesgo
+                </h3>
+                <span className="rounded bg-[#EAF0F6] px-1.5 py-0.5 text-[10px] font-bold text-[#244563]">
+                  {estudiantesUnicosEnRiesgo.length}
+                </span>
+              </header>
+              <div className="divide-y divide-[#E4E8EE]">
                 {estudiantesUnicosEnRiesgo.map(
                   ({ estudiante, conteo, materias }) => (
                     <div
                       key={estudiante.estudianteId}
-                      className="p-4 hover:bg-slate-50"
+                      className="px-3 py-2 transition-colors hover:bg-[#ECEFF3]"
                     >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <h4 className="font-semibold text-slate-900 text-sm">
-                              {estudiante.estudianteNombre}
-                            </h4>
-                          </div>
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {Array.from(materias)
-                              .slice(0, 4)
-                              .map((m) => (
-                                <span
-                                  key={m}
-                                  className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded"
-                                >
-                                  {m}
-                                </span>
-                              ))}
-                            {materias.size > 4 && (
-                              <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded">
-                                +{materias.size - 4} más
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                      <div className="flex items-start justify-between gap-2">
+                        <h4 className="min-w-0 wrap-break-word text-[11px] font-semibold leading-snug text-[#374151]">
+                          {estudiante.estudianteNombre}
+                        </h4>
                         <span
-                          className={`px-3 py-1 rounded-full text-sm font-bold shrink-0 ${
-                            conteo >= 5
-                              ? "bg-red-100 text-red-700 border border-red-300"
-                              : conteo >= 3
-                                ? "bg-orange-100 text-orange-700 border border-orange-300"
-                                : "bg-amber-100 text-amber-700 border border-amber-300"
-                          }`}
+                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold ${conteo >= 5 ? "bg-red-100 text-[#AD3038]" : "bg-[#FFF7ED] text-[#9A4518]"}`}
                         >
-                          {conteo} {conteo === 1 ? "nota" : "notas"} &lt; 7
+                          {conteo} &lt; 7
                         </span>
                       </div>
+                      <p className="mt-1 wrap-break-word text-[10px] leading-relaxed text-[#6B7280]">
+                        {Array.from(materias).join(" · ")}
+                      </p>
                     </div>
                   ),
                 )}
               </div>
-            </div>
+            </section>
 
-            {/* TABLAS AGRUPADAS POR MATERIA */}
-            <div className="space-y-4">
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="bg-linear-to-r from-red-500 to-red-600 px-5 py-4 flex items-center gap-3">
-                  <FaExclamationTriangle className="text-white text-xl" />
-                  <div className="flex-1">
-                    <h3 className="text-white font-semibold">
-                      Detalle de Calificaciones Bajas
-                    </h3>
-                    <p className="text-white/80 text-xs">
-                      {registrosRiesgo.length} registro(s) agrupado(s) en{" "}
-                      {gruposPorMateria.length} materia(s)
-                    </p>
-                  </div>
-                </div>
-              </div>
-
+            {/* Detalle por materia */}
+            <div className="min-w-0 space-y-3">
               {gruposPorMateria.map((grupo) => (
                 <div
                   key={grupo.destrezaId}
-                  className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden"
+                  className="bg-[#FFFFFF] rounded-lg border border-[#D8DEE6] overflow-hidden"
                 >
-                  {/* Encabezado del grupo */}
-                  <div className="bg-linear-to-r from-slate-50 to-slate-100 px-5 py-3 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
-                    <div className="flex items-center gap-3">
+                  <div className="bg-[#ECEFF3] px-3 py-2 border-b border-[#D8DEE6] flex items-center justify-between gap-2.5 flex-wrap">
+                    <div className="flex items-center gap-2.5">
                       <div className="bg-red-100 p-2 rounded-lg">
-                        <FaBook className="text-red-600" />
+                        <FaBook className="text-[#C93F45]" />
                       </div>
                       <div>
-                        <h4 className="font-bold text-slate-900 text-sm">
+                        <h4 className="font-bold text-[#273444] text-xs">
                           {grupo.materiaNombre}
                         </h4>
-                        <p className="text-[11px] text-slate-500">
+                        <p className="text-[11px] text-[#6B7280]">
                           {grupo.ambitoNombre}
                         </p>
                       </div>
                     </div>
-                    <div className="flex gap-2 flex-wrap">
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-red-100 border border-red-300 text-red-700 rounded-full text-[11px] font-bold">
+                    <div className="flex gap-1 flex-wrap">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-red-100 border border-red-300 text-[#AD3038] rounded text-[10px] font-bold">
                         {grupo.registros.length}{" "}
                         {grupo.registros.length === 1 ? "nota" : "notas"} &lt; 7
                       </span>
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 border border-amber-300 text-amber-700 rounded-full text-[11px] font-bold">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber-100 border border-amber-300 text-amber-700 rounded text-[10px] font-bold">
                         <FaUserGraduate className="text-[9px]" />{" "}
                         {grupo.estudiantesUnicos} estudiante
                         {grupo.estudiantesUnicos !== 1 ? "s" : ""}
                       </span>
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-green-100 border border-green-300 text-green-700 rounded-full text-[11px] font-bold">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-[#E2EAF3] border border-[#A8BDD2] text-[#1B354D] rounded text-[10px] font-bold">
                         <FaCheckCircle className="text-[9px]" />{" "}
                         {grupo.conRefuerzo} refuerzo
                         {grupo.conRefuerzo !== 1 ? "s" : ""}
                       </span>
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-200 border border-slate-300 text-slate-700 rounded-full text-[11px] font-bold">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-[#D8DEE6] border border-[#BFC9D4] text-[#4B5563] rounded text-[10px] font-bold">
                         Promedio: {grupo.notaPromedio}
                       </span>
                     </div>
                   </div>
-
-                  {/* Tabla de registros de esta materia */}
                   <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-slate-50 border-b border-slate-200">
+                    <table className="w-full min-w-120 border-collapse text-[11px]">
+                      <thead className="bg-[#ECEFF3] border-b border-[#D8DEE6]">
                         <tr>
-                          <th className="text-left px-4 py-2.5 font-semibold text-slate-700 text-xs">
+                          <th className="uppercase tracking-wide text-left px-2.5 py-1.5 font-semibold text-[#4B5563] text-[10px]">
                             Estudiante
                           </th>
-                          <th className="text-left px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                          <th className="uppercase tracking-wide text-left px-2.5 py-1.5 font-semibold text-[#4B5563] text-[10px]">
                             Actividad
                           </th>
-                          <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
+                          <th className="uppercase tracking-wide text-center px-2.5 py-1.5 font-semibold text-[#4B5563] text-[10px]">
                             Fecha
                           </th>
-                          <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                            Nota
-                          </th>
-                          <th className="text-center px-3 py-2.5 font-semibold text-slate-700 text-xs">
-                            Acción
+                          <th className="uppercase tracking-wide text-center px-2.5 py-1.5 font-semibold text-[#4B5563] text-[10px]">
+                            {grupo.registros.some(
+                              (r) =>
+                                misDestrezasTodas.has(r.destrezaId) &&
+                                r.notaFinal < 7 &&
+                                !r.esConsolidado,
+                            )
+                              ? "Nota / refuerzo"
+                              : "Nota"}
                           </th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-[#E4E8EE]">
                         {grupo.registros.map((r, idx) => (
                           <tr
                             key={`${r.estudianteId}-${r.calificacionId}-${idx}`}
-                            className="hover:bg-slate-50"
+                            className="group transition-colors hover:bg-[#ECEFF3]"
                           >
-                            <td className="px-4 py-2.5">
-                              <p className="font-medium text-slate-900 text-xs">
+                            <td className="px-2.5 py-1.5">
+                              <p className="text-[11px] font-medium text-[#273444]">
                                 {r.estudianteNombre}
                               </p>
                             </td>
-                            <td className="px-3 py-2.5">
-                              <p className="text-xs font-medium text-slate-900">
+                            <td className="px-2.5 py-1.5">
+                              {r.esConsolidado && (
+                                <span className="inline-block text-[9px] font-bold bg-[#FFF7ED] text-[#9A4518] px-1.5 py-0.5 rounded mb-0.5">
+                                  INSUMO
+                                </span>
+                              )}
+                              <p className="wrap-break-word text-[11px] font-medium text-[#273444]">
                                 {r.actividadDetalle}
                               </p>
-                              <p className="text-[10px] text-slate-500">
+                              <p className="text-[10px] text-[#6B7280]">
                                 {r.actividadTipo}
                               </p>
                             </td>
-                            <td className="px-3 py-2.5 text-center text-xs text-slate-600">
+                            <td className="px-2.5 py-1.5 text-center text-[10px] text-[#64748B]">
                               {r.actividadFecha}
                             </td>
-                            <td className="px-3 py-2.5 text-center">
-                              <span
-                                className={`inline-block px-2 py-1 rounded text-xs font-bold ${
-                                  r.notaFinal < 5
-                                    ? "bg-red-100 text-red-700 border border-red-300"
-                                    : "bg-amber-100 text-amber-700 border border-amber-300"
-                                }`}
-                              >
-                                {r.notaOriginal}
-                              </span>
-                              {r.tieneRefuerzo && (
-                                <p className="text-[10px] text-green-600 mt-1 font-semibold">
-                                  → {r.notaFinal} (ref.)
-                                </p>
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-center">
-                              {misDestrezasTodas.has(r.destrezaId) ? (
-                                !r.tieneRefuerzo ? (
-                                  <button
-                                    onClick={() =>
-                                      abrirRefuerzo({
-                                        calificacionId: r.calificacionId,
-                                        estudianteNombre: r.estudianteNombre,
-                                        materiaNombre: r.materiaNombre,
-                                        actividadDetalle: r.actividadDetalle,
-                                        notaOriginal: r.notaOriginal,
-                                        destrezaId: r.destrezaId,
-                                        estrategiaActividad:
-                                          r.estrategiaActividad,
-                                      })
-                                    }
-                                    className="inline-flex items-center gap-1 bg-orange-100 hover:bg-orange-200 text-orange-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all"
-                                    title="Aplicar refuerzo"
-                                  >
-                                    <FaSyncAlt className="text-[10px]" />
-                                    Refuerzo
-                                  </button>
-                                ) : (
-                                  <span className="text-[10px] text-green-600 font-semibold">
-                                    Refuerzo aplicado
-                                  </span>
-                                )
-                              ) : (
-                                <span
-                                  className="text-[10px] text-slate-400"
-                                  title="Materia de otro docente"
-                                >
-                                  —
-                                </span>
-                              )}
+                            <td className="px-2.5 py-1.5 text-center">
+                              <div className="flex items-center justify-center gap-2">
+                                <div className="shrink-0">
+                                  {r.tieneRefuerzo ? (
+                                    <>
+                                      <span
+                                        className={`inline-block px-2 py-1 rounded text-[10px] font-bold bg-[#E2EAF3] text-[#1B354D] border border-[#A8BDD2]`}
+                                        title={`Nota final tras refuerzo (estrategia aplicada)`}
+                                      >
+                                        {r.notaFinal}
+                                      </span>
+                                      <p className="text-[10px] text-[#6B7280] mt-1">
+                                        antes: {r.notaOriginal}
+                                      </p>
+                                    </>
+                                  ) : (
+                                    <span
+                                      className={`inline-block px-2 py-1 rounded text-[10px] font-bold ${
+                                        r.notaFinal < 5
+                                          ? "bg-red-100 text-[#AD3038] border border-red-300"
+                                          : "bg-amber-100 text-amber-700 border border-amber-300"
+                                      }`}
+                                    >
+                                      {r.notaOriginal}
+                                    </span>
+                                  )}
+                                </div>
+                                {misDestrezasTodas.has(r.destrezaId) &&
+                                  r.notaFinal < 7 &&
+                                  !r.esConsolidado && (
+                                    <button
+                                      onClick={() =>
+                                        abrirRefuerzo({
+                                          calificacionId: r.calificacionId,
+                                          actividadId: r.actividadId,
+                                          estudianteNombre: r.estudianteNombre,
+                                          materiaNombre: r.materiaNombre,
+                                          actividadDetalle: r.actividadDetalle,
+                                          notaOriginal: r.notaOriginal,
+                                          destrezaId: r.destrezaId,
+                                          estrategiaActividad:
+                                            r.estrategiaActividad,
+                                        })
+                                      }
+                                      className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md bg-orange-50 px-2 text-[10px] font-semibold text-orange-700 ring-1 ring-inset ring-orange-200 transition-colors hover:bg-orange-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-300"
+                                      title={
+                                        r.tieneRefuerzo
+                                          ? "Aplicar otro refuerzo mientras la nota siga bajo 7"
+                                          : "Aplicar refuerzo"
+                                      }
+                                    >
+                                      <FaSyncAlt className="text-[10px]" />
+                                      {r.tieneRefuerzo
+                                        ? "Otro refuerzo"
+                                        : "Refuerzo"}
+                                    </button>
+                                  )}
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -1398,106 +1260,140 @@ export default function ReporteNotas() {
             </div>
           </div>
         )
-      ) : // ==================== VISTA DOCENTE: MATRIZ ====================
-      seccionesDocente.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-12 text-center">
-          <div className="bg-slate-100 rounded-full p-5 mb-4 inline-block">
-            <FaBook className="text-4xl text-slate-400" />
+      ) : seccionesDocente.length === 0 ? (
+        <div className="bg-[#FFFFFF] rounded-lg border border-[#D8DEE6] px-4 py-8 text-center">
+          <div className="bg-[#ECEFF3] rounded-full p-2.5 mb-3 inline-block">
+            <FaBook className="text-2xl text-[#9CA3AF]" />
           </div>
-          <h3 className="text-lg font-bold text-slate-800 mb-2">
+          <h3 className="text-sm font-bold text-[#374151] mb-2">
             Sin actividades registradas
           </h3>
-          <p className="text-slate-600 text-sm">
+          <p className="text-[#64748B] text-[11px]">
             Aún no hay actividades con calificaciones en tus materias de este
             grado y trimestre.
           </p>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="space-y-3">
           {seccionesDocente.map((sec) => (
             <div
               key={sec.id}
-              className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden"
+              className="bg-[#FFFFFF] rounded-lg border border-[#D8DEE6] overflow-hidden"
             >
-              <div className="bg-linear-to-r from-cyan-600 to-cyan-700 px-5 py-3 flex items-center justify-between">
+              <div className="bg-[#ECEFF3] border-b border-[#D8DEE6] px-3 py-2 flex flex-wrap gap-2 items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <FaBook className="text-white text-lg" />
+                  <FaBook className="text-[#244563] text-sm" />
                   <div>
-                    <h3 className="text-white font-semibold">{sec.nombre}</h3>
-                    <p className="text-white/80 text-xs">{sec.ambitoNombre}</p>
+                    <h3 className="text-[#273444] text-xs font-semibold">
+                      {sec.nombre}
+                    </h3>
+                    <p className="text-[#64748B] text-[10px]">
+                      {sec.ambitoNombre}
+                    </p>
                   </div>
                 </div>
-                {/* Contador + Botón Descargar Excel */}
                 <div className="flex items-center gap-2">
-                  <span className="text-white/90 text-xs bg-white/20 px-2 py-1 rounded-full">
+                  <span className="text-[#4B5563] text-[10px] bg-[#EAF0F6] px-2 py-1 rounded-full">
                     {sec.actividades.length} actividad(es)
                   </span>
                   <button
+                    onClick={() =>
+                      navigate(
+                        `/refuerzo-pedagogico?nuevo=1&gradoId=${gradoDocenteEfectivo}&destrezaId=${sec.id}`,
+                      )
+                    }
+                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 inline-flex items-center gap-1.5 border border-[#D8DEE6] bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] px-3 rounded-md text-[11px] font-semibold transition-colors"
+                    title={`Generar proceso de refuerzo pedagógico para ${sec.nombre}`}
+                  >
+                    <FaSyncAlt className="text-[11px]" />
+                    <span className="hidden sm:inline">Refuerzo</span>
+                  </button>
+                  <button
                     onClick={() => exportarSeccionExcel(sec)}
-                    className="inline-flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                    className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 inline-flex items-center gap-1.5 border border-[#D8DEE6] bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] px-3 rounded-md text-[11px] font-semibold transition-colors"
                     title={`Descargar Excel de ${sec.nombre}`}
                   >
-                    <FaFileExcel className="text-sm" />
+                    <FaFileExcel className="text-[11px]" />
                     <span className="hidden sm:inline">Excel</span>
                   </button>
                 </div>
               </div>
-
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 border-b border-slate-200">
+                <table className="w-full min-w-max border-collapse text-[11px]">
+                  <thead className="bg-[#ECEFF3] border-b border-[#D8DEE6]">
                     <tr>
-                      <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-10">
+                      <th className="uppercase tracking-wide text-center px-2 py-1.5 font-semibold text-[#4B5563] text-[10px] w-8">
                         #
                       </th>
-                      <th className="text-left px-3 py-2 font-semibold text-slate-700 text-xs min-w-45 sticky left-0 bg-slate-50">
+                      <th className="uppercase tracking-wide text-left px-2 py-1.5 font-semibold text-[#4B5563] text-[10px] min-w-47.5 sticky left-0 z-10 border-r border-[#E4E8EE] bg-[#ECEFF3]">
                         Estudiante
                       </th>
                       {sec.actividades.map((a) => (
                         <th
                           key={a.id}
-                          className="text-center px-2 py-2 font-semibold text-slate-700 text-xs min-w-28"
+                          className="min-w-23 max-w-32.5 border-r border-[#E4E8EE] px-1.5 py-1.5 text-center align-top font-semibold text-[#64748B]"
+                          title={`${a.tipo}: ${a.detalle} · ${a.fecha}`}
                         >
-                          <div className="text-[11px] font-bold text-slate-800">
+                          {a.esConsolidado && (
+                            <div className="text-[9px] font-bold text-[#9A4518] uppercase tracking-wide">
+                              Insumo
+                            </div>
+                          )}
+                          <div className="truncate text-[10px] font-semibold text-[#4B5563]">
                             {a.tipo}
                           </div>
                           <div
-                            className="text-[10px] font-normal text-slate-600 truncate max-w-30"
+                            className="text-[10px] font-normal text-[#64748B] truncate max-w-26"
                             title={a.detalle}
                           >
                             {a.detalle}
                           </div>
-                          <div className="text-[10px] font-normal text-slate-500">
+                          <div className="text-[10px] font-normal tabular-nums text-[#6B7280]">
                             {a.fecha}
                           </div>
                         </th>
                       ))}
-                      <th className="text-center px-2 py-2 font-semibold text-slate-700 text-xs w-16">
+                      <th className="sticky right-0 z-10 w-14 border-l border-[#D8DEE6] bg-[#ECEFF3] px-1.5 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
                         Prom
                       </th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-[#E4E8EE]">
                     {estudiantesDelGradoDocente.map((est, idx) => {
                       let suma = 0;
                       let conteo = 0;
                       return (
-                        <tr key={est.id} className="hover:bg-slate-50">
-                          <td className="px-2 py-2 text-center text-xs text-slate-500">
+                        <tr
+                          key={est.id}
+                          className="group transition-colors hover:bg-[#ECEFF3]"
+                        >
+                          <td className="px-1.5 py-1 text-center text-[10px] text-[#6B7280]">
                             {idx + 1}
                           </td>
-                          <td className="px-3 py-2 sticky left-0 bg-white">
-                            <div className="font-medium text-slate-900 text-xs truncate">
-                              {est.apellidos} {est.nombres}
+                          <td className="sticky left-0 z-10 max-w-62.5 border-r border-[#E4E8EE] bg-[#FFFFFF] px-2 py-1 text-[11px] font-medium text-[#374151] group-hover:bg-[#ECEFF3]">
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <span className="min-w-0 truncate" title={`${est.apellidos} ${est.nombres}`}>
+                                {est.apellidos} {est.nombres}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setEstudianteDetalleId(est.id)}
+                                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#244563] transition-colors hover:bg-[#EAF0F6] hover:text-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                title={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
+                                aria-label={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
+                              >
+                                <FaEye aria-hidden="true" className="text-[10px]" />
+                              </button>
                             </div>
                           </td>
                           {sec.actividades.map((a) => {
                             const cal = calMap.get(`${est.id}|${a.id}`);
-                            if (!cal) {
+                            if (!aplicaActividad(est, a) || !cal || cal.nota == null) {
                               return (
                                 <td
                                   key={a.id}
-                                  className="px-2 py-2 text-center text-slate-300 text-xs"
+                                  className="px-1.5 py-1 text-center text-[#BFC9D4] text-[10px]"
+                                  title={!aplicaActividad(est, a) ? "No aplica para este estudiante" : "Sin nota registrada"}
                                 >
                                   —
                                 </td>
@@ -1507,24 +1403,25 @@ export default function ReporteNotas() {
                             suma += nf;
                             conteo++;
                             const puedeRefuerzo =
-                              !cal.refuerzo &&
-                              cal.nota < 7 &&
+                              !a.esConsolidado &&
+                              nf < 7 &&
                               misDestrezasTodas.has(a.destrezaId);
                             const cls =
                               nf >= 9
-                                ? "bg-green-100 text-green-800 border-green-300"
+                                ? "bg-[#EAF0F6] text-[#1B354D]"
                                 : nf >= 7
-                                  ? "bg-blue-100 text-blue-800 border-blue-300"
+                                  ? "bg-[#EAF0F6] text-[#244563]"
                                   : nf >= 5
-                                    ? "bg-amber-100 text-amber-800 border-amber-300"
-                                    : "bg-red-100 text-red-800 border-red-300";
+                                    ? "bg-amber-50 text-amber-700"
+                                    : "bg-red-50 text-[#AD3038]";
                             return (
-                              <td key={a.id} className="px-2 py-2 text-center">
+                              <td key={a.id} className="border-r border-[#E4E8EE] px-1.5 py-1 text-center">
                                 {puedeRefuerzo ? (
                                   <button
                                     onClick={() =>
                                       abrirRefuerzo({
                                         calificacionId: cal.id,
+                                        actividadId: a.id,
                                         estudianteNombre: `${est.apellidos} ${est.nombres}`,
                                         materiaNombre: sec.nombre,
                                         actividadDetalle: a.detalle,
@@ -1534,39 +1431,44 @@ export default function ReporteNotas() {
                                           a.estrategiaNota || "promediar",
                                       })
                                     }
-                                    className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls} hover:ring-2 hover:ring-orange-400 cursor-pointer`}
-                                    title="Aplicar refuerzo"
+                                    className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors cursor-pointer hover:ring-2 hover:ring-[#FDBA74]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FDBA74]/40 ${cls}`}
+                                    title={
+                                      cal.refuerzo
+                                        ? "Aplicar otro refuerzo mientras la nota final siga bajo 7"
+                                        : "Aplicar refuerzo"
+                                    }
                                   >
                                     {round2(nf)}
+                                    {cal.refuerzo && <span className="ml-0.5 text-[9px]">✓</span>}
                                   </button>
                                 ) : (
                                   <span
-                                    className={`inline-block px-2 py-1 rounded text-xs font-bold border ${cls}`}
+                                    className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${cls}`}
                                     title={
                                       cal.refuerzo
                                         ? `Refuerzo de ${cal.nota} → ${round2(nf)}`
-                                        : undefined
+                                        : a.esConsolidado
+                                          ? "Insumo consolidado (promedio)"
+                                          : undefined
                                     }
                                   >
                                     {round2(nf)}
                                     {cal.refuerzo && (
-                                      <span className="block text-[9px] font-normal text-slate-500">
-                                        de {cal.nota}
-                                      </span>
+                                      <span className="ml-0.5 text-[9px]">✓</span>
                                     )}
                                   </span>
                                 )}
                               </td>
                             );
                           })}
-                          <td className="px-2 py-2 text-center">
+                          <td className="sticky right-0 z-10 border-l border-[#D8DEE6] bg-[#FFFFFF] px-1.5 py-1 text-center group-hover:bg-[#ECEFF3]">
                             <span
-                              className={`inline-block px-2 py-1 rounded text-xs font-bold ${
+                              className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
                                 conteo === 0
-                                  ? "text-slate-400"
+                                  ? "text-[#9CA3AF]"
                                   : suma / conteo >= 7
-                                    ? "bg-green-100 text-green-800"
-                                    : "bg-red-100 text-red-800"
+                                    ? "bg-[#EAF0F6] text-[#1B354D]"
+                                    : "bg-red-50 text-[#AD3038]"
                               }`}
                             >
                               {conteo > 0 ? round2(suma / conteo) : "—"}
@@ -1583,22 +1485,325 @@ export default function ReporteNotas() {
         </div>
       )}
 
-      {/* ==================== MODAL REFUERZO (compartido) ==================== */}
-      {showRefuerzoModal && refuerzoRegistro && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="bg-orange-100 p-2 rounded-lg">
-                  <FaSyncAlt className="text-orange-600 text-xl" />
+      {/* Modal de detalle del estudiante */}
+      {estudianteDetalle && (
+        <div
+          className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-3 sm:p-2.5"
+          onClick={() => setEstudianteDetalleId(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="detalle-notas-titulo"
+            className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-center justify-between gap-2.5 border-b border-[#D8DEE6] bg-[#ECEFF3] px-4 py-3 sm:px-4">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <div className="rounded-lg bg-[#EAF0F6] p-2.5 text-[#244563]">
+                  <FaClipboardList className="text-sm" />
                 </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">
-                    Aplicar Refuerzo
+                <div className="min-w-0">
+                  <h3
+                    id="detalle-notas-titulo"
+                    className="truncate text-base font-bold text-[#273444]"
+                  >
+                    Detalle de calificaciones
                   </h3>
-                  <p className="text-xs text-slate-500">
-                    {refuerzoRegistro.materiaNombre} ·{" "}
-                    {refuerzoRegistro.actividadDetalle}
+                  <p className="truncate text-[10px] text-[#6B7280]">
+                    {estudianteDetalle.apellidos} {estudianteDetalle.nombres}
+                    {" · "}
+                    {gradoDocenteActual?.nombre} {gradoDocenteActual?.paralelo}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEstudianteDetalleId(null)}
+                className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 rounded-md p-2 text-[#9CA3AF] transition hover:bg-[#D8DEE6] hover:text-[#4B5563]"
+                aria-label="Cerrar detalle de calificaciones"
+              >
+                <FaTimes />
+              </button>
+            </header>
+            <div className="grid grid-cols-2 gap-2 border-b border-[#E4E8EE] px-4 py-3 sm:grid-cols-3 sm:px-4">
+              <div className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#6B7280]">
+                  Actividades
+                </p>
+                <p className="mt-1 text-sm font-bold text-[#374151]">
+                  {notasDetalleEstudiante.length}
+                </p>
+              </div>
+              <div className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#6B7280]">
+                  Con nota registrada
+                </p>
+                <p className="mt-1 text-sm font-bold text-[#374151]">
+                  {notasDetalleEstudiante.filter((x) => x.calificacion).length}
+                </p>
+              </div>
+              <div className="col-span-2 rounded-lg border border-[#C8D6E5] bg-[#EAF0F6] p-3 sm:col-span-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-[#1B354D]">
+                  Refuerzos registrados
+                </p>
+                <p className="mt-1 text-sm font-bold text-[#1B354D]">
+                  {notasDetalleEstudiante.reduce((total, x) => {
+                    const r = x.calificacion?.refuerzo as
+                      | (NonNullable<CalificacionData["refuerzo"]> & {
+                          historial?: Array<Record<string, unknown>>;
+                        })
+                      | null
+                      | undefined;
+                    return (
+                      total +
+                      (Array.isArray(r?.historial) && r.historial.length > 0
+                        ? r.historial.length
+                        : r
+                          ? 1
+                          : 0)
+                    );
+                  }, 0)}
+                </p>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-2.5">
+              {notasDetalleEstudiante.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[#BFC9D4] p-6 text-center text-[11px] text-[#6B7280]">
+                  No hay actividades registradas para las materias de este
+                  grado.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {notasDetalleEstudiante.map(
+                    ({ actividad, calificacion, materiaNombre }) => {
+                      const notaOriginal = calificacion?.nota;
+                      const notaFinal = calificacion
+                        ? notaFinalDe(calificacion)
+                        : null;
+                      const refuerzo = calificacion?.refuerzo as
+                        | (NonNullable<CalificacionData["refuerzo"]> & {
+                            historial?: Array<Record<string, unknown>>;
+                            notaFinalAplicada?: number;
+                          })
+                        | null
+                        | undefined;
+                      const historial = Array.isArray(refuerzo?.historial)
+                        ? refuerzo.historial
+                        : [];
+                      const entradasRefuerzo: Array<Record<string, unknown>> =
+                        historial.length > 0
+                          ? historial
+                          : refuerzo
+                            ? [
+                                {
+                                  numero: 1,
+                                  nota: refuerzo.nota,
+                                  detalle: refuerzo.detalle,
+                                  fecha: refuerzo.fecha,
+                                  estrategiaElegida: refuerzo.estrategiaElegida,
+                                  origen: refuerzo.origen || "informal",
+                                  aplicadoPor: refuerzo.aplicadoPor || "",
+                                },
+                              ]
+                            : [];
+                      return (
+                        <article
+                          key={actividad.id}
+                          className="overflow-hidden rounded-lg border border-[#D8DEE6]"
+                        >
+                          <div className="flex flex-col gap-2 bg-[#ECEFF3] px-3 py-3 sm:flex-row sm:items-start sm:justify-between sm:px-4">
+                            <div className="min-w-0">
+                              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                                <span className="rounded bg-[#EAF0F6] px-2 py-0.5 text-[10px] font-bold text-[#244563]">
+                                  {materiaNombre}
+                                </span>
+                                <span className="rounded bg-[#D8DEE6] px-2 py-0.5 text-[10px] font-semibold text-[#4B5563]">
+                                  {actividad.tipo}
+                                </span>
+                                {actividad.esConsolidado && (
+                                  <span className="rounded bg-[#FFF7ED] px-2 py-0.5 text-[10px] font-bold text-[#9A4518]">
+                                    INSUMO
+                                  </span>
+                                )}
+                              </div>
+                              <h4 className="text-xs font-semibold text-[#273444]">
+                                {actividad.detalle || "Actividad sin título"}
+                              </h4>
+                              <p className="mt-0.5 text-[11px] text-[#6B7280]">
+                                Fecha: {actividad.fecha || "—"}
+                              </p>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <div className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] px-3 py-2 text-center">
+                                <p className="text-[9px] font-semibold uppercase text-[#6B7280]">
+                                  Original
+                                </p>
+                                <p className="text-[11px] font-bold text-[#4B5563]">
+                                  {typeof notaOriginal === "number"
+                                    ? notaOriginal
+                                    : "—"}
+                                </p>
+                              </div>
+                              <div
+                                className={`rounded-lg border px-3 py-2 text-center ${
+                                  notaFinal === null
+                                    ? "border-[#D8DEE6] bg-[#FFFFFF] text-[#9CA3AF]"
+                                    : notaFinal >= 7
+                                      ? "border-[#C8D6E5] bg-[#EAF0F6] text-[#1B354D]"
+                                      : "border-rose-200 bg-rose-50 text-rose-800"
+                                }`}
+                              >
+                                <p className="text-[9px] font-semibold uppercase">
+                                  Final
+                                </p>
+                                <p className="text-[11px] font-bold">
+                                  {notaFinal === null ? "—" : round2(notaFinal)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          {calificacion?.observacion && (
+                            <div className="border-t border-[#E4E8EE] px-3 py-2 text-[10px] text-[#64748B] sm:px-4">
+                              <span className="font-semibold">
+                                Observación:
+                              </span>{" "}
+                              {calificacion.observacion}
+                            </div>
+                          )}
+                          <div className="border-t border-[#E4E8EE] px-3 py-3 sm:px-4">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <p className="text-[10px] font-bold text-[#374151]">
+                                Historial de refuerzos
+                              </p>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                  entradasRefuerzo.length
+                                    ? "bg-[#E2EAF3] text-[#1B354D]"
+                                    : "bg-[#ECEFF3] text-[#6B7280]"
+                                }`}
+                              >
+                                {entradasRefuerzo.length
+                                  ? `${entradasRefuerzo.length} registrado(s)`
+                                  : "Sin refuerzo"}
+                              </span>
+                            </div>
+                            {entradasRefuerzo.length === 0 ? (
+                              <p className="text-[10px] text-[#9CA3AF]">
+                                No se ha aplicado refuerzo a esta actividad.
+                              </p>
+                            ) : (
+                              <div className="space-y-2">
+                                {entradasRefuerzo.map((entrada, idx) => {
+                                  const origen = String(
+                                    entrada.origen || "informal",
+                                  ).toLowerCase();
+                                  const esFormal = origen === "formal";
+                                  const estrategia = String(
+                                    entrada.estrategiaElegida ||
+                                      refuerzo?.estrategiaElegida ||
+                                      "promediar",
+                                  );
+                                  const estrategiaLabel =
+                                    ESTRATEGIAS_NOTA.find(
+                                      (x) => x.value === estrategia,
+                                    )?.label || estrategia;
+                                  return (
+                                    <div
+                                      key={`${actividad.id}-refuerzo-${idx}`}
+                                      className="flex flex-col gap-2 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3 sm:flex-row sm:items-start sm:justify-between"
+                                    >
+                                      <div className="min-w-0 flex-1">
+                                        <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+                                          <span
+                                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                              esFormal
+                                                ? "bg-[#EAF0F6] text-[#244563]"
+                                                : "bg-[#FFF7ED] text-[#9A4518]"
+                                            }`}
+                                          >
+                                            {esFormal
+                                              ? "Refuerzo formal"
+                                              : "Refuerzo informal"}
+                                          </span>
+                                          <span className="text-[10px] text-[#6B7280]">
+                                            #{String(entrada.numero ?? idx + 1)}{" "}
+                                            ·{" "}
+                                            {String(
+                                              entrada.fecha ||
+                                                "Fecha no registrada",
+                                            )}
+                                          </span>
+                                        </div>
+                                        <p className="text-[10px] text-[#4B5563]">
+                                          {String(
+                                            entrada.detalle ||
+                                              "Sin detalle disponible",
+                                          )}
+                                        </p>
+                                        <p className="mt-1 text-[10px] text-[#6B7280]">
+                                          Estrategia: {estrategiaLabel}
+                                        </p>
+                                      </div>
+                                      <div className="shrink-0 rounded-lg bg-[#ECEFF3] px-3 py-2 text-center">
+                                        <p className="text-[9px] font-semibold uppercase text-[#6B7280]">
+                                          Nota de refuerzo
+                                        </p>
+                                        <p className="text-base font-bold text-[#374151]">
+                                          {typeof entrada.nota === "number"
+                                            ? entrada.nota
+                                            : "—"}
+                                        </p>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    },
+                  )}
+                </div>
+              )}
+            </div>
+            <footer className="flex justify-end border-t border-[#D8DEE6] bg-[#ECEFF3] px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setEstudianteDetalleId(null)}
+                className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 rounded-md bg-[#244563] px-2.5 text-[11px] font-semibold text-[#FFFFFF] transition-colors hover:bg-[#1B354D]"
+              >
+                Cerrar detalle
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {/* Modal de refuerzo: diseño compartido con Calificaciones */}
+      {showRefuerzoModal && refuerzoRegistro && (
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-3 backdrop-blur-[2px] sm:p-4">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="refuerzo-notas-titulo"
+            className="flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-[#E4E8EE] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-orange-500 text-white">
+                  <FaGraduationCap className="text-sm" />
+                </span>
+                <div className="min-w-0">
+                  <h3
+                    id="refuerzo-notas-titulo"
+                    className="text-sm font-semibold text-[#273444]"
+                  >
+                    Aplicar refuerzo pedagógico
+                  </h3>
+                  <p className="mt-0.5 text-[10px] text-[#64748B]">
+                    Registra la nota y revisa el efecto antes de guardar
                   </p>
                 </div>
               </div>
@@ -1607,119 +1812,144 @@ export default function ReporteNotas() {
                   setShowRefuerzoModal(false);
                   setRefuerzoRegistro(null);
                 }}
+                className="flex h-8 w-7 shrink-0 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563]"
                 disabled={isGuardandoRefuerzo}
-                className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+                aria-label="Cerrar refuerzo"
+                title="Cerrar"
               >
-                <FaTimes />
+                <FaTimes className="text-sm" />
               </button>
             </div>
-            <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
-              <p className="text-sm text-orange-800 font-semibold">
-                {refuerzoRegistro.estudianteNombre}
-              </p>
-              <p className="text-xs text-orange-700 mt-1">
-                Nota original: <strong>{refuerzoRegistro.notaOriginal}</strong>
-              </p>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Nota de Refuerzo *{" "}
-                  <span className="text-xs text-slate-500 font-normal">
-                    (0 - 10)
-                  </span>
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  maxLength={5}
-                  value={String(refuerzoForm.nota)}
-                  onChange={(e) => {
-                    const valor = e.target.value;
-                    const regex = /^\d*(\.\d{0,2})?$/;
-                    if (valor === "" || regex.test(valor)) {
-                      if (valor === "") {
-                        setRefuerzoForm({ ...refuerzoForm, nota: 0 });
-                      } else if (/^\d+(\.\d+)?$/.test(valor)) {
-                        const num = parseFloat(valor);
-                        if (num <= 10) {
-                          setRefuerzoForm({ ...refuerzoForm, nota: num });
+            <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+              <div className="rounded-md border border-orange-200 bg-orange-50/60 px-3 py-2">
+                <p className="text-[11px] font-semibold text-orange-800">
+                  {refuerzoRegistro.estudianteNombre}
+                </p>
+                <p className="mt-0.5 text-[10px] text-orange-700">
+                  Nota original:{" "}
+                  <strong>{refuerzoRegistro.notaOriginal}</strong>
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                    Nota de refuerzo *{" "}
+                    <span className="font-normal normal-case text-[#6B7280]">
+                      (0-10)
+                    </span>
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    maxLength={5}
+                    value={String(refuerzoForm.nota)}
+                    onChange={(e) => {
+                      const valor = e.target.value;
+                      const regex = /^\d*(\.\d{0,2})?$/;
+                      if (valor === "" || regex.test(valor)) {
+                        if (valor === "") {
+                          setRefuerzoForm({ ...refuerzoForm, nota: 0 });
+                        } else if (/^\d+(\.\d+)?$/.test(valor)) {
+                          const num = parseFloat(valor);
+                          if (num <= 10) {
+                            setRefuerzoForm({ ...refuerzoForm, nota: num });
+                          }
                         }
                       }
+                    }}
+                    placeholder="Ej: 8.5"
+                    className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 text-xs text-[#374151] focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-100"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                    Fecha del refuerzo *
+                  </label>
+                  <input
+                    type="date"
+                    value={refuerzoForm.fecha}
+                    onChange={(e) =>
+                      setRefuerzoForm({
+                        ...refuerzoForm,
+                        fecha: e.target.value,
+                      })
                     }
-                  }}
-                  placeholder="Ej: 8.5"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
-                />
+                    className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-xs text-[#374151] focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-100"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                    Estrategia de cálculo *
+                  </label>
+                  <select
+                    value={refuerzoForm.estrategia}
+                    onChange={(e) =>
+                      setRefuerzoForm({
+                        ...refuerzoForm,
+                        estrategia: e.target.value,
+                      })
+                    }
+                    className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-xs text-[#374151] focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-100"
+                  >
+                    {ESTRATEGIAS_NOTA.map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                    Detalle del refuerzo *
+                  </label>
+                  <input
+                    type="text"
+                    value={refuerzoForm.detalle}
+                    onChange={(e) =>
+                      setRefuerzoForm({
+                        ...refuerzoForm,
+                        detalle: e.target.value,
+                      })
+                    }
+                    placeholder="Ej: Ejercicios adicionales"
+                    className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 text-xs text-[#374151] placeholder:text-[#6B7280] focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-100"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Estrategia de cálculo *
-                </label>
-                <select
-                  value={refuerzoForm.estrategia}
-                  onChange={(e) =>
-                    setRefuerzoForm({
-                      ...refuerzoForm,
-                      estrategia: e.target.value,
-                    })
-                  }
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
-                >
-                  {ESTRATEGIAS_NOTA.map((estrategia) => (
-                    <option key={estrategia.value} value={estrategia.value}>
-                      {estrategia.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Detalle del Refuerzo *
-                </label>
-                <input
-                  type="text"
-                  value={refuerzoForm.detalle}
-                  onChange={(e) =>
-                    setRefuerzoForm({
-                      ...refuerzoForm,
-                      detalle: e.target.value,
-                    })
-                  }
-                  placeholder="Ej: Ejercicios adicionales de práctica"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Fecha del Refuerzo *
-                </label>
-                <input
-                  type="date"
-                  value={refuerzoForm.fecha}
-                  onChange={(e) =>
-                    setRefuerzoForm({ ...refuerzoForm, fecha: e.target.value })
-                  }
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-orange-500"
-                />
-              </div>
-              <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
-                <p className="font-semibold mb-1">Nota final estimada:</p>
-                <p className="text-lg font-bold text-blue-900">
-                  {notaFinalEstimada}
+              <div className="rounded-md border border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2 text-[10px] leading-relaxed text-[#4B5563]">
+                <p className="font-semibold text-[#4B5563]">
+                  Estrategia aplicada
                 </p>
-                <p className="text-[10px] text-blue-700 mt-1">
-                  Original {refuerzoRegistro.notaOriginal} + Refuerzo{" "}
-                  {refuerzoForm.nota} · estrategia{" "}
+                <p className="mt-0.5">
                   {
                     ESTRATEGIAS_NOTA.find(
                       (e) => e.value === refuerzoForm.estrategia,
-                    )?.label.split(" ")[0]
+                    )?.label
                   }
+                </p>
+                <p className="mt-1">
+                  Nota original <strong>{refuerzoRegistro.notaOriginal}</strong>{" "}
+                  + Refuerzo <strong>{refuerzoForm.nota}</strong>
+                </p>
+                <p className="mt-1 text-[11px] text-[#4B5563]">
+                  Nota final estimada:{" "}
+                  <span className="text-sm font-bold text-[#273444]">
+                    {notaFinalEstimada}
+                  </span>
                 </p>
               </div>
             </div>
-            <div className="flex gap-2 mt-6">
+            <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#ECEFF3] px-4 py-3 sm:flex-row sm:justify-end">
+              <button
+                onClick={() => {
+                  setShowRefuerzoModal(false);
+                  setRefuerzoRegistro(null);
+                }}
+                disabled={isGuardandoRefuerzo}
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3] disabled:opacity-50"
+              >
+                Cancelar
+              </button>
               <button
                 onClick={aplicarRefuerzo}
                 disabled={
@@ -1728,31 +1958,49 @@ export default function ReporteNotas() {
                   refuerzoForm.nota > 10 ||
                   !refuerzoForm.detalle.trim()
                 }
-                className="flex-1 inline-flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-orange-700 px-4 text-[11px] font-semibold text-white transition-colors hover:bg-orange-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isGuardandoRefuerzo ? (
-                  <>
-                    <FaSpinner className="animate-spin text-xs" />
-                    Guardando...
-                  </>
+                  <FaSpinner className="animate-spin" />
                 ) : (
-                  <>
-                    <FaSyncAlt className="text-xs" />
-                    Aplicar Refuerzo
-                  </>
+                  <FaCheck />
                 )}
-              </button>
-              <button
-                onClick={() => {
-                  setShowRefuerzoModal(false);
-                  setRefuerzoRegistro(null);
-                }}
-                disabled={isGuardandoRefuerzo}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
-              >
-                Cancelar
+                {isGuardandoRefuerzo ? "Aplicando..." : "Aplicar refuerzo"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Aviso flotante */}
+      {aviso && (
+        <div className="fixed bottom-4 right-4 z-110 max-w-sm">
+          <div
+            className={`flex items-start gap-2 p-3 rounded-lg shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] border border-l-4 bg-[#FFFFFF] text-[11px] ${
+              aviso.type === "success"
+                ? "border-[#A8BDD2] text-[#1B354D]"
+                : aviso.type === "error"
+                  ? "border-red-300 text-red-800"
+                  : aviso.type === "warning"
+                    ? "border-amber-300 text-amber-800"
+                    : "border-[#C8D6E5] text-[#244563]"
+            }`}
+          >
+            {aviso.type === "success" ? (
+              <FaCheckCircle className="mt-0.5 shrink-0" />
+            ) : aviso.type === "error" ? (
+              <FaExclamationTriangle className="mt-0.5 shrink-0" />
+            ) : (
+              <FaInfoCircle className="mt-0.5 shrink-0" />
+            )}
+            <span className="whitespace-pre-wrap">{aviso.message}</span>
+            <button
+              aria-label="Cerrar notificación"
+              onClick={() => setAviso(null)}
+              className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 ml-1 text-current/60 hover:text-current shrink-0"
+            >
+              <FaTimes />
+            </button>
           </div>
         </div>
       )}

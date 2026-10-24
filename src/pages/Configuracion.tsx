@@ -1,241 +1,332 @@
-import { useState, useEffect, startTransition, useCallback } from 'react';
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../lib/firebase';
-import { useAuth } from '../context/AuthContext';
-import Layout from '../components/Layout';
-import { 
-  FaUser, 
-  FaSave, 
-  FaCheckCircle, 
-  FaExclamationTriangle, 
+import { useState, useEffect, startTransition, useCallback } from "react";
+import { doc, updateDoc, serverTimestamp, onSnapshot } from "firebase/firestore";
+import { db } from "../lib/firebase";
+import { useAuth } from "../context/AuthContext";
+import Layout from "../components/Layout";
+import {
+  FaUser,
+  FaSave,
+  FaCheckCircle,
+  FaExclamationTriangle,
   FaFileSignature,
   FaTimes,
   FaTimesCircle,
-  FaInfoCircle
-} from 'react-icons/fa';
-
+  FaInfoCircle,
+  FaEye,
+} from "react-icons/fa";
 interface Toast {
   id: string;
-  type: 'success' | 'error' | 'warning' | 'info';
+  type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
-
+const AREAS = [
+  { campo: "nombreDirectorMatematica", nombre: "Matemática" },
+  { campo: "nombreDirectorCienciasNaturales", nombre: "Ciencias Naturales" },
+  { campo: "nombreDirectorEstudiosSociales", nombre: "Estudios Sociales" },
+  { campo: "nombreDirectorLenguaLiteratura", nombre: "Lengua y Literatura" },
+] as const;
+type AreaDirector = (typeof AREAS)[number]["campo"];
 export default function Configuracion() {
   const { user, userData } = useAuth();
-  const [nombreDocumento, setNombreDocumento] = useState('');
+  const [nombreDocumento, setNombreDocumento] = useState("");
+  const [directorArea, setDirectorArea] = useState<AreaDirector | "">("");
+  const [directores, setDirectores] = useState<Record<string, string>>({});
+  const [cargandoDirectores, setCargandoDirectores] = useState(true);
+  const [perfilCargadoUid, setPerfilCargadoUid] = useState<string | null>(null);
+  const perfilListo = !!user?.uid && perfilCargadoUid === user.uid;
+  const [errorDirectores, setErrorDirectores] = useState("");
   const [saving, setSaving] = useState(false);
-
   const [toasts, setToasts] = useState<Toast[]>([]);
-
-  const mostrarToast = useCallback((
-    type: Toast['type'],
-    title: string,
-    message?: string,
-    duration = 4000
-  ) => {
-    const id = `toast-${Date.now()}-${Math.random()}`;
-    const toast: Toast = { id, type, title, message };
-    setToasts((prev) => [...prev, toast]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, duration);
-  }, []);
-
+  const mostrarToast = useCallback(
+    (type: Toast["type"], title: string, message?: string, duration = 4000) => {
+      const id = `toast-${Date.now()}-${Math.random()}`;
+      const toast: Toast = { id, type, title, message };
+      setToasts((prev) => [...prev, toast]);
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, duration);
+    },
+    [],
+  );
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
-
   useEffect(() => {
     if (userData) {
       startTransition(() => {
-        setNombreDocumento(userData.nombreDocumento || '');
+        setNombreDocumento(userData.nombreDocumento || "");
       });
     }
   }, [userData]);
+  useEffect(() => {
+    if (!user?.uid) return;
+    return onSnapshot(doc(db, "configuracionInstitucional", "principal"), (snapshot) => {
+      const data = snapshot.data() || {};
+      setDirectores(Object.fromEntries(AREAS.map(({ campo }) => [campo, typeof data[campo] === "string" ? data[campo].trim() : ""])));
+      setCargandoDirectores(false);
+      setErrorDirectores("");
+    }, () => {
+      setCargandoDirectores(false);
+      setErrorDirectores("No se pudieron cargar los directores. Vuelve a abrir el perfil para intentarlo nuevamente.");
+    });
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    return onSnapshot(doc(db, "usuarios", user.uid), (snapshot) => {
+      const area = snapshot.data()?.directorArea;
+      setDirectorArea(AREAS.some(({ campo }) => campo === area) ? area : "");
+      setPerfilCargadoUid(user.uid);
+    }, () => {
+      setPerfilCargadoUid(null);
+      mostrarToast("error", "Error al cargar", "No se pudo consultar tu director de área guardado.");
+    });
+  }, [user?.uid, mostrarToast]);
 
   const handleGuardar = async () => {
     if (!nombreDocumento.trim()) {
-      mostrarToast('warning', 'Nombre obligatorio', 'El nombre para documentos es obligatorio.');
+      mostrarToast(
+        "warning",
+        "Nombre obligatorio",
+        "El nombre para documentos es obligatorio.",
+      );
       return;
     }
-
+    if (!user || !perfilListo || cargandoDirectores || errorDirectores) return;
+    if (!directorArea || !directores[directorArea]) {
+      mostrarToast("warning", "Director de área", "Selecciona un director registrado en Configuración Institucional.");
+      return;
+    }
     setSaving(true);
     try {
-      await updateDoc(doc(db, 'usuarios', user!.uid), {
+      await updateDoc(doc(db, "usuarios", user.uid), {
         nombreDocumento: nombreDocumento.trim(),
+        directorArea,
         updatedAt: serverTimestamp(),
       });
-      
-      mostrarToast('success', 'Información actualizada', 'Tu nombre para documentos se guardó correctamente.');
+      mostrarToast(
+        "success",
+        "Información actualizada",
+        "Tu nombre y director de área se guardaron correctamente.",
+      );
     } catch (error) {
-      console.error('Error guardando:', error);
-      mostrarToast('error', 'Error al guardar', 'No se pudieron guardar los cambios. Intenta nuevamente.');
+      console.error("Error guardando:", error);
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudieron guardar los cambios. Intenta nuevamente.",
+      );
     } finally {
       setSaving(false);
     }
   };
-
   const toastConfig = {
     success: {
-      bg: 'bg-green-50 border-green-400',
-      iconBg: 'bg-green-500',
-      titleColor: 'text-green-900',
-      msgColor: 'text-green-700',
+      border: "border-l-blue-500",
+      iconBg: "bg-blue-600",
+      titleColor: "text-blue-900",
+      msgColor: "text-blue-800",
       icon: FaCheckCircle,
     },
     error: {
-      bg: 'bg-red-50 border-red-400',
-      iconBg: 'bg-red-500',
-      titleColor: 'text-red-900',
-      msgColor: 'text-red-700',
+      border: "border-l-red-500",
+      iconBg: "bg-red-600",
+      titleColor: "text-red-900",
+      msgColor: "text-red-800",
       icon: FaTimesCircle,
     },
     warning: {
-      bg: 'bg-yellow-50 border-yellow-400',
-      iconBg: 'bg-yellow-500',
-      titleColor: 'text-yellow-900',
-      msgColor: 'text-yellow-700',
+      border: "border-l-amber-500",
+      iconBg: "bg-amber-600",
+      titleColor: "text-amber-900",
+      msgColor: "text-amber-800",
       icon: FaExclamationTriangle,
     },
     info: {
-      bg: 'bg-blue-50 border-blue-400',
-      iconBg: 'bg-blue-500',
-      titleColor: 'text-blue-900',
-      msgColor: 'text-blue-700',
+      border: "border-l-[#244563]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#244563]",
+      msgColor: "text-[#4B5563]",
       icon: FaInfoCircle,
     },
   };
-
   return (
-    <Layout 
-      title="Mi Perfil" 
-      subtitle="Personaliza cómo aparecerás en documentos oficiales"
-      showBack
-    >
-      <div className="max-w-2xl mx-auto">
-        {/* Información del perfil */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 overflow-hidden">
-          <div className="bg-linear-to-r from-blue-600 to-purple-600 px-6 py-4">
-            <h3 className="text-white font-semibold text-lg flex items-center gap-2">
-              <FaUser />
-              Información Personal
-            </h3>
-            <p className="text-blue-100 text-sm mt-1">
-              Esta información aparecerá en reportes y documentos oficiales
-            </p>
-          </div>
-
-          <div className="p-6">
-            {/* Foto de perfil */}
-            <div className="flex items-center gap-4 mb-6 pb-6 border-b border-slate-200">
-              <img
-                src={user?.photoURL || 'https://via.placeholder.com/150'}
-                alt="Foto de perfil"
-                className="w-20 h-20 rounded-full border-4 border-blue-100 shadow-md"
-              />
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-slate-900 text-lg truncate">
+    <Layout>
+      <div className="mx-auto w-full max-w-2xl">
+        <section className="overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF]">
+          <header className="flex items-center gap-2.5 border-b border-[#D8DEE6] bg-[#ECEFF3] px-4 py-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#EAF0F6] text-[#244563]">
+              <FaUser className="text-sm" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-[#273444]">
+                Información personal
+              </h3>
+              <p className="mt-0.5 text-[10px] text-[#64748B]">
+                Nombre que aparecerá en reportes y documentos oficiales
+              </p>
+            </div>
+          </header>
+          <div className="space-y-3 px-4 py-3">
+            <div className="flex items-center gap-3 border-b border-[#E4E8EE] pb-3">
+              {user?.photoURL ? (
+                <img
+                  src={user.photoURL}
+                  alt="Foto de perfil"
+                  referrerPolicy="no-referrer"
+                  className="h-12 w-12 shrink-0 rounded-full border border-[#C8D6E5] object-cover"
+                />
+              ) : (
+                <span
+                  role="img"
+                  aria-label="Perfil sin fotografía"
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border border-[#C8D6E5] bg-[#EAF0F6] text-[#244563]"
+                >
+                  <FaUser aria-hidden="true" className="text-lg" />
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-semibold text-[#374151]">
                   {user?.displayName}
                 </p>
-                <p className="text-slate-500 text-sm truncate">{user?.email}</p>
-                <p className="text-xs text-slate-400 mt-1">
+                <p className="mt-0.5 truncate text-[11px] text-[#64748B]">
+                  {user?.email}
+                </p>
+                <p className="mt-0.5 text-[10px] text-[#6B7280]">
                   Foto y nombre de Google (no editables)
                 </p>
               </div>
             </div>
-
-            {/* Campo único para nombre en documentos */}
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  <FaFileSignature className="inline mr-2 text-blue-600" />
-                  Nombre para documentos oficiales *
-                </label>
-                <input
-                  type="text"
-                  value={nombreDocumento}
-                  onChange={(e) => setNombreDocumento(e.target.value)}
-                  placeholder="Ej: Lic. María José Pérez García"
-                  className="w-full border border-slate-300 rounded-lg px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
-                  maxLength={80}
-                  required
-                />
-                <p className="text-xs text-slate-500 mt-1">
-                  Escribe exactamente cómo quieres aparecer en boletines y reportes. Puedes incluir tu título (Lic., Mgs., Ing., etc.). Máximo 80 caracteres.
+            <div>
+              <label
+                htmlFor="nombre-documento"
+                className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[#64748B]"
+              >
+                <FaFileSignature
+                  aria-hidden="true"
+                  className="text-[#244563]"
+                />{" "}
+                Nombre para documentos oficiales *
+              </label>
+              <input
+                id="nombre-documento"
+                type="text"
+                value={nombreDocumento}
+                onChange={(e) => setNombreDocumento(e.target.value)}
+                placeholder="Ej: Lic. María José Pérez García"
+                maxLength={80}
+                required
+                aria-describedby="nombre-documento-ayuda"
+                className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 text-[11px] text-[#374151] placeholder:text-[#6B7280] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20"
+              />
+              <p
+                id="nombre-documento-ayuda"
+                className="mt-1 text-[10px] leading-relaxed text-[#6B7280]"
+              >
+                Escribe cómo quieres aparecer en boletines y reportes. Puedes
+                incluir tu título (Lic., Mgs., Ing., etc.). Máximo 80
+                caracteres.
+              </p>
+            </div>
+            <div>
+              <label htmlFor="director-area" className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">Director/a de área *</label>
+              <select
+                id="director-area"
+                value={directorArea}
+                onChange={(e) => setDirectorArea(e.target.value as AreaDirector | "")}
+                disabled={cargandoDirectores || !perfilListo || !!errorDirectores || saving}
+                className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 text-[11px] text-[#374151] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 disabled:opacity-50"
+              >
+                <option value="">{cargandoDirectores ? "Cargando directores..." : "Selecciona tu área y director/a"}</option>
+                {AREAS.map(({ campo, nombre }) => (
+                  <option key={campo} value={campo} disabled={!directores[campo]}>{nombre} — {directores[campo] || "Sin registrar"}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-[10px] text-[#6B7280]">Los nombres provienen de Configuración Institucional. Esta selección identifica al director para tus fichas de refuerzo pedagógico.</p>
+              {errorDirectores && <p role="alert" className="mt-1 text-[10px] text-red-700">{errorDirectores}</p>}
+              {!cargandoDirectores && !errorDirectores && !AREAS.some(({ campo }) => directores[campo]) && <p className="mt-1 text-[10px] text-orange-700">Primero se deben registrar los directores en Configuración Institucional.</p>}
+              {directorArea && directores[directorArea] && <p className="mt-2 rounded-md bg-[#ECEFF3] px-3 py-2 text-[11px] text-[#4B5563]"><strong>Director/a seleccionado:</strong> {directores[directorArea]}</p>}
+            </div>
+            {nombreDocumento && (
+              <section className="overflow-hidden rounded-md border border-[#D8DEE6] bg-[#ECEFF3]">
+                <p className="flex items-center gap-1.5 border-b border-[#E4E8EE] px-3 py-1.5 text-[10px] font-semibold text-[#4B5563]">
+                  <FaEye aria-hidden="true" className="text-[#244563]" />
+                  Vista previa en documentos
                 </p>
-              </div>
-
-              {/* Preview de cómo aparecerá */}
-              {nombreDocumento && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <p className="text-xs font-semibold text-blue-800 mb-2">
-                    👁️ Vista previa en documentos:
-                  </p>
-                  
-                  {/* Firma */}
-                  <div className="bg-white border border-slate-200 rounded-lg p-4 mt-2">
-                    <div className="text-center">
-                      <div className="border-t border-slate-400 pt-1 mt-16 inline-block min-w-50">
-                        <p className="text-sm font-bold text-slate-900">
-                          {nombreDocumento.toUpperCase()}
-                        </p>
-                        <p className="text-xs text-slate-600">DOCENTE TUTOR</p>
-                      </div>
-                    </div>
+                <div className="bg-[#FFFFFF] px-4 pb-3 pt-8 text-center">
+                  <div className="inline-block w-full max-w-sm border-t border-[#9CA3AF] px-2 pt-1.5">
+                    <p className="wrap-break-word text-[11px] font-bold text-[#374151]">
+                      {nombreDocumento.toUpperCase()}
+                    </p>
+                    <p className="mt-0.5 text-[10px] text-[#64748B]">
+                      DOCENTE TUTOR
+                    </p>
                   </div>
                 </div>
-              )}
-
-              {/* Botón guardar */}
-              <div className="flex items-center gap-3 pt-4 border-t border-slate-200">
-                <button
-                  onClick={handleGuardar}
-                  disabled={saving || !nombreDocumento.trim()}
-                  className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {saving ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Guardando...
-                    </>
-                  ) : (
-                    <>
-                      <FaSave />
-                      Guardar Cambios
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
+              </section>
+            )}
           </div>
-        </div>
+          <footer className="flex justify-end border-t border-[#E4E8EE] bg-[#ECEFF3] px-4 py-3">
+            <button
+              onClick={handleGuardar}
+              disabled={saving || !nombreDocumento.trim() || !directorArea || !directores[directorArea] || cargandoDirectores || !perfilListo || !!errorDirectores}
+              className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {saving ? (
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"
+                  />
+                  Guardando...
+                </>
+              ) : (
+                <>
+                  <FaSave aria-hidden="true" className="text-[10px]" />
+                  Guardar cambios
+                </>
+              )}
+            </button>
+          </footer>
+        </section>
       </div>
-
-      {/* Contenedor de toasts */}
-      <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
+      <div
+        aria-live="polite"
+        aria-atomic="false"
+        className="pointer-events-none fixed right-3 top-3 z-110 w-[calc(100%-1.5rem)] max-w-xs space-y-2"
+      >
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
           const Icon = config.icon;
           return (
             <div
               key={toast.id}
-              className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] ${config.border}`}
             >
-              <div className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}>
-                <Icon className="text-white text-sm" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>{toast.title}</p>
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}
+              >
+                <Icon aria-hidden="true" className="text-[10px]" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className={`text-[11px] font-semibold ${config.titleColor}`}>
+                  {toast.title}
+                </p>
                 {toast.message && (
-                  <p className={`text-xs ${config.msgColor} mt-0.5`}>{toast.message}</p>
+                  <p
+                    className={`mt-0.5 whitespace-pre-line text-[10px] leading-relaxed ${config.msgColor}`}
+                  >
+                    {toast.message}
+                  </p>
                 )}
               </div>
               <button
                 onClick={() => cerrarToast(toast.id)}
-                className="text-gray-400 hover:text-gray-600 shrink-0 transition-colors"
+                aria-label="Cerrar notificación"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#6B7280] hover:bg-[#ECEFF3] hover:text-[#4B5563] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
-                <FaTimes className="w-4 h-4" />
+                <FaTimes aria-hidden="true" className="text-[10px]" />
               </button>
             </div>
           );

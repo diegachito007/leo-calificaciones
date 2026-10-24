@@ -223,37 +223,37 @@ const ESTADO_CONFIG: Record<
 > = {
   P: {
     label: "Presente",
-    color: "bg-green-500",
-    textColor: "text-green-700",
-    bgColor: "bg-green-100",
+    color: "bg-[#244563]",
+    textColor: "text-[#244563]",
+    bgColor: "bg-[#EAF0F6]",
     icon: FaCheckCircle,
   },
   A: {
     label: "Atraso",
-    color: "bg-yellow-500",
-    textColor: "text-yellow-700",
-    bgColor: "bg-yellow-100",
+    color: "bg-[#C96522]",
+    textColor: "text-[#9A4518]",
+    bgColor: "bg-[#FFF7ED]",
     icon: FaClock,
   },
   I: {
     label: "Inas. injustificada",
-    color: "bg-red-500",
-    textColor: "text-red-700",
+    color: "bg-[#C93F45]",
+    textColor: "text-[#AD3038]",
     bgColor: "bg-red-100",
     icon: FaUserTimes,
   },
   F: {
     label: "Fuga/abandono",
-    color: "bg-purple-600",
-    textColor: "text-purple-700",
-    bgColor: "bg-purple-100",
+    color: "bg-[#C93F45]",
+    textColor: "text-[#C93F45]",
+    bgColor: "bg-[#FEF2F2]",
     icon: FaSignOutAlt,
   },
   J: {
     label: "Justificado",
-    color: "bg-blue-500",
-    textColor: "text-blue-700",
-    bgColor: "bg-blue-100",
+    color: "bg-[#244563]",
+    textColor: "text-[#1B354D]",
+    bgColor: "bg-[#E2EAF3]",
     icon: FaUserCheck,
   },
 };
@@ -1430,11 +1430,11 @@ export default function ReporteAsistencias() {
   td.num, th.num { width: 22px; color: #6b7280; }
   td.sin { color: #d1d5db; }
   tr { page-break-inside: avoid; }
-  .st-P  { color: #15803d; font-weight: bold; }
-  .st-A  { color: #a16207; font-weight: bold; }
-  .st-I  { color: #b91c1c; font-weight: bold; }
-  .st-F  { color: #7e22ce; font-weight: bold; }
-  .st-J  { color: #1d4ed8; font-weight: bold; }
+  .st-P  { color: #244563; font-weight: bold; }
+  .st-A  { color: #C96522; font-weight: bold; }
+  .st-I  { color: #C93F45; font-weight: bold; }
+  .st-F  { color: #64748B; font-weight: bold; }
+  .st-J  { color: #244563; font-weight: bold; }
   .legend { margin-top: 10px; font-size: 9px; color: #374151; }
   .legend span { margin-right: 10px; }
   .signatures { display: flex; justify-content: space-around; margin-top: 55px; }
@@ -1442,7 +1442,7 @@ export default function ReporteAsistencias() {
   .sig .rol { font-weight: bold; }
   .footer { margin-top: 14px; font-size: 8.5px; color: #6b7280; text-align: right; }
   .grado-section { margin-bottom: 20px; page-break-inside: avoid; }
-  .grado-title { font-size: 11px; font-weight: bold; margin: 10px 0 5px 0; color: #1f2937; border-bottom: 2px solid #06b6d4; padding-bottom: 3px; }
+  .grado-title { font-size: 11px; font-weight: bold; margin: 10px 0 5px 0; color: #1f2937; border-bottom: 2px solid #244563; padding-bottom: 3px; }
 </style>
 </head>
 <body>
@@ -1630,10 +1630,10 @@ export default function ReporteAsistencias() {
   td.num, th.num { width: 22px; color: #6b7280; }
   td.sin { color: #9ca3af; text-align: center; }
   tr { page-break-inside: avoid; }
-  .st-I { color: #b91c1c; font-weight: bold; }
-  .st-F { color: #7e22ce; font-weight: bold; }
-  .st-A { color: #a16207; font-weight: bold; }
-  .st-J { color: #1d4ed8; font-weight: bold; }
+  .st-I { color: #C93F45; font-weight: bold; }
+  .st-F { color: #64748B; font-weight: bold; }
+  .st-A { color: #C96522; font-weight: bold; }
+  .st-J { color: #244563; font-weight: bold; }
   .footer { margin-top: 14px; font-size: 8.5px; color: #6b7280; text-align: right; }
 </style>
 </head>
@@ -1734,11 +1734,11 @@ export default function ReporteAsistencias() {
   td.num, th.num { width: 22px; color: #6b7280; }
   td.sin { color: #9ca3af; text-align: center; }
   tr { page-break-inside: avoid; }
-  .st-P { color: #15803d; font-weight: bold; }
-  .st-A { color: #a16207; font-weight: bold; }
-  .st-I { color: #b91c1c; font-weight: bold; }
-  .st-F { color: #7e22ce; font-weight: bold; }
-  .st-J { color: #1d4ed8; font-weight: bold; }
+  .st-P { color: #244563; font-weight: bold; }
+  .st-A { color: #C96522; font-weight: bold; }
+  .st-I { color: #C93F45; font-weight: bold; }
+  .st-F { color: #64748B; font-weight: bold; }
+  .st-J { color: #244563; font-weight: bold; }
   .summary { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin: 10px 0; }
   .chip { padding: 4px 10px; border-radius: 10px; font-weight: bold; font-size: 10px; border: 1px solid #d1d5db; }
   .signatures { display: flex; justify-content: space-around; margin-top: 60px; }
@@ -1798,31 +1798,31 @@ export default function ReporteAsistencias() {
 
   const toastConfig = {
     success: {
-      bg: "bg-green-50 border-green-400",
-      iconBg: "bg-green-500",
-      titleColor: "text-green-900",
-      msgColor: "text-green-700",
+      bg: "border-l-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
       icon: FaCheckCircle,
     },
     error: {
-      bg: "bg-red-50 border-red-400",
-      iconBg: "bg-red-500",
-      titleColor: "text-red-900",
-      msgColor: "text-red-700",
+      bg: "border-l-red-400",
+      iconBg: "bg-[#C93F45]",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
       icon: FaTimesCircle,
     },
     warning: {
-      bg: "bg-yellow-50 border-yellow-400",
-      iconBg: "bg-yellow-500",
-      titleColor: "text-yellow-900",
-      msgColor: "text-yellow-700",
+      bg: "border-l-amber-400",
+      iconBg: "bg-amber-500",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
       icon: FaExclamationTriangle,
     },
     info: {
-      bg: "bg-blue-50 border-blue-400",
-      iconBg: "bg-blue-500",
-      titleColor: "text-blue-900",
-      msgColor: "text-blue-700",
+      bg: "border-l-[#244563]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
       icon: FaInfoCircle,
     },
   };
@@ -1831,7 +1831,10 @@ export default function ReporteAsistencias() {
     return (
       <Layout>
         <div className="flex items-center justify-center py-20">
-          <FaSpinner className="animate-spin text-4xl text-blue-600" />
+          <div className="text-center">
+            <div className="mx-auto mb-3 h-10 w-10 animate-spin rounded-full border-2 border-[#244563] border-t-transparent"></div>
+            <p className="text-sm font-medium text-[#4B5563]">Cargando...</p>
+          </div>
         </div>
       </Layout>
     );
@@ -1848,13 +1851,21 @@ export default function ReporteAsistencias() {
 
   return (
     <Layout>
-      {/* ============ TOOLBAR COMPACTA ============ */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 sm:p-4 mb-4 sm:mb-6">
-        <div className="flex flex-wrap items-center gap-2">
+      {/* ============ ENCABEZADO + TOOLBAR COMPACTA ============ */}
+      <div className="mb-2 flex flex-wrap items-baseline gap-2">
+        <h1 className="text-base font-semibold tracking-tight text-[#244563]">
+          Reporte de asistencia
+        </h1>
+        <span className="truncate text-[11px] font-medium text-[#9A4518]">
+          {rangoLabelActual}
+        </span>
+      </div>
+      <div className="mb-3 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <select
             value={tipoReporte}
             onChange={(e) => setTipoReporte(e.target.value as TipoReporte)}
-            className="px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg text-xs sm:text-sm font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 shrink-0"
+            className="h-8 shrink-0 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-[11px] font-semibold text-[#4B5563] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20"
             title="Tipo de reporte"
           >
             <option value="semanal">📅 Semanal</option>
@@ -1862,181 +1873,179 @@ export default function ReporteAsistencias() {
             <option value="trimestral">📆 Trimestral/Quimestral</option>
           </select>
 
-          <div className="flex items-center gap-1 sm:gap-2 ml-auto min-w-0">
-            {tipoReporte === "semanal" && (
-              <>
-                <button
-                  onClick={() => cambiarSemana(-1)}
-                  className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                  title="Semana anterior"
-                >
-                  <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
-                </button>
-                <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0 max-w-44 sm:max-w-none">
-                  {formatFechaCorta(diasSemana[0])} —{" "}
-                  {formatFechaCorta(diasSemana[4])}
-                </div>
-                <button
-                  onClick={() => cambiarSemana(1)}
-                  className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                  title="Semana siguiente"
-                >
-                  <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
-                </button>
-                <button
-                  onClick={irAHoy}
-                  className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
-                >
-                  Hoy
-                </button>
-              </>
-            )}
-            {tipoReporte === "mensual" && (
-              <>
-                <button
-                  onClick={() => cambiarMes(-1)}
-                  className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                  title="Mes anterior"
-                >
-                  <FaChevronLeft className="text-slate-600 text-xs sm:text-base" />
-                </button>
-                <div className="px-2 sm:px-4 py-1.5 sm:py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 text-center truncate min-w-0 max-w-44 sm:max-w-none">
-                  {NOMBRES_MESES[mesActual]} {anioActual}
-                </div>
-                <button
-                  onClick={() => cambiarMes(1)}
-                  className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
-                  title="Mes siguiente"
-                >
-                  <FaChevronRight className="text-slate-600 text-xs sm:text-base" />
-                </button>
-                <button
-                  onClick={irAHoy}
-                  className="px-2 sm:px-3 py-1.5 sm:py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors shrink-0"
-                >
-                  Hoy
-                </button>
-              </>
-            )}
-            {tipoReporte === "trimestral" && (
-              <select
-                value={periodoSeleccionado}
-                onChange={(e) => setPeriodoSeleccionado(e.target.value)}
-                className="px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs sm:text-sm font-semibold text-blue-900 focus:ring-2 focus:ring-blue-500 max-w-52 sm:max-w-none"
+          {tipoReporte === "semanal" && (
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                onClick={() => cambiarSemana(-1)}
+                className="inline-flex h-8 w-7 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563]"
+                title="Semana anterior"
               >
-                {periodos.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nombre} (
-                    {formatFechaCorta(parseFechaLocal(p.fechaInicio))} -{" "}
-                    {formatFechaCorta(parseFechaLocal(p.fechaFin))})
-                  </option>
-                ))}
-              </select>
+                <FaChevronLeft className="text-[10px]" />
+              </button>
+              <div className="inline-flex h-8 min-w-35 items-center justify-center truncate rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2 text-[11px] font-semibold text-[#273444]">
+                {formatFechaCorta(diasSemana[0])} —{" "}
+                {formatFechaCorta(diasSemana[4])}
+              </div>
+              <button
+                onClick={() => cambiarSemana(1)}
+                className="inline-flex h-8 w-7 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563]"
+                title="Semana siguiente"
+              >
+                <FaChevronRight className="text-[10px]" />
+              </button>
+              <button
+                onClick={irAHoy}
+                className="inline-flex h-8 items-center rounded-md bg-[#ECEFF3] px-2 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#E4E8EE]"
+              >
+                Hoy
+              </button>
+            </div>
+          )}
+          {tipoReporte === "mensual" && (
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                onClick={() => cambiarMes(-1)}
+                className="inline-flex h-8 w-7 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563]"
+                title="Mes anterior"
+              >
+                <FaChevronLeft className="text-[10px]" />
+              </button>
+              <div className="inline-flex h-8 min-w-35 items-center justify-center truncate rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2 text-[11px] font-semibold text-[#273444]">
+                {NOMBRES_MESES[mesActual]} {anioActual}
+              </div>
+              <button
+                onClick={() => cambiarMes(1)}
+                className="inline-flex h-8 w-7 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563]"
+                title="Mes siguiente"
+              >
+                <FaChevronRight className="text-[10px]" />
+              </button>
+              <button
+                onClick={irAHoy}
+                className="inline-flex h-8 items-center rounded-md bg-[#ECEFF3] px-2 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#E4E8EE]"
+              >
+                Hoy
+              </button>
+            </div>
+          )}
+          {tipoReporte === "trimestral" && (
+            <select
+              value={periodoSeleccionado}
+              onChange={(e) => setPeriodoSeleccionado(e.target.value)}
+              className="h-8 max-w-52 shrink-0 truncate rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-[11px] font-semibold text-[#4B5563] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 sm:max-w-none"
+            >
+              {periodos.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.nombre} (
+                  {formatFechaCorta(parseFechaLocal(p.fechaInicio))} -{" "}
+                  {formatFechaCorta(parseFechaLocal(p.fechaFin))})
+                </option>
+              ))}
+            </select>
+          )}
+
+          <div className="relative ml-auto shrink-0">
+            <button
+              onClick={() => setShowLeyenda(!showLeyenda)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2 text-[11px] font-semibold text-[#4B5563] transition-colors hover:border-[#C96522]/40 hover:bg-[#ECEFF3] hover:text-[#273444]"
+              title="Ver leyenda de estados"
+            >
+              <FaInfoCircle className="text-[10px] text-[#244563]" />
+              Estados
+              <FaChevronDown
+                className={`text-[9px] text-[#9CA3AF] transition-transform ${showLeyenda ? "rotate-180" : ""}`}
+              />
+            </button>
+            {showLeyenda && (
+              <>
+                <div
+                  className="fixed inset-0 z-40"
+                  onClick={() => setShowLeyenda(false)}
+                />
+                <div className="absolute left-0 top-full z-50 mt-1.5 w-64 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)]">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                    Leyenda de estados
+                  </p>
+                  <div className="space-y-1.5">
+                    {ESTADOS_ASISTENCIA.map((e) => {
+                      const cfg = ESTADO_CONFIG[e.value];
+                      const Icon = cfg.icon;
+                      return (
+                        <div
+                          key={e.value}
+                          className="flex items-center gap-2"
+                        >
+                          <div
+                            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${cfg.bgColor}`}
+                          >
+                            <Icon className={`text-[10px] ${cfg.textColor}`} />
+                          </div>
+                          <span className="text-[11px] text-[#64748B]">
+                            <strong className="text-[#273444]">
+                              {e.codigo || e.value}
+                            </strong>{" "}
+                            = {cfg.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 border-t border-[#E4E8EE] pt-2 text-[10px] text-[#6B7280]">
+                    Pasa el cursor sobre cualquier celda para ver su estado.
+                  </p>
+                </div>
+              </>
             )}
           </div>
 
-          <div className="flex items-center justify-between gap-2 w-full border-t border-slate-200 pt-2 mt-1 sm:w-auto sm:border-t-0 sm:border-l sm:pt-0 sm:mt-0 sm:pl-3">
-            <div className="relative">
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              onClick={refrescarVista}
+              className="inline-flex h-8 items-center gap-1 rounded-md bg-[#244563] px-2.5 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D]"
+              title="Refrescar datos desde Firebase"
+            >
+              <FaSync className="text-[10px]" />
+              <span className="hidden sm:inline">Refrescar</span>
+            </button>
+            {vistaEfectiva === "docente" && (
               <button
-                onClick={() => setShowLeyenda(!showLeyenda)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg text-xs sm:text-sm font-semibold text-slate-700 transition-colors"
-                title="Ver leyenda de estados"
+                onClick={handlePrint}
+                disabled={!puedeImprimir}
+                className="inline-flex h-8 items-center gap-1 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2.5 text-[11px] font-semibold text-[#4B5563] transition-colors hover:border-[#C96522]/40 hover:bg-[#ECEFF3] hover:text-[#273444] disabled:cursor-not-allowed disabled:opacity-50"
+                title="Imprimir consolidado por materia"
               >
-                <FaInfoCircle className="text-[11px] sm:text-xs text-blue-600" />
-                Estados
-                <FaChevronDown
-                  className={`text-[9px] text-slate-400 transition-transform ${showLeyenda ? "rotate-180" : ""}`}
-                />
+                <FaPrint className="text-[10px]" />
+                <span className="hidden sm:inline">Imprimir</span>
               </button>
-              {showLeyenda && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowLeyenda(false)}
-                  />
-                  <div className="absolute left-0 top-full mt-2 z-50 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 p-3">
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-                      Leyenda de estados
-                    </p>
-                    <div className="space-y-1.5">
-                      {ESTADOS_ASISTENCIA.map((e) => {
-                        const cfg = ESTADO_CONFIG[e.value];
-                        const Icon = cfg.icon;
-                        return (
-                          <div
-                            key={e.value}
-                            className="flex items-center gap-2"
-                          >
-                            <div
-                              className={`w-5 h-5 rounded ${cfg.bgColor} flex items-center justify-center shrink-0`}
-                            >
-                              <Icon className={`text-xs ${cfg.textColor}`} />
-                            </div>
-                            <span className="text-xs text-slate-600">
-                              <strong>{e.codigo || e.value}</strong> ={" "}
-                              {cfg.label}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <p className="text-[10px] text-slate-400 mt-2 pt-2 border-t border-slate-100">
-                      Pasa el cursor sobre cualquier celda para ver su estado.
-                    </p>
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
+            )}
+            {vistaEfectiva === "tutor" && (
               <button
-                onClick={refrescarVista}
-                className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-green-600 hover:bg-green-700 text-white shadow inline-flex items-center gap-1.5 transition-colors"
-                title="Refrescar datos desde Firebase"
+                onClick={handlePrintDetalle}
+                disabled={!puedeImprimirDetalle}
+                className="inline-flex h-8 items-center gap-1 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2.5 text-[11px] font-semibold text-[#4B5563] transition-colors hover:border-[#C96522]/40 hover:bg-[#ECEFF3] hover:text-[#273444] disabled:cursor-not-allowed disabled:opacity-50"
+                title="Imprimir detalle lineal de todo el grado"
               >
-                <FaSync className="text-[11px] sm:text-xs" />
-                <span className="hidden sm:inline">Refrescar</span>
+                <FaClipboardList className="text-[10px]" />
+                <span className="hidden sm:inline">Detalle</span>
               </button>
-              {vistaEfectiva === "docente" && (
-                <button
-                  onClick={handlePrint}
-                  disabled={!puedeImprimir}
-                  className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-700 hover:bg-slate-800 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 transition-colors"
-                  title="Imprimir consolidado por materia"
-                >
-                  <FaPrint className="text-[11px] sm:text-xs" />
-                  <span className="hidden sm:inline">Imprimir</span>
-                </button>
-              )}
-              {vistaEfectiva === "tutor" && (
-                <button
-                  onClick={handlePrintDetalle}
-                  disabled={!puedeImprimirDetalle}
-                  className="px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5 transition-colors"
-                  title="Imprimir detalle lineal de todo el grado"
-                >
-                  <FaClipboardList className="text-[11px] sm:text-xs" />
-                  <span className="hidden sm:inline">Detalle</span>
-                </button>
-              )}
-            </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* ============ TOGGLE VISTA ============ */}
       {(esTutor || gradosDocente.length > 0) && (
-        <div className="grid grid-cols-2 gap-2 mb-4 sm:mb-6 lg:flex lg:gap-2">
+        <div className="mb-3 inline-flex rounded-md border border-[#D8DEE6] bg-[#ECEFF3] p-0.5">
           {esTutor && (
             <button
               onClick={() => setVistaActiva("tutor")}
-              className={`px-3 sm:px-5 py-2 sm:py-3 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${vistaEfectiva === "tutor" ? "bg-purple-600 text-white shadow-lg" : "bg-white text-slate-700 border border-slate-200 hover:border-purple-300"}`}
+              className={`inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-[11px] font-semibold transition-colors ${vistaEfectiva === "tutor" ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70" : "text-[#4B5563] hover:text-[#273444]"}`}
             >
-              <FaUserTie />
+              <FaUserTie className="text-[10px]" />
               Vista Tutor
               {gradosTutor.length > 0 && (
                 <span
-                  className={`px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] sm:text-xs ${vistaEfectiva === "tutor" ? "bg-white text-purple-700" : "bg-purple-100 text-purple-700"}`}
+                  className={`rounded px-1 text-[10px] font-bold ${vistaEfectiva === "tutor" ? "bg-[#FFFFFF] text-[#244563]" : "bg-[#EAF0F6] text-[#244563]"}`}
                 >
                   {gradosTutor.length}
                 </span>
@@ -2046,13 +2055,13 @@ export default function ReporteAsistencias() {
           {gradosDocente.length > 0 && (
             <button
               onClick={() => setVistaActiva("docente")}
-              className={`px-3 sm:px-5 py-2 sm:py-3 rounded-xl text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${vistaEfectiva === "docente" ? "bg-cyan-600 text-white shadow-lg" : "bg-white text-slate-700 border border-slate-200 hover:border-cyan-300"}`}
+              className={`inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-[11px] font-semibold transition-colors ${vistaEfectiva === "docente" ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70" : "text-[#4B5563] hover:text-[#273444]"}`}
             >
-              <FaChalkboardTeacher />
+              <FaChalkboardTeacher className="text-[10px]" />
               Vista Docente
               {gradosDocente.length > 0 && (
                 <span
-                  className={`px-1.5 sm:px-2 py-0.5 rounded-full text-[10px] sm:text-xs ${vistaEfectiva === "docente" ? "bg-white text-cyan-700" : "bg-cyan-100 text-cyan-700"}`}
+                  className={`rounded px-1 text-[10px] font-bold ${vistaEfectiva === "docente" ? "bg-[#FFFFFF] text-[#244563]" : "bg-[#EAF0F6] text-[#244563]"}`}
                 >
                   {gradosDocente.length}
                 </span>
@@ -2064,14 +2073,14 @@ export default function ReporteAsistencias() {
 
       {/* ============ VISTA TUTOR ============ */}
       {vistaEfectiva === "tutor" && esTutor && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {gradosTutor.length > 1 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {gradosTutor.map((g) => (
                 <button
                   key={g.id}
                   onClick={() => setGradoTutorSel(g.id)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${gradoTutorEfectivo === g.id ? "bg-purple-600 text-white border-purple-600" : "bg-white text-slate-700 border-slate-200 hover:border-purple-300"}`}
+                  className={`h-8 rounded-md px-2.5 text-[11px] font-semibold transition-colors ${gradoTutorEfectivo === g.id ? "bg-[#244563] text-white ring-1 ring-[#C96522]/70" : "bg-[#FFFFFF] text-[#4B5563] ring-1 ring-inset ring-[#D8DEE6] hover:bg-[#ECEFF3]"}`}
                 >
                   {g.nombre} - {g.paralelo}
                 </button>
@@ -2080,34 +2089,37 @@ export default function ReporteAsistencias() {
           )}
 
           {estudiantesGradoTutor.length === 0 ? (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
-              <FaExclamationTriangle className="text-yellow-600 text-4xl mx-auto mb-3" />
-              <p className="text-yellow-800 font-medium">
+            <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-10 text-center">
+              <FaExclamationTriangle className="mx-auto text-3xl text-amber-600" />
+              <p className="mt-2 text-xs font-semibold text-amber-900">
                 No hay estudiantes en este grado
               </p>
             </div>
           ) : (
-            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-              <div className="bg-linear-to-r from-purple-600 to-purple-700 px-5 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <FaUserTie className="text-white text-xl" />
-                  <div>
-                    <h3 className="text-white font-semibold">
-                      {gradoTutorActual?.nombre} - {gradoTutorActual?.paralelo}
-                    </h3>
-                    <p className="text-white/80 text-xs">
-                      {estudiantesGradoTutor.length} estudiantes •{" "}
+            <div className="overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF]">
+              <div className="flex items-center gap-2.5 border-b border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#EAF0F6] text-[#244563]">
+                  <FaUserTie className="text-sm" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="truncate text-xs font-semibold text-[#273444]">
+                    {gradoTutorActual?.nombre} - {gradoTutorActual?.paralelo}
+                  </h3>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-[#64748B]">
+                    <span>{estudiantesGradoTutor.length} estudiantes</span>
+                    <span className="text-[#9CA3AF]">·</span>
+                    <span>
                       {materiasGradoTutor.length} materia(s) con registros
-                    </p>
+                    </span>
                   </div>
                 </div>
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="text-left px-4 py-3 font-semibold text-slate-700 min-w-45 sticky left-0 bg-slate-50">
+                <table className="w-full min-w-max border-collapse text-[11px]">
+                  <thead>
+                    <tr className="border-b border-[#D8DEE6] bg-[#ECEFF3]">
+                      <th className="sticky left-0 z-10 min-w-45 border-r border-[#E4E8EE] bg-[#ECEFF3] px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
                         Estudiante
                       </th>
                       {diasVisibles.map((dia, i) => {
@@ -2115,12 +2127,18 @@ export default function ReporteAsistencias() {
                         return (
                           <th
                             key={i}
-                            className={`text-center px-2 py-3 font-semibold min-w-28 ${esHoy ? "bg-blue-50 text-blue-700" : "text-slate-700"}`}
+                            className={`min-w-22 border-r border-[#E4E8EE] px-1.5 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide ${esHoy ? "bg-[#EAF0F6] text-[#244563]" : "text-[#64748B]"}`}
                           >
-                            {" "}
-                            <div>{nombreDia(dia)}</div>
+                            <div>
+                              {nombreDia(dia)}
+                              {esHoy && (
+                                <span className="ml-1 rounded bg-[#FDBA74] px-1 py-px text-[8px] font-bold text-[#7C2D12]">
+                                  HOY
+                                </span>
+                              )}
+                            </div>
                             <div
-                              className={`text-xs font-normal ${esHoy ? "text-blue-600" : "text-slate-500"}`}
+                              className={`text-[9px] font-normal normal-case ${esHoy ? "text-[#244563]" : "text-[#6B7280]"}`}
                             >
                               {formatFechaCorta(dia)}
                             </div>
@@ -2128,17 +2146,17 @@ export default function ReporteAsistencias() {
                         );
                       })}
                       {diasAMostrar.length > diasVisibles.length && (
-                        <th className="text-center px-2 py-3 font-semibold text-slate-500 text-xs">
+                        <th className="border-r border-[#E4E8EE] px-1.5 py-1.5 text-center text-[9px] font-semibold text-[#6B7280]">
                           +{diasAMostrar.length - diasVisibles.length} días
                         </th>
                       )}
-                      <th className="text-center px-3 py-3 font-semibold text-slate-700 min-w-17.5">
+                      <th className="min-w-14 px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#AD3038]">
                         Inas.
                       </th>
-                      <th className="text-center px-3 py-3 font-semibold text-purple-700 min-w-17.5">
+                      <th className="min-w-14 px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#C93F45]">
                         Fugas
                       </th>
-                      <th className="text-center px-3 py-3 font-semibold text-slate-700 min-w-25">
+                      <th className="min-w-24 px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
                         Acción
                       </th>
                     </tr>
@@ -2152,13 +2170,13 @@ export default function ReporteAsistencias() {
                       return (
                         <tr
                           key={est.id}
-                          className="border-b border-slate-100 hover:bg-slate-50"
+                          className="group border-b border-[#E4E8EE] transition-colors last:border-0 hover:bg-[#F3F4F6]"
                         >
-                          <td className="px-4 py-2 sticky left-0 bg-white">
-                            <div className="font-medium text-slate-900 text-xs truncate">
+                          <td className="sticky left-0 z-10 bg-[#FFFFFF] px-2 py-1.5 group-hover:bg-[#ECEFF3]">
+                            <div className="truncate text-[11px] font-semibold text-[#273444]">
                               {est.apellidos}
                             </div>
-                            <div className="text-slate-500 text-xs truncate">
+                            <div className="truncate text-[10px] text-[#64748B]">
                               {est.nombres}
                             </div>
                           </td>
@@ -2169,14 +2187,17 @@ export default function ReporteAsistencias() {
                             const registrosMaterias =
                               Object.entries(regsDelDia);
                             return (
-                              <td key={i} className="px-1 py-1.5 align-top">
+                              <td
+                                key={i}
+                                className="border-r border-[#E4E8EE] px-1 py-1.5 align-top"
+                              >
                                 {registrosMaterias.length === 0 ? (
-                                  <div className="w-full h-12 flex items-center justify-center text-slate-300 text-sm">
+                                  <div className="flex h-10 w-full items-center justify-center text-sm text-[#BFC9D4]">
                                     —
                                   </div>
                                 ) : (
                                   /* ✅ Lista vertical: hora + sigla de materia + icono de estado */
-                                  <div className="flex flex-col gap-1 min-w-20 mx-auto">
+                                  <div className="mx-auto flex min-w-20 flex-col gap-1">
                                     {[...registrosMaterias]
                                       .sort(
                                         (a, b) =>
@@ -2200,17 +2221,17 @@ export default function ReporteAsistencias() {
                                             title={`${materiaNombre}: ${config.label}${reg.observacion ? ` • ${reg.observacion}` : ""}${reg.representanteAsistio ? ` • ✔ Acta N° ${reg.actaNumero || "s/n"}` : ""}`}
                                           >
                                             {reg.hora && (
-                                              <span className="text-[10px] font-bold text-slate-500 w-5 text-right shrink-0">
+                                              <span className="w-4 shrink-0 text-right text-[10px] font-semibold text-[#6B7280]">
                                                 {reg.hora}ª
                                               </span>
                                             )}
-                                            <span className="text-[11px] font-bold text-slate-700 uppercase shrink-0">
+                                            <span className="shrink-0 text-[10px] font-bold uppercase text-[#4B5563]">
                                               {abrevMateria(materiaNombre)}
                                             </span>
                                             <span
-                                              className={`inline-flex items-center justify-center w-6 h-6 rounded-md ${config.bgColor} ${config.textColor} ${reg.representanteAsistio ? "ring-2 ring-green-500" : ""}`}
+                                              className={`inline-flex h-6 w-6 items-center justify-center rounded ${config.bgColor} ${config.textColor} ${reg.representanteAsistio ? "ring-2 ring-[#FDBA74]" : ""}`}
                                             >
-                                              <Icon className="text-xs" />
+                                              <Icon className="text-[10px]" />
                                             </span>
                                           </div>
                                         );
@@ -2221,23 +2242,25 @@ export default function ReporteAsistencias() {
                             );
                           })}
                           {diasAMostrar.length > diasVisibles.length && (
-                            <td className="px-2 py-2 text-center text-slate-400 text-xs">
+                            <td className="border-r border-[#E4E8EE] px-2 py-2 text-center text-[10px] text-[#9CA3AF]">
                               ...
                             </td>
                           )}
-                          <td className="px-3 py-2 text-center">
+                          <td className="px-2 py-2 text-center">
                             {tieneInasistencias ? (
-                              <span className="inline-flex items-center justify-center w-7 h-7 bg-red-100 text-red-700 rounded-full text-xs font-bold">
+                              <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-red-50 px-1 text-[10px] font-bold text-[#AD3038] ring-1 ring-inset ring-red-200">
                                 {ausenciasPorEstudiante[est.id]}
                               </span>
                             ) : (
-                              <span className="text-slate-400 text-xs">0</span>
+                              <span className="text-[10px] text-[#9CA3AF]">
+                                0
+                              </span>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-center">
+                          <td className="px-2 py-2 text-center">
                             {tieneFugas ? (
                               <span
-                                className="inline-flex items-center justify-center gap-1 w-7 h-7 bg-purple-100 text-purple-700 rounded-full text-xs font-bold"
+                                className="inline-flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full bg-[#FEF2F2] px-1 text-[10px] font-bold text-[#C93F45] ring-1 ring-inset ring-[#FECACA]"
                                 title={
                                   actasFirmadas > 0
                                     ? `${fugasPorEstudiante[est.id]} fuga(s), ${actasFirmadas} con acta firmada`
@@ -2246,18 +2269,20 @@ export default function ReporteAsistencias() {
                               >
                                 {fugasPorEstudiante[est.id]}
                                 {actasFirmadas > 0 && (
-                                  <FaUserCheck className="text-[9px] text-green-600" />
+                                  <FaUserCheck className="text-[8px] text-[#244563]" />
                                 )}
                               </span>
                             ) : (
-                              <span className="text-slate-400 text-xs">0</span>
+                              <span className="text-[10px] text-[#9CA3AF]">
+                                0
+                              </span>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-center">
-                            <div className="flex flex-col gap-1 items-center">
+                          <td className="px-2 py-2 text-center">
+                            <div className="flex flex-col items-center gap-1">
                               <button
                                 onClick={() => abrirDetalleEstudiante(est.id)}
-                                className="inline-flex items-center gap-1 px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-all"
+                                className="inline-flex h-7 items-center gap-1 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2 text-[10px] font-semibold text-[#4B5563] transition-colors hover:border-[#C96522]/40 hover:bg-[#ECEFF3] hover:text-[#273444]"
                                 title="Ver detalle individual del período"
                               >
                                 <FaEye className="text-[10px]" /> Detalle
@@ -2266,7 +2291,7 @@ export default function ReporteAsistencias() {
                                 tipoReporte === "semanal" && (
                                   <button
                                     onClick={() => abrirModalJustificar(est.id)}
-                                    className="inline-flex items-center gap-1 px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition-all shadow-sm"
+                                    className="inline-flex h-7 items-center gap-1 rounded-md bg-[#244563] px-2 text-[10px] font-semibold text-white transition-colors hover:bg-[#1B354D]"
                                     title="Justificar inasistencias injustificadas (i)"
                                   >
                                     <FaFileSignature className="text-[10px]" />
@@ -2276,7 +2301,7 @@ export default function ReporteAsistencias() {
                               {tieneFugas && (
                                 <button
                                   onClick={() => abrirModalActa(est.id)}
-                                  className="inline-flex items-center gap-1 px-2 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition-all shadow-sm"
+                                  className="inline-flex h-7 items-center gap-1 rounded-md border border-[#FED7AA] bg-[#FFF7ED] px-2 text-[10px] font-semibold text-[#9A4518] transition-colors hover:bg-[#FFEDD5]"
                                   title="Ver / registrar actas"
                                 >
                                   <FaFileSignature className="text-[10px]" />
@@ -2285,7 +2310,7 @@ export default function ReporteAsistencias() {
                               )}
                               {tieneInasistencias &&
                                 tipoReporte !== "semanal" && (
-                                  <span className="text-[10px] text-slate-400">
+                                  <span className="text-[9px] text-[#6B7280]">
                                     (solo semanal)
                                   </span>
                                 )}
@@ -2298,14 +2323,16 @@ export default function ReporteAsistencias() {
                 </table>
               </div>
 
-              <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
-                <FaInfoCircle className="inline mr-1" />
-                <strong>Nota:</strong>{" "}
-                {tipoReporte === "semanal"
-                  ? "Vista detallada de la semana. Cada celda muestra la jornada: hora + materia + estado. «Inas.» cuenta solo inasistencias injustificadas (i). «Fugas» (f) requieren acta de compromiso."
-                  : `Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length} días hábiles del período.`}{" "}
-                {tipoReporte !== "semanal" &&
-                  "La justificación solo está disponible en vista semanal."}
+              <div className="flex items-start gap-1.5 border-t border-[#E4E8EE] bg-[#ECEFF3] px-3 py-1.5 text-[10px] leading-relaxed text-[#64748B]">
+                <FaInfoCircle className="mt-0.5 shrink-0" />
+                <span>
+                  <strong className="text-[#4B5563]">Nota:</strong>{" "}
+                  {tipoReporte === "semanal"
+                    ? "Vista detallada de la semana. Cada celda muestra la jornada: hora + materia + estado. «Inas.» cuenta solo inasistencias injustificadas (i). «Fugas» (f) requieren acta de compromiso."
+                    : `Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length} días hábiles del período.`}{" "}
+                  {tipoReporte !== "semanal" &&
+                    "La justificación solo está disponible en vista semanal."}
+                </span>
               </div>
             </div>
           )}
@@ -2314,59 +2341,59 @@ export default function ReporteAsistencias() {
 
       {/* ============ VISTA DOCENTE: POR MATERIA, SOLO CON NOVEDADES ============ */}
       {vistaEfectiva === "docente" && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {gradosDocente.length === 0 ? (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
-              <FaChalkboardTeacher className="text-yellow-600 text-4xl mx-auto mb-3" />
-              <p className="text-yellow-800 font-medium mb-1">
+            <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-10 text-center">
+              <FaChalkboardTeacher className="mx-auto text-3xl text-amber-600" />
+              <p className="mt-2 text-xs font-semibold text-amber-900">
                 No tienes grados asignados
               </p>
-              <p className="text-yellow-700 text-sm">
+              <p className="mt-0.5 text-[11px] text-amber-800">
                 Contacta al administrador para que te asigne materias
               </p>
             </div>
           ) : (
             <>
               {gradosDocente.length > 1 && (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-1.5">
                   {gradosDocente.map((g) => (
                     <button
                       key={g.id}
                       onClick={() => setGradoDocenteSel(g.id)}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all flex items-center gap-2 ${gradoDocenteEfectivo === g.id ? "bg-cyan-600 text-white border-cyan-600" : "bg-white text-slate-700 border-slate-200 hover:border-cyan-300"}`}
+                      className={`inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-semibold transition-colors ${gradoDocenteEfectivo === g.id ? "bg-[#244563] text-white ring-1 ring-[#C96522]/70" : "bg-[#FFFFFF] text-[#4B5563] ring-1 ring-inset ring-[#D8DEE6] hover:bg-[#ECEFF3]"}`}
                     >
-                      <FaChalkboardTeacher className="text-xs" />
+                      <FaChalkboardTeacher className="text-[10px]" />
                       {g.nombre} - {g.paralelo}
                     </button>
                   ))}
                 </div>
               )}
 
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="bg-linear-to-r from-cyan-600 to-cyan-700 px-5 py-4">
-                  <div className="flex items-center gap-3">
-                    <FaChalkboardTeacher className="text-white text-xl" />
-                    <div>
-                      <h3 className="text-white font-semibold">
-                        {gradoDocenteActual?.nombre} -{" "}
-                        {gradoDocenteActual?.paralelo}
-                      </h3>
-                      <p className="text-white/80 text-xs">
-                        {materiasDocenteEnGrado.length} materia(s) tuya(s) en el
-                        período
-                      </p>
-                    </div>
+              <div className="overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF]">
+                <div className="flex items-center gap-2.5 border-b border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#EAF0F6] text-[#244563]">
+                    <FaChalkboardTeacher className="text-sm" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-xs font-semibold text-[#273444]">
+                      {gradoDocenteActual?.nombre} -{" "}
+                      {gradoDocenteActual?.paralelo}
+                    </h3>
+                    <p className="mt-0.5 text-[10px] text-[#64748B]">
+                      {materiasDocenteEnGrado.length} materia(s) tuya(s) en el
+                      período
+                    </p>
                   </div>
                 </div>
 
-                <div className="p-4 space-y-5">
+                <div className="space-y-3 p-3">
                   {materiasDocenteEnGrado.length === 0 ? (
-                    <div className="text-center py-10 text-slate-500">
-                      <FaBook className="text-4xl mx-auto mb-3 text-slate-300" />
-                      <p className="font-medium mb-1">
+                    <div className="rounded-lg border border-dashed border-[#D8DEE6] bg-[#FFFFFF] px-4 py-10 text-center">
+                      <FaBook className="mx-auto text-3xl text-[#9CA3AF]" />
+                      <p className="mt-2 text-xs font-semibold text-[#4B5563]">
                         Sin registros en este grado
                       </p>
-                      <p className="text-sm">
+                      <p className="mt-0.5 text-[11px] text-[#6B7280]">
                         Aún no has registrado asistencias en este grado para el
                         período seleccionado.
                       </p>
@@ -2424,24 +2451,24 @@ export default function ReporteAsistencias() {
                       return (
                         <div
                           key={materia.id}
-                          className="border border-slate-200 rounded-lg overflow-hidden"
+                          className="overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF]"
                         >
-                          <div className="bg-slate-50 border-b border-slate-200 px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <div className="w-8 h-8 rounded-lg bg-cyan-100 text-cyan-700 flex items-center justify-center shrink-0">
-                                <FaBook className="text-sm" />
-                              </div>
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#EAF0F6] text-[#244563]">
+                                <FaBook className="text-xs" />
+                              </span>
                               <div className="min-w-0">
-                                <h4 className="font-bold text-slate-900 text-sm truncate">
+                                <h4 className="truncate text-xs font-semibold text-[#273444]">
                                   {materia.nombre}
                                 </h4>
-                                <p className="text-xs text-slate-500">
+                                <p className="mt-0.5 text-[10px] text-[#64748B]">
                                   {totalRegistros} registro(s) en el período
                                 </p>
                               </div>
                             </div>
                             {estudiantesLista.length > 0 && (
-                              <div className="flex items-center gap-1.5 text-xs flex-wrap">
+                              <div className="flex flex-wrap items-center gap-1">
                                 {(() => {
                                   const totales = { I: 0, F: 0, A: 0, J: 0 };
                                   Object.values(conteosPorEst).forEach((c) => {
@@ -2453,27 +2480,27 @@ export default function ReporteAsistencias() {
                                   return (
                                     <>
                                       {totales.A > 0 && (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full font-bold">
+                                        <span className="inline-flex items-center gap-1 rounded bg-[#FFF7ED] px-1.5 py-0.5 text-[10px] font-bold text-[#9A4518]">
                                           <FaClock className="text-[9px]" />
                                           {totales.A} atraso
                                           {totales.A !== 1 ? "s" : ""}
                                         </span>
                                       )}
                                       {totales.I > 0 && (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 rounded-full font-bold">
+                                        <span className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-[#AD3038]">
                                           <FaUserTimes className="text-[9px]" />
                                           {totales.I} inasist.
                                         </span>
                                       )}
                                       {totales.F > 0 && (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full font-bold">
+                                        <span className="inline-flex items-center gap-1 rounded bg-[#FEF2F2] px-1.5 py-0.5 text-[10px] font-bold text-[#C93F45]">
                                           <FaSignOutAlt className="text-[9px]" />
                                           {totales.F} fuga
                                           {totales.F !== 1 ? "s" : ""}
                                         </span>
                                       )}
                                       {totales.J > 0 && (
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-bold">
+                                        <span className="inline-flex items-center gap-1 rounded bg-[#E2EAF3] px-1.5 py-0.5 text-[10px] font-bold text-[#1B354D]">
                                           <FaUserCheck className="text-[9px]" />
                                           {totales.J} justif.
                                         </span>
@@ -2486,20 +2513,22 @@ export default function ReporteAsistencias() {
                           </div>
 
                           {estudiantesLista.length === 0 ? (
-                            <div className="px-4 py-6 text-center text-sm text-green-700 bg-green-50/50">
-                              <FaCheckCircle className="text-2xl mx-auto mb-2 text-green-500" />
-                              <p className="font-semibold">¡Todo en orden!</p>
-                              <p className="text-xs text-green-600 mt-1">
+                            <div className="bg-[#EAF0F6]/40 px-4 py-6 text-center">
+                              <FaCheckCircle className="mx-auto text-2xl text-[#244563]" />
+                              <p className="mt-1.5 text-xs font-semibold text-[#244563]">
+                                ¡Todo en orden!
+                              </p>
+                              <p className="mt-0.5 text-[10px] text-[#64748B]">
                                 No hay atrasos, inasistencias ni fugas en esta
                                 materia durante el período.
                               </p>
                             </div>
                           ) : (
                             <div className="overflow-x-auto">
-                              <table className="w-full text-xs">
-                                <thead className="bg-slate-50 border-b border-slate-200">
-                                  <tr>
-                                    <th className="text-left px-3 py-2 font-semibold text-slate-700 min-w-40 sticky left-0 bg-slate-50">
+                              <table className="w-full min-w-max border-collapse text-[11px]">
+                                <thead>
+                                  <tr className="border-b border-[#D8DEE6] bg-[#ECEFF3]">
+                                    <th className="sticky left-0 z-10 min-w-40 border-r border-[#E4E8EE] bg-[#ECEFF3] px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
                                       Estudiante
                                     </th>
                                     {fechasVisiblesMateria.map((fechaISO) => {
@@ -2508,18 +2537,18 @@ export default function ReporteAsistencias() {
                                       return (
                                         <th
                                           key={fechaISO}
-                                          className={`text-center px-2 py-2 font-semibold min-w-20 ${esHoy ? "bg-blue-50 text-blue-700" : "text-slate-700"}`}
+                                          className={`min-w-18 border-r border-[#E4E8EE] px-1.5 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide ${esHoy ? "bg-[#EAF0F6] text-[#244563]" : "text-[#64748B]"}`}
                                         >
                                           <div>{nombreDia(dia)}</div>
                                           <div
-                                            className={`text-[10px] font-normal ${esHoy ? "text-blue-600" : "text-slate-500"}`}
+                                            className={`text-[9px] font-normal normal-case ${esHoy ? "text-[#244563]" : "text-[#6B7280]"}`}
                                           >
                                             {formatFechaCorta(dia)}
                                           </div>
                                         </th>
                                       );
                                     })}
-                                    <th className="text-center px-3 py-2 font-semibold text-red-700">
+                                    <th className="px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#AD3038]">
                                       Resumen
                                     </th>
                                   </tr>
@@ -2530,13 +2559,13 @@ export default function ReporteAsistencias() {
                                     return (
                                       <tr
                                         key={est.id}
-                                        className="border-b border-slate-100 hover:bg-slate-50"
+                                        className="group border-b border-[#E4E8EE] transition-colors last:border-0 hover:bg-[#F3F4F6]"
                                       >
-                                        <td className="px-3 py-2 sticky left-0 bg-white">
-                                          <div className="font-medium text-slate-900 text-xs truncate">
+                                        <td className="sticky left-0 z-10 bg-[#FFFFFF] px-2 py-1.5 group-hover:bg-[#ECEFF3]">
+                                          <div className="truncate text-[11px] font-semibold text-[#273444]">
                                             {est.apellidos}
                                           </div>
-                                          <div className="text-slate-500 text-[11px] truncate">
+                                          <div className="truncate text-[10px] text-[#64748B]">
                                             {est.nombres}
                                           </div>
                                         </td>
@@ -2548,7 +2577,7 @@ export default function ReporteAsistencias() {
                                               return (
                                                 <td
                                                   key={fechaISO}
-                                                  className="px-2 py-2 text-center text-slate-300"
+                                                  className="border-r border-[#E4E8EE] px-2 py-2 text-center text-[#9CA3AF]"
                                                 >
                                                   —
                                                 </td>
@@ -2562,7 +2591,7 @@ export default function ReporteAsistencias() {
                                               return (
                                                 <td
                                                   key={fechaISO}
-                                                  className="px-2 py-2 text-center"
+                                                  className="border-r border-[#E4E8EE] px-2 py-2 text-center"
                                                 >
                                                   —
                                                 </td>
@@ -2571,40 +2600,40 @@ export default function ReporteAsistencias() {
                                             return (
                                               <td
                                                 key={fechaISO}
-                                                className="px-2 py-2 text-center"
+                                                className="border-r border-[#E4E8EE] px-2 py-2 text-center"
                                               >
                                                 <div
-                                                  className={`inline-flex items-center justify-center w-8 h-8 rounded ${cfg.bgColor} ${cfg.textColor}`}
+                                                  className={`inline-flex h-7 w-7 items-center justify-center rounded ${cfg.bgColor} ${cfg.textColor}`}
                                                   title={`${cfg.label}${reg.observacion ? ` • ${reg.observacion}` : ""}`}
                                                 >
-                                                  <Icon className="text-xs" />
+                                                  <Icon className="text-[10px]" />
                                                 </div>
                                               </td>
                                             );
                                           },
                                         )}
-                                        <td className="px-3 py-2">
-                                          <div className="flex items-center justify-center gap-1 flex-wrap">
+                                        <td className="px-2 py-2">
+                                          <div className="flex flex-wrap items-center justify-center gap-1">
                                             {conteo.A > 0 && (
-                                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-[10px] font-bold">
+                                              <span className="inline-flex items-center gap-0.5 rounded bg-[#FFF7ED] px-1.5 py-0.5 text-[10px] font-bold text-[#9A4518]">
                                                 <FaClock className="text-[8px]" />
                                                 {conteo.A}
                                               </span>
                                             )}
                                             {conteo.I > 0 && (
-                                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">
+                                              <span className="inline-flex items-center gap-0.5 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-[#AD3038]">
                                                 <FaUserTimes className="text-[8px]" />
                                                 {conteo.I}
                                               </span>
                                             )}
                                             {conteo.F > 0 && (
-                                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-bold">
+                                              <span className="inline-flex items-center gap-0.5 rounded bg-[#FEF2F2] px-1.5 py-0.5 text-[10px] font-bold text-[#C93F45]">
                                                 <FaSignOutAlt className="text-[8px]" />
                                                 {conteo.F}
                                               </span>
                                             )}
                                             {conteo.J > 0 && (
-                                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[10px] font-bold">
+                                              <span className="inline-flex items-center gap-0.5 rounded bg-[#E2EAF3] px-1.5 py-0.5 text-[10px] font-bold text-[#1B354D]">
                                                 <FaUserCheck className="text-[8px]" />
                                                 {conteo.J}
                                               </span>
@@ -2624,14 +2653,16 @@ export default function ReporteAsistencias() {
                   )}
                 </div>
 
-                <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs text-slate-600">
-                  <FaInfoCircle className="inline mr-1" />
-                  <strong>Vista Docente:</strong> Solo se muestran estudiantes
-                  con atrasos (a), inasistencias (i), fugas (f) o
-                  justificaciones (j) en tus materias. Los presentes (P) no
-                  aparecen.
-                  {tipoReporte !== "semanal" &&
-                    ` Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length}.`}
+                <div className="flex items-start gap-1.5 border-t border-[#E4E8EE] bg-[#ECEFF3] px-3 py-1.5 text-[10px] leading-relaxed text-[#64748B]">
+                  <FaInfoCircle className="mt-0.5 shrink-0" />
+                  <span>
+                    <strong className="text-[#4B5563]">Vista Docente:</strong>{" "}
+                    Solo se muestran estudiantes con atrasos (a), inasistencias
+                    (i), fugas (f) o justificaciones (j) en tus materias. Los
+                    presentes (P) no aparecen.
+                    {tipoReporte !== "semanal" &&
+                      ` Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length}.`}
+                  </span>
                 </div>
               </div>
             </>
@@ -2640,12 +2671,12 @@ export default function ReporteAsistencias() {
       )}
 
       {!esTutor && gradosDocente.length === 0 && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center">
-          <FaExclamationTriangle className="text-yellow-600 text-4xl mx-auto mb-3" />
-          <p className="text-yellow-800 font-medium mb-1">
+        <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-10 text-center">
+          <FaExclamationTriangle className="mx-auto text-3xl text-amber-600" />
+          <p className="mt-2 text-xs font-semibold text-amber-900">
             No tienes acceso a reportes de asistencia
           </p>
-          <p className="text-yellow-700 text-sm">
+          <p className="mt-0.5 text-[11px] text-amber-800">
             Contacta al administrador para que te asigne grados o tutorías
           </p>
         </div>
@@ -2653,18 +2684,18 @@ export default function ReporteAsistencias() {
 
       {/* ============ MODAL JUSTIFICAR ============ */}
       {showJustificarModal && estudianteJustificar && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="bg-blue-100 p-2 rounded-lg">
-                  <FaFileSignature className="text-blue-600 text-xl" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-3 backdrop-blur-[2px] sm:p-4">
+          <div className="flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+            <div className="flex items-start justify-between gap-3 border-b border-[#E4E8EE] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#EAF0F6] text-[#244563]">
+                  <FaFileSignature className="text-sm" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-[#273444]">
                     Justificar Inasistencias
                   </h3>
-                  <p className="text-xs text-slate-500">
+                  <p className="mt-0.5 text-[10px] text-[#64748B]">
                     Semana del {formatFechaCorta(diasSemana[0])} al{" "}
                     {formatFechaCorta(diasSemana[4])}
                   </p>
@@ -2676,168 +2707,176 @@ export default function ReporteAsistencias() {
                   setEstudianteJustificarId(null);
                 }}
                 disabled={isJustificando}
-                className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+                className="flex h-8 w-7 shrink-0 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563] disabled:opacity-50"
+                title="Cerrar"
               >
-                <FaTimes />
+                <FaTimes className="text-sm" />
               </button>
             </div>
 
-            <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
-              <p className="text-sm text-purple-800 font-semibold">
-                {estudianteJustificar.apellidos} {estudianteJustificar.nombres}
-              </p>
-              <p className="text-xs text-purple-600 mt-1">
-                Inasistencias injustificadas (i):{" "}
-                <strong>
-                  {ausenciasPorEstudiante[estudianteJustificar.id] ?? 0}
-                </strong>
-                {(fugasPorEstudiante[estudianteJustificar.id] ?? 0) > 0 && (
-                  <span className="ml-2 text-purple-700">
-                    • Fugas (f):{" "}
-                    <strong>
-                      {fugasPorEstudiante[estudianteJustificar.id]}
-                    </strong>{" "}
-                    (no se justifican)
-                  </span>
-                )}
-              </p>
-            </div>
-
-            <div className="mb-4">
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-semibold text-slate-700">
-                  Selecciona los días *
-                </label>
-                <button
-                  onClick={seleccionarTodosDiasConAusencia}
-                  className="text-xs text-blue-600 hover:text-blue-700 font-medium"
-                >
-                  Seleccionar todos
-                </button>
+            <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+              <div className="rounded-md border border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2">
+                <p className="text-[11px] font-semibold text-[#273444]">
+                  {estudianteJustificar.apellidos}{" "}
+                  {estudianteJustificar.nombres}
+                </p>
+                <p className="mt-0.5 text-[10px] text-[#64748B]">
+                  Inasistencias injustificadas (i):{" "}
+                  <strong className="text-[#273444]">
+                    {ausenciasPorEstudiante[estudianteJustificar.id] ?? 0}
+                  </strong>
+                  {(fugasPorEstudiante[estudianteJustificar.id] ?? 0) > 0 && (
+                    <span className="ml-2">
+                      • Fugas (f):{" "}
+                      <strong className="text-[#273444]">
+                        {fugasPorEstudiante[estudianteJustificar.id]}
+                      </strong>{" "}
+                      (no se justifican)
+                    </span>
+                  )}
+                </p>
               </div>
-              <div className="space-y-2">
-                {diasSemana.map((dia, i) => {
-                  const fechaISO = formatFechaISO(dia);
-                  const ausenciasDia =
-                    ausenciasPorEstudiantePorDia[estudianteJustificar.id]?.[
-                      fechaISO
-                    ] ?? 0;
-                  const tieneAusencias = ausenciasDia > 0;
-                  const seleccionado = diasJustificar.has(fechaISO);
-                  return (
-                    <label
-                      key={i}
-                      className={`flex items-center justify-between p-3 rounded-lg border-2 cursor-pointer transition-all ${!tieneAusencias ? "bg-slate-50 border-slate-200 cursor-not-allowed opacity-50" : seleccionado ? "bg-blue-50 border-blue-500" : "bg-white border-slate-200 hover:border-blue-300"}`}
-                    >
-                      <div className="flex items-center gap-3 flex-1">
-                        <input
-                          type="checkbox"
-                          checked={seleccionado}
-                          disabled={!tieneAusencias}
-                          onChange={() => toggleDiaJustificar(fechaISO)}
-                          className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                        />
-                        <div className="flex-1">
-                          <div className="font-semibold text-slate-900 text-sm capitalize">
-                            {formatFechaCompleta(dia)}
-                          </div>
-                          <div className="text-xs text-slate-500">
-                            {NOMBRES_DIAS[i]}
+
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <label className="text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                    Selecciona los días *
+                  </label>
+                  <button
+                    onClick={seleccionarTodosDiasConAusencia}
+                    className="text-[10px] font-semibold text-[#244563] transition-colors hover:text-[#1B354D]"
+                  >
+                    Seleccionar todos
+                  </button>
+                </div>
+                <div className="max-h-56 space-y-1.5 overflow-y-auto">
+                  {diasSemana.map((dia, i) => {
+                    const fechaISO = formatFechaISO(dia);
+                    const ausenciasDia =
+                      ausenciasPorEstudiantePorDia[estudianteJustificar.id]?.[
+                        fechaISO
+                      ] ?? 0;
+                    const tieneAusencias = ausenciasDia > 0;
+                    const seleccionado = diasJustificar.has(fechaISO);
+                    return (
+                      <label
+                        key={i}
+                        className={`flex cursor-pointer items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 transition-colors ${!tieneAusencias ? "cursor-not-allowed border-[#D8DEE6] bg-[#ECEFF3] opacity-60" : seleccionado ? "border-[#C96522] bg-[#FFF7ED] ring-1 ring-[#C96522]/25" : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"}`}
+                      >
+                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={seleccionado}
+                            disabled={!tieneAusencias}
+                            onChange={() => toggleDiaJustificar(fechaISO)}
+                            className="h-3.5 w-3.5 shrink-0 rounded border-[#BFC9D4] text-[#244563] focus:ring-[#244563]/30"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[11px] font-semibold capitalize text-[#273444]">
+                              {formatFechaCompleta(dia)}
+                            </div>
+                            <div className="text-[10px] text-[#6B7280]">
+                              {NOMBRES_DIAS[i]}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      {tieneAusencias ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded-full text-xs font-bold">
-                          <FaUserTimes className="text-[9px]" />
-                          {ausenciasDia} inasistencia
-                          {ausenciasDia !== 1 ? "s" : ""}
-                        </span>
-                      ) : (
-                        <span className="text-xs text-slate-400 italic">
-                          Sin inasistencias
-                        </span>
-                      )}
-                    </label>
-                  );
-                })}
+                        {tieneAusencias ? (
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded bg-red-100 px-1.5 py-px text-[10px] font-bold text-[#AD3038]">
+                            <FaUserTimes className="text-[9px]" />
+                            {ausenciasDia} inasistencia
+                            {ausenciasDia !== 1 ? "s" : ""}
+                          </span>
+                        ) : (
+                          <span className="shrink-0 text-[10px] italic text-[#9CA3AF]">
+                            Sin inasistencias
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
+
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                  Motivos comunes{" "}
+                  <span className="font-normal normal-case text-[#6B7280]">
+                    (clic para agregar)
+                  </span>
+                </label>
+                <div className="flex flex-wrap gap-1">
+                  {MOTIVOS_JUSTIFICACION.map((motivo) => (
+                    <button
+                      key={motivo.label}
+                      type="button"
+                      onClick={() => agregarMotivo(motivo.label)}
+                      disabled={isJustificando}
+                      className="inline-flex items-center gap-1 rounded bg-[#ECEFF3] px-1.5 py-0.5 text-[10px] font-medium text-[#4B5563] transition-colors hover:bg-[#E4E8EE] disabled:opacity-50"
+                    >
+                      <span>{motivo.icon}</span>
+                      <span>{motivo.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                  Detalle del motivo{" "}
+                  <span className="font-normal normal-case text-[#6B7280]">
+                    (opcional)
+                  </span>
+                </label>
+                <textarea
+                  value={motivoJustificacion}
+                  onChange={(e) => setMotivoJustificacion(e.target.value)}
+                  placeholder="Ej: Enfermedad. Cita médica programada..."
+                  rows={3}
+                  disabled={isJustificando}
+                  className="w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 py-1.5 text-xs text-[#374151] placeholder:text-[#6B7280] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 disabled:bg-[#ECEFF3]"
+                />
+              </div>
+
+              {diasJustificar.size > 0 && (
+                <div className="flex items-start gap-2 rounded-md border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-1.5 text-[10px] leading-relaxed text-[#4B5563]">
+                  <FaInfoCircle className="mt-0.5 shrink-0" />
+                  <span>
+                    Se justificarán todas las inasistencias (i) de{" "}
+                    <strong>{diasJustificar.size} día(s)</strong> en{" "}
+                    <strong>todas las materias</strong> registradas.
+                  </span>
+                </div>
+              )}
             </div>
 
-            <div className="mb-3">
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Motivos comunes{" "}
-                <span className="text-slate-400 font-normal">
-                  (clic para agregar)
-                </span>
-              </label>
-              <div className="flex flex-wrap gap-1.5">
-                {MOTIVOS_JUSTIFICACION.map((motivo) => (
-                  <button
-                    key={motivo.label}
-                    type="button"
-                    onClick={() => agregarMotivo(motivo.label)}
-                    disabled={isJustificando}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 hover:border-blue-400 text-blue-800 rounded-lg text-xs font-medium transition-all disabled:opacity-50"
-                  >
-                    <span>{motivo.icon}</span>
-                    <span>{motivo.label}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="mb-5">
-              <label className="block text-sm font-semibold text-slate-700 mb-2">
-                Detalle del motivo{" "}
-                <span className="text-slate-400 font-normal">(opcional)</span>
-              </label>
-              <textarea
-                value={motivoJustificacion}
-                onChange={(e) => setMotivoJustificacion(e.target.value)}
-                placeholder="Ej: Enfermedad. Cita médica programada..."
-                rows={3}
-                disabled={isJustificando}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 disabled:bg-slate-100"
-              />
-            </div>
-
-            {diasJustificar.size > 0 && (
-              <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800">
-                <FaInfoCircle className="inline mr-1" />
-                Se justificarán todas las inasistencias (i) de{" "}
-                <strong>{diasJustificar.size} día(s)</strong> en{" "}
-                <strong>todas las materias</strong> registradas.
-              </div>
-            )}
-
-            <div className="flex gap-2">
-              <button
-                onClick={justificarDiasSeleccionados}
-                disabled={isJustificando || diasJustificar.size === 0}
-                className="flex-1 inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isJustificando ? (
-                  <>
-                    <FaSpinner className="animate-spin text-xs" />
-                    Justificando...
-                  </>
-                ) : (
-                  <>
-                    <FaFileSignature className="text-xs" />
-                    Justificar{" "}
-                    {diasJustificar.size > 0 && `(${diasJustificar.size})`}
-                  </>
-                )}
-              </button>
+            <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#ECEFF3] px-4 py-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => {
                   setShowJustificarModal(false);
                   setEstudianteJustificarId(null);
                 }}
                 disabled={isJustificando}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3] disabled:opacity-50"
               >
                 Cancelar
+              </button>
+              <button
+                onClick={justificarDiasSeleccionados}
+                disabled={isJustificando || diasJustificar.size === 0}
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#244563] px-4 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isJustificando ? (
+                  <>
+                    <FaSpinner className="animate-spin text-[10px]" />
+                    Justificando...
+                  </>
+                ) : (
+                  <>
+                    <FaFileSignature className="text-[10px]" />
+                    Justificar{" "}
+                    {diasJustificar.size > 0 && `(${diasJustificar.size})`}
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -2846,18 +2885,18 @@ export default function ReporteAsistencias() {
 
       {/* ============ MODAL ACTA ============ */}
       {showActaModal && estudianteActa && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="bg-purple-100 p-2 rounded-lg">
-                  <FaFileSignature className="text-purple-600 text-xl" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-3 backdrop-blur-[2px] sm:p-4">
+          <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+            <div className="flex items-start justify-between gap-3 border-b border-[#E4E8EE] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#FFF7ED] text-[#9A4518]">
+                  <FaFileSignature className="text-sm" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-[#273444]">
                     Acta de Compromiso
                   </h3>
-                  <p className="text-xs text-slate-500">
+                  <p className="mt-0.5 text-[10px] text-[#64748B]">
                     Las actas registradas son inmutables (solo lectura)
                   </p>
                 </div>
@@ -2868,286 +2907,299 @@ export default function ReporteAsistencias() {
                   setEstudianteActaId(null);
                 }}
                 disabled={isGuardandoActa}
-                className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+                className="flex h-8 w-7 shrink-0 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563] disabled:opacity-50"
+                title="Cerrar"
               >
-                <FaTimes />
+                <FaTimes className="text-sm" />
               </button>
             </div>
 
-            <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
-              <p className="text-sm text-purple-800 font-semibold">
-                {estudianteActa.apellidos} {estudianteActa.nombres}
-              </p>
-              <div className="flex flex-wrap items-center gap-3 text-xs text-purple-600 mt-1">
-                <span>
-                  Fugas: <strong>{registrosFugas.length}</strong>
-                </span>
-                <span>•</span>
-                <span>
-                  Con acta: <strong>{fugasRegistradas.length}</strong>
-                </span>
-                <span>•</span>
-                <span>
-                  Próximo N°:{" "}
-                  <strong className="text-purple-900">
-                    {formatoNumeroActa(proximoNumeroActaSugerido)}
-                  </strong>
-                </span>
+            <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+              <div className="rounded-md border border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2">
+                <p className="text-[11px] font-semibold text-[#273444]">
+                  {estudianteActa.apellidos} {estudianteActa.nombres}
+                </p>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-[#64748B]">
+                  <span>
+                    Fugas:{" "}
+                    <strong className="text-[#273444]">
+                      {registrosFugas.length}
+                    </strong>
+                  </span>
+                  <span className="text-[#9CA3AF]">·</span>
+                  <span>
+                    Con acta:{" "}
+                    <strong className="text-[#273444]">
+                      {fugasRegistradas.length}
+                    </strong>
+                  </span>
+                  <span className="text-[#9CA3AF]">·</span>
+                  <span>
+                    Próximo N°:{" "}
+                    <strong className="text-[#9A4518]">
+                      {formatoNumeroActa(proximoNumeroActaSugerido)}
+                    </strong>
+                  </span>
+                </div>
               </div>
-            </div>
 
-            {registrosFugas.length === 0 ? (
-              <div className="p-6 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm text-slate-500">
-                No hay fugas registradas para este estudiante en el período
-                actual.
-              </div>
-            ) : (
-              <>
-                {fugasRegistradas.length > 0 && (
-                  <div className="mb-4">
-                    <label className="block text-sm font-semibold text-slate-700 mb-2">
-                      <FaLock className="inline text-[10px] mr-1 text-green-700" />
-                      Actas registradas (solo lectura)
-                    </label>
-                    <div className="space-y-2">
-                      {(() => {
-                        const map = new Map<string, RegistroFuga[]>();
-                        fugasRegistradas.forEach((f) => {
-                          const arr = map.get(f.fecha) || [];
-                          arr.push(f);
-                          map.set(f.fecha, arr);
-                        });
-                        return Array.from(map.entries())
-                          .sort((a, b) => a[0].localeCompare(b[0]))
-                          .map(([fecha, fugasDelDia]) => {
-                            const primera = fugasDelDia[0];
-                            return (
-                              <div
-                                key={fecha}
-                                className="p-3 rounded-lg border-2 border-green-200 bg-green-50/60"
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="flex-1 min-w-0">
-                                    <div className="font-semibold text-slate-900 text-sm capitalize">
-                                      {formatFechaCompleta(
-                                        parseFechaLocal(fecha),
+              {registrosFugas.length === 0 ? (
+                <div className="rounded-md border border-dashed border-[#D8DEE6] bg-[#ECEFF3] px-4 py-6 text-center text-[11px] text-[#64748B]">
+                  No hay fugas registradas para este estudiante en el período
+                  actual.
+                </div>
+              ) : (
+                <>
+                  {fugasRegistradas.length > 0 && (
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                        <FaLock className="mr-1 inline text-[9px] text-[#1B354D]" />
+                        Actas registradas (solo lectura)
+                      </label>
+                      <div className="space-y-1.5">
+                        {(() => {
+                          const map = new Map<string, RegistroFuga[]>();
+                          fugasRegistradas.forEach((f) => {
+                            const arr = map.get(f.fecha) || [];
+                            arr.push(f);
+                            map.set(f.fecha, arr);
+                          });
+                          return Array.from(map.entries())
+                            .sort((a, b) => a[0].localeCompare(b[0]))
+                            .map(([fecha, fugasDelDia]) => {
+                              const primera = fugasDelDia[0];
+                              return (
+                                <div
+                                  key={fecha}
+                                  className="rounded-md border border-[#C8D6E5] bg-[#EAF0F6]/60 px-2.5 py-2"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-[11px] font-semibold capitalize text-[#273444]">
+                                        {formatFechaCompleta(
+                                          parseFechaLocal(fecha),
+                                        )}
+                                      </div>
+                                      <div className="text-[10px] text-[#64748B]">
+                                        {fugasDelDia.length} materia(s):{" "}
+                                        <span className="font-medium text-[#4B5563]">
+                                          {fugasDelDia
+                                            .map((f) => f.materiaNombre)
+                                            .join(", ")}
+                                        </span>
+                                      </div>
+                                      {primera.representanteNota && (
+                                        <div className="mt-1.5 rounded border border-[#C8D6E5] bg-[#FFFFFF]/80 px-2 py-1 text-[10px] text-[#4B5563]">
+                                          {primera.representanteNota}
+                                        </div>
+                                      )}
+                                      {(primera.representantePor ||
+                                        primera.representanteEl) && (
+                                        <div className="mt-1 text-[10px] text-[#6B7280]">
+                                          Registrado por{" "}
+                                          {nombreDocente(
+                                            primera.representantePor,
+                                          ) || "tutor"}
+                                          {primera.representanteEl
+                                            ? ` el ${formatFechaRegistro(primera.representanteEl)}`
+                                            : ""}
+                                        </div>
                                       )}
                                     </div>
-                                    <div className="text-xs text-slate-500">
-                                      {fugasDelDia.length} materia(s):{" "}
-                                      <span className="font-medium text-slate-700">
-                                        {fugasDelDia
-                                          .map((f) => f.materiaNombre)
-                                          .join(", ")}
-                                      </span>
-                                    </div>
-                                    {primera.representanteNota && (
-                                      <div className="mt-1.5 text-xs text-slate-700 bg-white/80 border border-green-200 rounded px-2 py-1.5">
-                                        {primera.representanteNota}
-                                      </div>
-                                    )}
-                                    {(primera.representantePor ||
-                                      primera.representanteEl) && (
-                                      <div className="mt-1 text-[10px] text-slate-400">
-                                        Registrado por{" "}
-                                        {nombreDocente(
-                                          primera.representantePor,
-                                        ) || "tutor"}
-                                        {primera.representanteEl
-                                          ? ` el ${formatFechaRegistro(primera.representanteEl)}`
-                                          : ""}
-                                      </div>
+                                    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-[#E2EAF3] px-1.5 py-px text-[10px] font-bold text-[#1B354D]">
+                                      <FaLock className="text-[9px]" />
+                                      Acta{" "}
+                                      {primera.actaNumero
+                                        ? `N° ${primera.actaNumero}`
+                                        : "firmada"}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            });
+                        })()}
+                      </div>
+                    </div>
+                  )}
+
+                  {gruposPendientes.length > 0 ? (
+                    <div className="space-y-2">
+                      <label className="block text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                        Fugas sin acta — las del mismo día comparten una sola
+                        acta
+                      </label>
+                      {gruposPendientes.map((grupo) => {
+                        const seleccionado = diasSeleccionados.has(grupo.fecha);
+                        const num = numeroParaDia(grupo.fecha);
+                        return (
+                          <div
+                            key={grupo.fecha}
+                            className={`rounded-md border px-2.5 py-2 transition-colors ${seleccionado ? "border-[#FDBA74] bg-[#F3F4F6] ring-1 ring-[#FDBA74]/30" : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#FDBA74]/50"}`}
+                          >
+                            <div className="mb-1.5 flex items-start justify-between gap-3">
+                              <label className="flex flex-1 cursor-pointer items-start gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={seleccionado}
+                                  onChange={() =>
+                                    toggleDiaSeleccionado(grupo.fecha)
+                                  }
+                                  className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-[#BFC9D4] text-[#244563] focus:ring-[#244563]/30"
+                                />
+                                <div className="flex-1">
+                                  <div className="text-[11px] font-semibold capitalize text-[#273444]">
+                                    {formatFechaCompleta(
+                                      parseFechaLocal(grupo.fecha),
                                     )}
                                   </div>
-                                  <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold shrink-0">
-                                    <FaLock className="text-[9px]" />
-                                    Acta{" "}
-                                    {primera.actaNumero
-                                      ? `N° ${primera.actaNumero}`
-                                      : "firmada"}
-                                  </span>
+                                  <div className="text-[10px] text-[#64748B]">
+                                    {grupo.materias.length} materia(s):{" "}
+                                    <span className="font-medium text-[#4B5563]">
+                                      {grupo.materias.join(", ")}
+                                    </span>
+                                  </div>
                                 </div>
-                              </div>
-                            );
-                          });
-                      })()}
-                    </div>
-                  </div>
-                )}
-
-                {gruposPendientes.length > 0 ? (
-                  <div className="mb-4 space-y-3">
-                    <label className="block text-sm font-semibold text-slate-700">
-                      Fugas sin acta — las del mismo día comparten una sola acta
-                    </label>
-                    {gruposPendientes.map((grupo) => {
-                      const seleccionado = diasSeleccionados.has(grupo.fecha);
-                      const num = numeroParaDia(grupo.fecha);
-                      return (
-                        <div
-                          key={grupo.fecha}
-                          className={`p-3 rounded-lg border-2 transition-all ${seleccionado ? "bg-purple-50 border-purple-400" : "bg-white border-slate-200"}`}
-                        >
-                          <div className="flex items-start justify-between gap-3 mb-2">
-                            <label className="flex items-start gap-2 flex-1 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={seleccionado}
-                                onChange={() =>
-                                  toggleDiaSeleccionado(grupo.fecha)
-                                }
-                                className="w-4 h-4 mt-0.5 text-purple-600 rounded focus:ring-purple-500"
-                              />
-                              <div className="flex-1">
-                                <div className="font-semibold text-slate-900 text-sm capitalize">
-                                  {formatFechaCompleta(
-                                    parseFechaLocal(grupo.fecha),
-                                  )}
+                              </label>
+                              {seleccionado ? (
+                                <span className="inline-flex shrink-0 items-center rounded bg-[#FFFFFF] px-1.5 py-px text-[10px] font-bold text-[#9A4518] ring-1 ring-inset ring-[#FED7AA]">
+                                  N° {formatoNumeroActa(num)}
+                                </span>
+                              ) : (
+                                <span className="inline-flex shrink-0 items-center gap-1 rounded bg-[#ECEFF3] px-1.5 py-px text-[10px] font-semibold text-[#64748B]">
+                                  <FaSignOutAlt className="text-[9px]" />
+                                  Sin acta
+                                </span>
+                              )}
+                            </div>
+                            {seleccionado && (
+                              <>
+                                <div className="mb-1.5">
+                                  <div className="mb-1 text-[10px] font-semibold text-[#9A4518]">
+                                    Plantillas de acta:
+                                  </div>
+                                  <div className="flex flex-wrap gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        agregarTextoDia(
+                                          grupo.fecha,
+                                          `Acta de compromiso N° ${formatoNumeroActa(num)} firmada con el representante`,
+                                        )
+                                      }
+                                      disabled={isGuardandoActa}
+                                      className="inline-flex items-center gap-1 rounded bg-[#FFF7ED] px-1.5 py-0.5 text-[10px] font-medium text-[#9A4518] transition-colors hover:bg-[#FFEDD5] disabled:opacity-50"
+                                    >
+                                      📄 Acta N° {formatoNumeroActa(num)}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        agregarTextoDia(
+                                          grupo.fecha,
+                                          "Se establece compromiso de mejorar la asistencia y comportamiento",
+                                        )
+                                      }
+                                      disabled={isGuardandoActa}
+                                      className="inline-flex items-center gap-1 rounded bg-[#ECEFF3] px-1.5 py-0.5 text-[10px] font-medium text-[#4B5563] transition-colors hover:bg-[#E4E8EE] disabled:opacity-50"
+                                    >
+                                      ✍️ Compromiso
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        agregarTextoDia(
+                                          grupo.fecha,
+                                          "El representante se compromete a dar seguimiento",
+                                        )
+                                      }
+                                      disabled={isGuardandoActa}
+                                      className="inline-flex items-center gap-1 rounded bg-[#ECEFF3] px-1.5 py-0.5 text-[10px] font-medium text-[#4B5563] transition-colors hover:bg-[#E4E8EE] disabled:opacity-50"
+                                    >
+                                      👨‍👩‍👧 Seguimiento
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        agregarTextoDia(
+                                          grupo.fecha,
+                                          "Se notifica a Dirección Distrital por reincidencia",
+                                        )
+                                      }
+                                      disabled={isGuardandoActa}
+                                      className="inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-[#AD3038] transition-colors hover:bg-red-100 disabled:opacity-50"
+                                    >
+                                      ⚠️ Notificación DD
+                                    </button>
+                                  </div>
                                 </div>
-                                <div className="text-xs text-slate-500">
-                                  {grupo.materias.length} materia(s):{" "}
-                                  <span className="font-medium text-slate-700">
-                                    {grupo.materias.join(", ")}
-                                  </span>
-                                </div>
-                              </div>
-                            </label>
-                            {seleccionado ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-200 text-purple-900 rounded-full text-xs font-bold shrink-0">
-                                N° {formatoNumeroActa(num)}
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold shrink-0">
-                                <FaSignOutAlt className="text-[9px]" />
-                                Sin acta
-                              </span>
+                                <textarea
+                                  value={notasPorDia[grupo.fecha] || ""}
+                                  onChange={(e) =>
+                                    setNotasPorDia((prev) => ({
+                                      ...prev,
+                                      [grupo.fecha]: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="Ej: Acta de compromiso N° 001 firmada..."
+                                  rows={2}
+                                  disabled={isGuardandoActa}
+                                  className="w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 py-1.5 text-[11px] text-[#374151] placeholder:text-[#6B7280] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 disabled:bg-[#ECEFF3]"
+                                />
+                              </>
                             )}
                           </div>
-                          {seleccionado && (
-                            <>
-                              <div className="mb-2">
-                                <div className="text-[11px] font-semibold text-purple-700 mb-1">
-                                  Plantillas de acta:
-                                </div>
-                                <div className="flex flex-wrap gap-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      agregarTextoDia(
-                                        grupo.fecha,
-                                        `Acta de compromiso N° ${formatoNumeroActa(num)} firmada con el representante`,
-                                      )
-                                    }
-                                    disabled={isGuardandoActa}
-                                    className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 hover:bg-purple-200 border border-purple-300 text-purple-800 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
-                                  >
-                                    📄 Acta N° {formatoNumeroActa(num)}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      agregarTextoDia(
-                                        grupo.fecha,
-                                        "Se establece compromiso de mejorar la asistencia y comportamiento",
-                                      )
-                                    }
-                                    disabled={isGuardandoActa}
-                                    className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
-                                  >
-                                    ✍️ Compromiso
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      agregarTextoDia(
-                                        grupo.fecha,
-                                        "El representante se compromete a dar seguimiento",
-                                      )
-                                    }
-                                    disabled={isGuardandoActa}
-                                    className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
-                                  >
-                                    👨‍👩‍👧 Seguimiento
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      agregarTextoDia(
-                                        grupo.fecha,
-                                        "Se notifica a Dirección Distrital por reincidencia",
-                                      )
-                                    }
-                                    disabled={isGuardandoActa}
-                                    className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 rounded-md text-[11px] font-medium transition-all disabled:opacity-50"
-                                  >
-                                    ⚠️ Notificación DD
-                                  </button>
-                                </div>
-                              </div>
-                              <textarea
-                                value={notasPorDia[grupo.fecha] || ""}
-                                onChange={(e) =>
-                                  setNotasPorDia((prev) => ({
-                                    ...prev,
-                                    [grupo.fecha]: e.target.value,
-                                  }))
-                                }
-                                placeholder="Ej: Acta de compromiso N° 001 firmada..."
-                                rows={2}
-                                disabled={isGuardandoActa}
-                                className="w-full border border-purple-200 rounded-md px-2 py-1.5 text-xs focus:ring-2 focus:ring-purple-400 disabled:bg-slate-100"
-                              />
-                            </>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg text-center text-sm text-green-700">
-                    ✅ Todas las fugas de este estudiante ya tienen acta
-                    registrada.
-                  </div>
-                )}
-              </>
-            )}
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 rounded-md border border-[#C8D6E5] bg-[#EAF0F6]/60 px-3 py-2 text-[11px] text-[#1B354D]">
+                      <FaCheckCircle className="shrink-0 text-[10px]" />
+                      Todas las fugas de este estudiante ya tienen acta
+                      registrada.
+                    </div>
+                  )}
+                </>
+              )}
 
-            {registrosFugas.length > 0 && (
-              <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg text-xs text-purple-800">
-                <FaInfoCircle className="inline mr-1" />
-                El estado <strong>F (fuga)</strong> NO cambia. Las fugas del
-                mismo día se agrupan en una sola acta. Una vez registrada, queda
-                bloqueada (solo lectura).
-              </div>
-            )}
+              {registrosFugas.length > 0 && (
+                <div className="flex items-start gap-2 rounded-md border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-1.5 text-[10px] leading-relaxed text-[#4B5563]">
+                  <FaInfoCircle className="mt-0.5 shrink-0" />
+                  <span>
+                    El estado <strong>F (fuga)</strong> NO cambia. Las fugas del
+                    mismo día se agrupan en una sola acta. Una vez registrada,
+                    queda bloqueada (solo lectura).
+                  </span>
+                </div>
+              )}
+            </div>
 
-            <div className="flex gap-2">
-              <button
-                onClick={guardarActaCompromiso}
-                disabled={isGuardandoActa || diasSeleccionados.size === 0}
-                className="flex-1 inline-flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isGuardandoActa ? (
-                  <>
-                    <FaSpinner className="animate-spin text-xs" />
-                    Guardando...
-                  </>
-                ) : (
-                  <>
-                    <FaFileSignature className="text-xs" />
-                    Registrar Acta(s)
-                  </>
-                )}
-              </button>
+            <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#ECEFF3] px-4 py-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => {
                   setShowActaModal(false);
                   setEstudianteActaId(null);
                 }}
                 disabled={isGuardandoActa}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3] disabled:opacity-50"
               >
                 Cancelar
+              </button>
+              <button
+                onClick={guardarActaCompromiso}
+                disabled={isGuardandoActa || diasSeleccionados.size === 0}
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#C96522] px-4 text-[11px] font-semibold text-white transition-colors hover:bg-[#A9501A] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isGuardandoActa ? (
+                  <>
+                    <FaSpinner className="animate-spin text-[10px]" />
+                    Guardando...
+                  </>
+                ) : (
+                  <>
+                    <FaFileSignature className="text-[10px]" />
+                    Registrar Acta(s)
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -3156,18 +3208,18 @@ export default function ReporteAsistencias() {
 
       {/* ============ MODAL: DETALLE INDIVIDUAL ============ */}
       {showDetalleModal && detalleEstudiante && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="bg-indigo-100 p-2 rounded-lg">
-                  <FaEye className="text-indigo-600 text-xl" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-3 backdrop-blur-[2px] sm:p-4">
+          <div className="flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+            <div className="flex items-start justify-between gap-3 border-b border-[#E4E8EE] px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#EAF0F6] text-[#244563]">
+                  <FaEye className="text-sm" />
+                </span>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-[#273444]">
                     Detalle Individual
                   </h3>
-                  <p className="text-xs text-slate-500">
+                  <p className="mt-0.5 truncate text-[10px] text-[#64748B]">
                     {detalleEstudiante.est.apellidos}{" "}
                     {detalleEstudiante.est.nombres} · {gradoTutorActual?.nombre}{" "}
                     {gradoTutorActual?.paralelo}
@@ -3179,123 +3231,129 @@ export default function ReporteAsistencias() {
                   setShowDetalleModal(false);
                   setEstudianteDetalleId(null);
                 }}
-                className="text-slate-400 hover:text-slate-600"
+                className="flex h-8 w-7 shrink-0 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563]"
+                title="Cerrar"
               >
-                <FaTimes />
+                <FaTimes className="text-sm" />
               </button>
             </div>
 
-            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800 flex items-center gap-2">
-              <FaInfoCircle className="shrink-0" />
-              <span className="font-semibold">{rangoLabelActual}</span>
+            <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+              <div className="flex items-start gap-2 rounded-md border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-1.5 text-[11px] leading-relaxed text-[#4B5563]">
+                <FaInfoCircle className="mt-0.5 shrink-0" />
+                <span className="font-semibold">{rangoLabelActual}</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="inline-flex items-center gap-1 rounded bg-[#EAF0F6] px-1.5 py-0.5 text-[10px] font-bold text-[#244563]">
+                  <FaCheckCircle className="text-[9px]" />
+                  {detalleEstudiante.counts.P} presentes
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-[#FFF7ED] px-1.5 py-0.5 text-[10px] font-bold text-[#9A4518]">
+                  <FaClock className="text-[9px]" />
+                  {detalleEstudiante.counts.A} atrasos
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-[#AD3038]">
+                  <FaUserTimes className="text-[9px]" />
+                  {detalleEstudiante.counts.I} inasist.
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-[#FEF2F2] px-1.5 py-0.5 text-[10px] font-bold text-[#C93F45]">
+                  <FaSignOutAlt className="text-[9px]" />
+                  {detalleEstudiante.counts.F} fugas
+                </span>
+                <span className="inline-flex items-center gap-1 rounded bg-[#E2EAF3] px-1.5 py-0.5 text-[10px] font-bold text-[#1B354D]">
+                  <FaUserCheck className="text-[9px]" />
+                  {detalleEstudiante.counts.J} justif.
+                </span>
+                <span
+                  className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-bold ${detalleEstudiante.pct >= 90 ? "bg-[#E2EAF3] text-[#1B354D]" : detalleEstudiante.pct >= 75 ? "bg-[#FFF7ED] text-[#9A4518]" : "bg-red-100 text-[#AD3038]"}`}
+                >
+                  {detalleEstudiante.pct}% asistencia
+                </span>
+              </div>
+
+              {detalleEstudiante.regs.length === 0 ? (
+                <div className="rounded-md border border-dashed border-[#D8DEE6] bg-[#ECEFF3] px-4 py-6 text-center text-[11px] text-[#64748B]">
+                  Sin registros de asistencia en el período seleccionado.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-md border border-[#D8DEE6] bg-[#FFFFFF]">
+                  <table className="w-full border-collapse text-[11px]">
+                    <thead>
+                      <tr className="border-b border-[#D8DEE6] bg-[#ECEFF3]">
+                        <th className="px-2.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                          Fecha
+                        </th>
+                        <th className="px-2.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                          Materia
+                        </th>
+                        <th className="px-2.5 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                          Estado
+                        </th>
+                        <th className="px-2.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                          Observación / Acta
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E4E8EE]">
+                      {detalleEstudiante.regs.map((r, idx) => {
+                        const cfg = ESTADO_CONFIG[r.estado];
+                        const Icon = cfg?.icon || FaInfoCircle;
+                        const d = parseFechaLocal(r.fecha);
+                        return (
+                          <tr
+                            key={idx}
+                            className="transition-colors hover:bg-[#F3F4F6]"
+                          >
+                            <td className="whitespace-nowrap px-2.5 py-1.5">
+                              <span className="font-semibold text-[#273444]">
+                                {formatFechaCorta(d)}
+                              </span>
+                              <span className="ml-1 text-[#6B7280]">
+                                ({NOMBRES_DIAS[d.getDay() - 1] || ""})
+                              </span>
+                            </td>
+                            <td className="px-2.5 py-1.5 text-[#374151]">
+                              {r.materia}
+                            </td>
+                            <td className="px-2.5 py-1.5 text-center">
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${cfg?.bgColor} ${cfg?.textColor}`}
+                              >
+                                <Icon className="text-[9px]" /> {r.estado}
+                              </span>
+                            </td>
+                            <td className="px-2.5 py-1.5 text-[#64748B]">
+                              {r.observacion || "—"}
+                              {r.estado === "F" &&
+                                (r.acta
+                                  ? ` · Acta N° ${r.actaNumero || "s/n"}`
+                                  : " · Sin acta")}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
-            <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full font-bold">
-                <FaCheckCircle className="text-[9px]" />
-                {detalleEstudiante.counts.P} presentes
-              </span>
-              <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 rounded-full font-bold">
-                <FaClock className="text-[9px]" />
-                {detalleEstudiante.counts.A} atrasos
-              </span>
-              <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded-full font-bold">
-                <FaUserTimes className="text-[9px]" />
-                {detalleEstudiante.counts.I} inasist.
-              </span>
-              <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-full font-bold">
-                <FaSignOutAlt className="text-[9px]" />
-                {detalleEstudiante.counts.F} fugas
-              </span>
-              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-full font-bold">
-                <FaUserCheck className="text-[9px]" />
-                {detalleEstudiante.counts.J} justif.
-              </span>
-              <span
-                className={`inline-flex items-center px-2 py-1 rounded-full font-bold ${detalleEstudiante.pct >= 90 ? "bg-green-100 text-green-700" : detalleEstudiante.pct >= 75 ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"}`}
-              >
-                {detalleEstudiante.pct}% asistencia
-              </span>
-            </div>
-
-            {detalleEstudiante.regs.length === 0 ? (
-              <div className="p-6 bg-slate-50 border border-slate-200 rounded-lg text-center text-sm text-slate-500">
-                Sin registros de asistencia en el período seleccionado.
-              </div>
-            ) : (
-              <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="text-left px-3 py-2 font-semibold text-slate-700">
-                        Fecha
-                      </th>
-                      <th className="text-left px-3 py-2 font-semibold text-slate-700">
-                        Materia
-                      </th>
-                      <th className="text-center px-3 py-2 font-semibold text-slate-700">
-                        Estado
-                      </th>
-                      <th className="text-left px-3 py-2 font-semibold text-slate-700">
-                        Observación / Acta
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {detalleEstudiante.regs.map((r, idx) => {
-                      const cfg = ESTADO_CONFIG[r.estado];
-                      const Icon = cfg?.icon || FaInfoCircle;
-                      const d = parseFechaLocal(r.fecha);
-                      return (
-                        <tr key={idx} className="hover:bg-slate-50">
-                          <td className="px-3 py-2 whitespace-nowrap">
-                            <span className="font-semibold text-slate-800">
-                              {formatFechaCorta(d)}
-                            </span>
-                            <span className="text-slate-500 ml-1">
-                              ({NOMBRES_DIAS[d.getDay() - 1] || ""})
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-slate-700">
-                            {r.materia}
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            <span
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold ${cfg?.bgColor} ${cfg?.textColor}`}
-                            >
-                              <Icon className="text-[9px]" /> {r.estado}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-slate-600">
-                            {r.observacion || "—"}
-                            {r.estado === "F" &&
-                              (r.acta
-                                ? ` · Acta N° ${r.actaNumero || "s/n"}`
-                                : " · Sin acta")}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div className="flex gap-2 mt-6">
-              <button
-                onClick={handlePrintDetalleEstudiante}
-                className="flex-1 inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg text-sm font-semibold transition-all"
-              >
-                <FaPrint className="text-xs" /> Imprimir detalle
-              </button>
+            <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#ECEFF3] px-4 py-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => {
                   setShowDetalleModal(false);
                   setEstudianteDetalleId(null);
                 }}
-                className="flex-1 bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all"
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3]"
               >
                 Cerrar
+              </button>
+              <button
+                onClick={handlePrintDetalleEstudiante}
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#244563] px-4 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D]"
+              >
+                <FaPrint className="text-[10px]" /> Imprimir detalle
               </button>
             </div>
           </div>
@@ -3303,27 +3361,27 @@ export default function ReporteAsistencias() {
       )}
 
       {/* ============ TOASTS ============ */}
-      <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
+      <div className="pointer-events-none fixed right-3 top-3 z-100 w-full max-w-xs space-y-2">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
           const Icon = config.icon;
           return (
             <div
               key={toast.id}
-              className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] ${config.bg}`}
             >
-              <div
-                className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}
               >
-                <Icon className="text-white text-sm" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>
+                <Icon className="text-[10px]" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className={`text-[11px] font-semibold ${config.titleColor}`}>
                   {toast.title}
                 </p>
                 {toast.message && (
                   <p
-                    className={`text-xs ${config.msgColor} mt-0.5 whitespace-pre-line`}
+                    className={`mt-0.5 whitespace-pre-line text-[10px] leading-relaxed ${config.msgColor}`}
                   >
                     {toast.message}
                   </p>
@@ -3331,9 +3389,10 @@ export default function ReporteAsistencias() {
               </div>
               <button
                 onClick={() => cerrarToast(toast.id)}
-                className="text-gray-400 hover:text-gray-600 shrink-0 transition-colors"
+                className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]"
+                title="Cerrar"
               >
-                <FaTimes className="w-4 h-4" />
+                <FaTimes className="h-3 w-3" />
               </button>
             </div>
           );

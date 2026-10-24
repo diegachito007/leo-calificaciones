@@ -32,9 +32,11 @@ import {
   FaQuestionCircle,
   FaSpinner,
   FaFileExcel,
+  FaUserTie,
+  FaPhone,
+  FaIdCard,
 } from "react-icons/fa";
 import * as XLSX from "xlsx";
-
 const formatText = (text: string): string => {
   if (!text) return "";
   return text
@@ -43,7 +45,6 @@ const formatText = (text: string): string => {
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase();
 };
-
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
@@ -66,17 +67,23 @@ interface EstudianteParseado {
   apellidos: string;
   nombres: string;
 }
-
+// ✅ Extensión temporal para manejar los nuevos campos hasta que actualices src/types/index.ts
+type EstudianteConRepresentante = Estudiante & {
+  cedulaRepresentante?: string;
+  nombreRepresentante?: string;
+  celularRepresentante?: string;
+};
 export default function Estudiantes() {
   const { user, userData } = useAuth();
   const { grados, anioActivo, ready } = useData();
-
-  const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
+  const [estudiantes, setEstudiantes] = useState<EstudianteConRepresentante[]>(
+    [],
+  );
   const [gradoCargado, setGradoCargado] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
+  const [mostrarInactivos, setMostrarInactivos] = useState(false);
   const [selectedGradoId, setSelectedGradoId] = useState<string | null>(null);
-
   const [formData, setFormData] = useState({
     apellidos: "",
     nombres: "",
@@ -84,6 +91,9 @@ export default function Estudiantes() {
     activo: true,
     conAdaptacion: false,
     sexo: "" as "" | "M" | "F",
+    cedulaRepresentante: "", // ✅ NUEVO
+    nombreRepresentante: "", // ✅ NUEVO
+    celularRepresentante: "", // ✅ NUEVO
   });
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [showMassiveForm, setShowMassiveForm] = useState(false);
@@ -97,7 +107,6 @@ export default function Estudiantes() {
     onConfirm: () => {},
     onCancel: () => {},
   });
-
   const gradosFiltrados = (() => {
     if (
       userData?.role === "docente" &&
@@ -109,7 +118,6 @@ export default function Estudiantes() {
     }
     return grados;
   })();
-
   const gradoEfectivoId =
     selectedGradoId ||
     (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : null);
@@ -123,7 +131,6 @@ export default function Estudiantes() {
       .filter((g) => userData.tutorDe?.includes(g.id))
       .map((g) => g.id);
   })();
-
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -156,7 +163,7 @@ export default function Estudiantes() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-red-600 hover:bg-red-700",
+          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -171,7 +178,6 @@ export default function Estudiantes() {
     },
     [],
   );
-
   const puedeGestionarEstudiantes = (gradoId: string): boolean => {
     if (esAdmin) return true;
     if (userData?.role === "docente") {
@@ -185,7 +191,6 @@ export default function Estudiantes() {
         gradoEfectivoId &&
         tutorDeAnioActivo.includes(gradoEfectivoId))) &&
     !!gradoEfectivoId;
-
   const resetForm = () => {
     setFormData({
       apellidos: "",
@@ -194,12 +199,13 @@ export default function Estudiantes() {
       activo: true,
       conAdaptacion: false,
       sexo: "",
+      cedulaRepresentante: "",
+      nombreRepresentante: "",
+      celularRepresentante: "",
     });
     setEditingId(null);
     setValidationErrors([]);
   };
-
-  // ✅ Tiempo real con onSnapshot
   useEffect(() => {
     if (!ready) return;
     const esDocente = userData?.role === "docente";
@@ -216,7 +222,9 @@ export default function Estudiantes() {
       q,
       (snap) => {
         setEstudiantes(
-          snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
+          snap.docs.map(
+            (d) => ({ id: d.id, ...d.data() }) as EstudianteConRepresentante,
+          ),
         );
         setGradoCargado(claveGrado);
       },
@@ -227,13 +235,10 @@ export default function Estudiantes() {
     );
     return () => unsubscribe();
   }, [ready, gradoEfectivoId, userData?.role]);
-
   const cargandoLista =
     ready && (gradoEfectivoId !== null || esAdmin)
       ? gradoCargado !== (gradoEfectivoId ?? "__todos__")
       : false;
-
-  // ✅ Excel con orden: Cédula → Apellidos → Nombres → Género → Estado
   const handleExportExcel = () => {
     if (estudiantesAMostrar.length === 0) {
       mostrarToast("warning", "Sin datos", "No hay estudiantes para exportar.");
@@ -252,6 +257,9 @@ export default function Estudiantes() {
           "Cédula/Código": est.cedula || "—",
           "Apellidos y Nombres": `${est.apellidos} ${est.nombres}`,
           Género: est.sexo || "—",
+          "Cédula Representante": est.cedulaRepresentante || "—",
+          "Nombre Representante": est.nombreRepresentante || "—",
+          "Celular Representante": est.celularRepresentante || "—",
           Estado: est.activo ? "ACTIVO" : "INACTIVO",
         };
         if (esAdmin && gradoSeleccionado) {
@@ -271,6 +279,19 @@ export default function Estudiantes() {
       ws["!cols"] = colWidths;
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Nómina");
+      const masculinos = listaOrdenada.filter((est) => est.sexo === "M").length;
+      const femeninos = listaOrdenada.filter((est) => est.sexo === "F").length;
+      const resumen = XLSX.utils.aoa_to_sheet([
+        ["Resumen de la nómina exportada", "Total"],
+        ["Masculinos", masculinos],
+        ["Femeninos", femeninos],
+        ["Sin dato de sexo", listaOrdenada.length - masculinos - femeninos],
+        ["Total estudiantes", listaOrdenada.length],
+        ["Activos", listaOrdenada.filter((est) => est.activo).length],
+        ["Inactivos", listaOrdenada.filter((est) => !est.activo).length],
+      ]);
+      resumen["!cols"] = [{ wch: 35 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, resumen, "Resumen");
       const now = new Date();
       const fechaStr = now.toISOString().split("T")[0];
       let nombreArchivo: string;
@@ -294,7 +315,6 @@ export default function Estudiantes() {
       );
     }
   };
-
   const parsearListaMasiva = (
     data: string,
   ): { students: EstudianteParseado[]; errors: string[] } => {
@@ -352,7 +372,6 @@ export default function Estudiantes() {
     });
     return { students, errors };
   };
-
   async function guardarEstudiantesMasivos() {
     if (!anioActivo) {
       mostrarToast(
@@ -437,7 +456,7 @@ export default function Estudiantes() {
           });
         }),
         ...aReactivar.map(async (est) => {
-          await updateDoc(doc(db, "estudiantes"), {
+          await updateDoc(doc(db, "estudiantes", est.id), {
             apellidos: est.apellidos,
             nombres: est.nombres,
             activo: true,
@@ -474,7 +493,6 @@ export default function Estudiantes() {
       setIsSavingMassive(false);
     }
   }
-
   const validarEstudiante = (
     cedula: string,
     apellidos: string,
@@ -497,17 +515,16 @@ export default function Estudiantes() {
       if (duplicado) {
         if (duplicado.activo)
           errors.push(
-            `Ya existe un estudiante ACTIVO con la cédula/código "${cedula}". No se permiten duplicados activos.`,
+            `Ya existe un estudiante ACTIVO con la cédula/código "${cedula}".`,
           );
         else
           errors.push(
-            `Existe un estudiante INACTIVO con la cédula/código "${cedula}" (${duplicado.apellidos} ${duplicado.nombres}). Búscalo en la lista y edítalo para reactivarlo en lugar de crear uno nuevo.`,
+            `Existe un estudiante INACTIVO con la cédula/código "${cedula}". Búscalo y edítalo para reactivarlo.`,
           );
       }
     }
     return errors;
   };
-
   async function guardarEstudianteIndividual() {
     const errors = validarEstudiante(
       formData.cedula,
@@ -528,15 +545,18 @@ export default function Estudiantes() {
           activo: formData.activo,
           conAdaptacion: formData.conAdaptacion,
           sexo: formData.sexo || null,
+          cedulaRepresentante: formData.cedulaRepresentante.trim(),
+          nombreRepresentante: formData.nombreRepresentante.trim(),
+          celularRepresentante: formData.celularRepresentante.trim(),
           updatedAt: serverTimestamp(),
         });
+        mostrarToast(
+          "success",
+          "Estudiante actualizado",
+          `"${formData.apellidos} ${formData.nombres}" se actualizó correctamente.`,
+        );
       }
       resetForm();
-      mostrarToast(
-        "success",
-        "Estudiante actualizado",
-        `"${formData.apellidos} ${formData.nombres}" se actualizó correctamente.`,
-      );
     } catch (error) {
       console.error("Error guardando estudiante:", error);
       mostrarToast(
@@ -546,13 +566,11 @@ export default function Estudiantes() {
       );
     }
   }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await guardarEstudianteIndividual();
   };
-
-  const handleEdit = (estudiante: Estudiante) => {
+  const handleEdit = (estudiante: EstudianteConRepresentante) => {
     if (!puedeGestionarEstudiantes(estudiante.gradoId)) {
       mostrarToast(
         "error",
@@ -568,12 +586,14 @@ export default function Estudiantes() {
       activo: estudiante.activo,
       conAdaptacion: estudiante.conAdaptacion || false,
       sexo: (estudiante.sexo as "" | "M" | "F") || "",
+      cedulaRepresentante: estudiante.cedulaRepresentante || "",
+      nombreRepresentante: estudiante.nombreRepresentante || "",
+      celularRepresentante: estudiante.celularRepresentante || "",
     });
     setEditingId(estudiante.id);
     setValidationErrors([]);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-
   async function handleDelete(id: string) {
     const estudiante = estudiantes.find((e) => e.id === id);
     if (!estudiante) return;
@@ -587,7 +607,7 @@ export default function Estudiantes() {
     }
     const confirmado = await confirmar(
       `Desactivar a ${estudiante.apellidos} ${estudiante.nombres}`,
-      `¿Estás seguro de desactivar a este estudiante?\n\nCédula: ${estudiante.cedula || "Sin cédula"}\nGrado: ${gradosFiltrados.find((g) => g.id === estudiante.gradoId)?.nombre || "Desconocido"}\n\nEl estudiante quedará inactivo y no aparecerá en registros futuros, pero su historial académico (asistencias, notas) se conservará intacto.\n\nPuedes reactivarlo más tarde desde la lista.`,
+      `¿Estás seguro de desactivar a este estudiante?\n\nCédula: ${estudiante.cedula || "Sin cédula"}\n\nEl estudiante quedará inactivo y no aparecerá en registros futuros, pero su historial académico se conservará intacto.\n\nPuedes reactivarlo más tarde desde la lista.`,
       {
         confirmText: "Sí, desactivar",
         cancelText: "Cancelar",
@@ -615,7 +635,6 @@ export default function Estudiantes() {
       );
     }
   }
-
   async function handleToggleActivo(id: string, estadoActual: boolean) {
     const estudiante = estudiantes.find((e) => e.id === id);
     if (!estudiante) return;
@@ -646,33 +665,34 @@ export default function Estudiantes() {
       );
     }
   }
-
   const estudiantesFiltrados = estudiantes.filter((est) => {
+    if (!mostrarInactivos && !est.activo) return false;
     const searchText = searchTerm.toLowerCase();
     return (
       est.apellidos.toLowerCase().includes(searchText) ||
       est.nombres.toLowerCase().includes(searchText) ||
-      (est.cedula && est.cedula.includes(searchTerm))
+      (est.cedula && est.cedula.includes(searchTerm)) ||
+      (est.nombreRepresentante &&
+        est.nombreRepresentante.toLowerCase().includes(searchText))
     );
   });
   const estudiantesAMostrar =
     userData?.role === "docente" && !gradoEfectivoId
       ? []
       : estudiantesFiltrados;
-
   const toastConfig = {
     success: {
-      bg: "bg-green-50 border-green-400",
-      iconBg: "bg-green-500",
-      titleColor: "text-green-900",
-      msgColor: "text-green-700",
+      bg: "bg-[#EAF0F6] border-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#173047]",
+      msgColor: "text-[#1B354D]",
       icon: FaCheckCircle,
     },
     error: {
       bg: "bg-red-50 border-red-400",
-      iconBg: "bg-red-500",
+      iconBg: "bg-[#C93F45]",
       titleColor: "text-red-900",
-      msgColor: "text-red-700",
+      msgColor: "text-[#AD3038]",
       icon: FaTimesCircle,
     },
     warning: {
@@ -683,38 +703,38 @@ export default function Estudiantes() {
       icon: FaExclamationTriangle,
     },
     info: {
-      bg: "bg-blue-50 border-blue-400",
-      iconBg: "bg-blue-500",
-      titleColor: "text-blue-900",
-      msgColor: "text-blue-700",
+      bg: "bg-[#EAF0F6] border-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#173047]",
+      msgColor: "text-[#1B354D]",
       icon: FaInfoCircle,
     },
   };
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
-
   if (!ready) {
     return (
       <Layout>
-        <div className="flex items-center justify-center py-20">
+        <div className="flex items-center justify-center py-10">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
-            <p className="text-slate-600 text-sm font-medium">Cargando...</p>
+            <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#244563] border-t-transparent mx-auto mb-3"></div>
+            <p className="text-[#64748B] text-[11px] font-medium">
+              Cargando...
+            </p>
           </div>
         </div>
       </Layout>
     );
   }
-
   return (
     <Layout>
       {docenteSinGrados && (
-        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl px-8 py-12 mb-6">
-          <div className="flex items-start gap-4 max-w-3xl">
+        <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg px-4 py-12 mb-3">
+          <div className="flex items-start gap-3 max-w-3xl">
             <div className="bg-yellow-100 p-3 rounded-full">
               <FaExclamationTriangle className="text-yellow-600 text-2xl" />
             </div>
             <div className="flex-1">
-              <h3 className="text-yellow-800 font-bold text-xl mb-3">
+              <h3 className="text-yellow-800 font-semibold text-sm mb-3">
                 No tienes grados asignados
               </h3>
               <p className="text-yellow-700 mb-2">
@@ -726,14 +746,14 @@ export default function Estudiantes() {
         </div>
       )}
       {!docenteSinGrados && !anioActivo && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 mb-6">
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 mb-3">
           <div className="flex items-start gap-2">
             <FaInfoCircle className="text-yellow-600 mt-0.5" />
             <div>
-              <h4 className="text-yellow-800 font-semibold text-sm mb-1">
+              <h4 className="text-yellow-800 font-semibold text-[11px] mb-1">
                 No hay año lectivo activo
               </h4>
-              <p className="text-yellow-700 text-sm">
+              <p className="text-yellow-700 text-[11px]">
                 Debes crear y activar un año lectivo primero en el módulo de
                 Años Lectivos.
               </p>
@@ -742,20 +762,20 @@ export default function Estudiantes() {
         </div>
       )}
       {!docenteSinGrados && gradosFiltrados.length > 0 && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 p-4">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-            <FaBookOpen className="text-blue-600" />
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] mb-3 px-2.5 py-2">
+          <h3 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5">
+            <FaBookOpen className="text-[#244563]" />
             {esAdmin ? "Seleccionar Grado:" : "Mis Grados Asignados:"}
           </h3>
           <div className="flex flex-wrap gap-2">
             {esAdmin && (
               <button
                 onClick={() => setSelectedGradoId(null)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border-2 ${
+                className={`h-8 px-2.5  rounded-md text-[11px] font-semibold transition-colors border ${
                   gradoEfectivoId === null
-                    ? "bg-blue-600 text-white border-blue-600"
-                    : "bg-white text-slate-700 border-slate-200 hover:border-blue-400"
-                }`}
+                    ? "bg-[#244563] text-white border-[#244563]"
+                    : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"
+                } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
               >
                 Todos los grados
               </button>
@@ -766,17 +786,17 @@ export default function Estudiantes() {
                 <button
                   key={grado.id}
                   onClick={() => setSelectedGradoId(grado.id)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border-2 flex items-center gap-2 ${
+                  className={`min-h-8 px-4  rounded-md text-[11px] font-medium transition-colors border flex items-center gap-2 ${
                     gradoEfectivoId === grado.id
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white text-slate-700 border-slate-200 hover:border-blue-400"
-                  }`}
+                      ? "bg-[#244563] text-white border-[#244563]"
+                      : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"
+                  } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
                 >
                   <span>
                     {grado.nombre} - {grado.paralelo}
                   </span>
                   {esTutor && (
-                    <span className="text-xs bg-yellow-400 text-yellow-900 px-1.5 py-0.5 rounded">
+                    <span className="text-[10px] bg-[#EAF0F6] text-[#244563] px-1.5 py-0.5 rounded">
                       Tutor
                     </span>
                   )}
@@ -786,10 +806,9 @@ export default function Estudiantes() {
           </div>
         </div>
       )}
-
       {editingId && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 overflow-hidden">
-          <div className="bg-linear-to-r from-blue-600 to-blue-700 px-5 py-3 flex items-center justify-between">
+        <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] mb-3 overflow-hidden">
+          <div className="bg-[#244563] px-2.5 py-3 flex items-center justify-between">
             <h3 className="text-white font-semibold text-base">
               Editar Estudiante
             </h3>
@@ -799,23 +818,23 @@ export default function Estudiantes() {
                 resetForm();
                 setEditingId(null);
               }}
-              className="text-white text-sm hover:bg-white/20 px-3 py-1 rounded transition"
+              className="min-h-8 text-white text-[11px] hover:bg-[#FFFFFF]/20 px-3 py-1 rounded transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
             >
               Cancelar
             </button>
           </div>
-          <form onSubmit={handleSubmit} className="p-5">
+          <form onSubmit={handleSubmit} className="p-3">
             {validationErrors.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
                 <div className="flex items-start gap-2">
-                  <FaExclamationTriangle className="text-red-600 mt-0.5 shrink-0" />
+                  <FaExclamationTriangle className="text-[#C93F45] mt-0.5 shrink-0" />
                   <div>
-                    <h4 className="text-red-800 font-semibold text-sm mb-1">
+                    <h4 className="text-red-800 font-semibold text-[11px] mb-1">
                       {validationErrors.length} error
                       {validationErrors.length !== 1 ? "es" : ""} encontrado
                       {validationErrors.length !== 1 ? "s" : ""}:
                     </h4>
-                    <ul className="text-red-700 text-sm space-y-1">
+                    <ul className="text-[#AD3038] text-[11px] space-y-1">
                       {validationErrors.map((error, idx) => (
                         <li key={idx}>• {error}</li>
                       ))}
@@ -824,10 +843,13 @@ export default function Estudiantes() {
                 </div>
               </div>
             )}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+            <h4 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5 border-b border-[#ECEFF3] pb-2">
+              <FaUserTie className="text-[#244563]" /> Datos del Estudiante
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                  Cédula/Código *
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                  Cédula/Código
                 </label>
                 <input
                   type="text"
@@ -837,16 +859,13 @@ export default function Estudiantes() {
                   }
                   placeholder="Ej: 1712345678 o A123"
                   maxLength={10}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
                   required
                 />
-                <p className="text-xs text-slate-500 mt-1">
-                  Máximo 10 caracteres (cédula o código de estudiante)
-                </p>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                  Apellidos *
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                  Apellidos
                 </label>
                 <input
                   type="text"
@@ -855,13 +874,13 @@ export default function Estudiantes() {
                     setFormData({ ...formData, apellidos: e.target.value })
                   }
                   placeholder="Ej: Pérez García"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
                   required
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                  Nombres *
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                  Nombres
                 </label>
                 <input
                   type="text"
@@ -870,13 +889,12 @@ export default function Estudiantes() {
                     setFormData({ ...formData, nombres: e.target.value })
                   }
                   placeholder="Ej: Juan Carlos"
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
                   required
                 />
               </div>
-              {/* ✅ NUEVO: Género */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
                   Género
                 </label>
                 <select
@@ -887,14 +905,14 @@ export default function Estudiantes() {
                       sexo: e.target.value as "" | "M" | "F",
                     })
                   }
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all bg-white"
+                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors bg-[#FFFFFF] focus:outline-none text-[#374151]"
                 >
                   <option value="">Sin especificar</option>
                   <option value="M">Masculino (M)</option>
                   <option value="F">Femenino (F)</option>
                 </select>
               </div>
-              <div className="flex items-center">
+              <div className="flex items-center pt-6">
                 <input
                   type="checkbox"
                   id="activo"
@@ -902,13 +920,16 @@ export default function Estudiantes() {
                   onChange={(e) =>
                     setFormData({ ...formData, activo: e.target.checked })
                   }
-                  className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500"
+                  className="w-4 h-4 text-[#244563] border-[#BFC9D4] rounded focus:ring-[#244563]/20 focus:border-[#244563] focus:outline-none"
                 />
-                <label htmlFor="activo" className="ml-2 text-sm text-slate-700">
+                <label
+                  htmlFor="activo"
+                  className="ml-2 text-[11px] text-[#4B5563]"
+                >
                   Estudiante activo
                 </label>
               </div>
-              <div className="flex items-center">
+              <div className="flex items-center pt-6">
                 <input
                   type="checkbox"
                   id="conAdaptacion"
@@ -919,22 +940,87 @@ export default function Estudiantes() {
                       conAdaptacion: e.target.checked,
                     })
                   }
-                  className="w-4 h-4 text-purple-600 border-slate-300 rounded focus:ring-purple-500"
+                  className="w-4 h-4 text-purple-600 border-[#BFC9D4] rounded focus:ring-purple-500 focus:border-[#244563] focus:outline-none"
                 />
                 <label
                   htmlFor="conAdaptacion"
-                  className="ml-2 text-sm text-slate-700"
+                  className="ml-2 text-[11px] text-[#4B5563]"
                 >
                   Con adaptación curricular (NECE)
                 </label>
               </div>
             </div>
-            <div className="flex gap-2 pt-3 border-t border-slate-200">
+            <h4 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5 border-b border-[#ECEFF3] pb-2 mt-3">
+              <FaUsers className="text-[#244563]" /> Datos del Representante
+              Legal
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                  Cédula del Representante
+                </label>
+                <div className="relative">
+                  <FaIdCard className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#9CA3AF] text-[10px]" />
+                  <input
+                    type="text"
+                    value={formData.cedulaRepresentante}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        cedulaRepresentante: e.target.value,
+                      })
+                    }
+                    placeholder="Ej: 1712345678"
+                    maxLength={10}
+                    className="h-8 w-full border border-[#BFC9D4] rounded-md pl-9 pr-3  text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                  />
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                  Nombre Completo del Representante
+                </label>
+                <input
+                  type="text"
+                  value={formData.nombreRepresentante}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      nombreRepresentante: e.target.value,
+                    })
+                  }
+                  placeholder="Ej: GARCIA PEREZ JUAN CARLOS"
+                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                  Celular del Representante
+                </label>
+                <div className="relative">
+                  <FaPhone className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#9CA3AF] text-[10px]" />
+                  <input
+                    type="text"
+                    value={formData.celularRepresentante}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        celularRepresentante: e.target.value,
+                      })
+                    }
+                    placeholder="Ej: 0991234567"
+                    maxLength={10}
+                    className="h-8 w-full border border-[#BFC9D4] rounded-md pl-9 pr-3  text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2 pt-4 border-t border-[#D8DEE6] mt-4">
               <button
                 type="submit"
-                className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium"
+                className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4  rounded-md transition-colors text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
-                <FaCheck className="text-xs" /> Actualizar
+                <FaCheck className="text-[10px]" /> Actualizar
               </button>
               <button
                 type="button"
@@ -942,19 +1028,18 @@ export default function Estudiantes() {
                   resetForm();
                   setEditingId(null);
                 }}
-                className="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg transition-all text-sm font-medium"
+                className="min-h-8 inline-flex items-center gap-2 bg-[#ECEFF3] hover:bg-[#D8DEE6] text-[#4B5563] px-4  rounded-md transition-colors text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
-                <FaTimes className="text-xs" /> Cancelar
+                <FaTimes className="text-[10px]" /> Cancelar
               </button>
             </div>
           </form>
         </div>
       )}
-
       {showMassiveForm && puedeRegistrar && (
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 overflow-hidden">
-          <div className="bg-linear-to-r from-green-600 to-green-700 px-5 py-3 flex items-center justify-between">
-            <h3 className="text-white font-semibold text-base flex items-center gap-2">
+        <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] mb-3 overflow-hidden">
+          <div className="bg-[#ECEFF3] border-b border-[#D8DEE6] px-2.5 py-2 flex items-center justify-between">
+            <h3 className="text-[#4B5563] font-semibold text-[11px] flex items-center gap-2">
               <FaUpload /> Registro Masivo de Estudiantes
             </h3>
             <button
@@ -964,21 +1049,21 @@ export default function Estudiantes() {
                 setMassiveData("");
                 setValidationErrors([]);
               }}
-              className="text-white text-sm hover:bg-white/20 px-3 py-1 rounded transition"
+              className="min-h-8 text-[#64748B] text-[11px] hover:bg-[#ECEFF3] px-3 py-1 rounded transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
             >
               Cerrar
             </button>
           </div>
-          <div className="p-5">
+          <div className="p-3">
             {validationErrors.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
                 <div className="flex items-start gap-2">
-                  <FaExclamationTriangle className="text-red-600 mt-0.5 shrink-0" />
+                  <FaExclamationTriangle className="text-[#C93F45] mt-0.5 shrink-0" />
                   <div>
-                    <h4 className="text-red-800 font-semibold text-sm mb-1">
+                    <h4 className="text-red-800 font-semibold text-[11px] mb-1">
                       Corrige estos errores:
                     </h4>
-                    <ul className="text-red-700 text-sm space-y-1">
+                    <ul className="text-[#AD3038] text-[11px] space-y-1">
                       {validationErrors.map((error, idx) => (
                         <li key={idx}>• {error}</li>
                       ))}
@@ -987,8 +1072,8 @@ export default function Estudiantes() {
                 </div>
               </div>
             )}
-            <div className="mb-4">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+            <div className="mb-3">
+              <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
                 Lista de Estudiantes (Uno por línea)
               </label>
               <textarea
@@ -998,36 +1083,18 @@ export default function Estudiantes() {
                   setValidationErrors([]);
                 }}
                 placeholder={
-                  "Ejemplo (cualquiera de los dos formatos funciona):\n\n1712345678 PEREZ GARCIA JUAN CARLOS\n1723456789 LOPEZ MARTINEZ MARIA ELENA\n\nO con coma:\n1712345678, PEREZ GARCIA JUAN CARLOS\n1723456789, LOPEZ MARTINEZ MARIA ELENA"
+                  "Ejemplo:\n1712345678 PEREZ GARCIA JUAN CARLOS\n1723456789 LOPEZ MARTINEZ MARIA ELENA"
                 }
                 rows={10}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all"
+                className="w-full border border-[#BFC9D4] rounded-md px-3 py-2 text-[11px] font-mono focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
               />
-              <div className="text-xs text-slate-500 mt-2 space-y-1">
+              <div className="text-[10px] text-[#6B7280] mt-2 space-y-1">
                 <p className="flex items-start gap-1">
                   <FaInfoCircle className="mt-0.5 shrink-0" />
                   <span>
-                    <strong>Formatos aceptados:</strong> Puedes pegar
-                    directamente desde Word, Excel o bloc de notas.
+                    <strong>Formato:</strong> Cédula espacio Apellidos espacio
+                    Nombres.
                   </span>
-                </p>
-                <p className="ml-5">
-                  •{" "}
-                  <code className="bg-slate-100 px-1 rounded">
-                    1712345678 PEREZ GARCIA JUAN
-                  </code>{" "}
-                  (sin coma)
-                </p>
-                <p className="ml-5">
-                  •{" "}
-                  <code className="bg-slate-100 px-1 rounded">
-                    1712345678, PEREZ GARCIA JUAN
-                  </code>{" "}
-                  (con coma)
-                </p>
-                <p className="ml-5 text-slate-400">
-                  La primera palabra/campo = cédula o código. El resto =
-                  apellidos y nombres.
                 </p>
                 <p className="ml-5 text-amber-600 font-semibold">
                   ⚠️ Importante: si una cédula ya está INACTIVA en el grado, se
@@ -1035,20 +1102,20 @@ export default function Estudiantes() {
                 </p>
               </div>
             </div>
-            <div className="flex gap-2 pt-3 border-t border-slate-200">
+            <div className="flex gap-2 pt-3 border-t border-[#D8DEE6]">
               <button
                 onClick={guardarEstudiantesMasivos}
                 disabled={isSavingMassive || !massiveData.trim()}
-                className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded-lg transition-all text-sm font-semibold"
+                className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] disabled:bg-[#BFC9D4] disabled:cursor-not-allowed text-white px-4  rounded-md transition-colors text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 {isSavingMassive ? (
                   <>
-                    <FaSpinner className="text-xs animate-spin" /> Validando y
-                    guardando...
+                    <FaSpinner className="text-[10px] animate-spin" /> Validando
+                    y guardando...
                   </>
                 ) : (
                   <>
-                    <FaCheck className="text-xs" /> Guardar Estudiantes
+                    <FaCheck className="text-[10px]" /> Guardar Estudiantes
                   </>
                 )}
               </button>
@@ -1059,39 +1126,38 @@ export default function Estudiantes() {
                   setMassiveData("");
                   setValidationErrors([]);
                 }}
-                className="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-lg transition-all text-sm font-medium"
+                className="min-h-8 inline-flex items-center gap-2 bg-[#ECEFF3] hover:bg-[#D8DEE6] text-[#4B5563] px-4  rounded-md transition-colors text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
-                <FaTimes className="text-xs" /> Cancelar
+                <FaTimes className="text-[10px]" /> Cancelar
               </button>
             </div>
           </div>
         </div>
       )}
-
       {!docenteSinGrados && (
         <>
           {userData?.role === "docente" && !gradoEfectivoId && (
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-8 text-center mb-6">
-              <FaBookOpen className="text-4xl text-slate-400 mx-auto mb-3" />
-              <p className="text-slate-600 font-medium mb-1">
+            <div className="bg-[#ECEFF3] border border-[#D8DEE6] rounded-lg p-8 text-center mb-3">
+              <FaBookOpen className="text-2xl text-[#9CA3AF] mx-auto mb-3" />
+              <p className="text-[#64748B] font-medium mb-1">
                 Selecciona un grado para ver los estudiantes
               </p>
-              <p className="text-slate-500 text-sm">
+              <p className="text-[#6B7280] text-[11px]">
                 Haz clic en uno de los botones de grados asignados arriba
               </p>
             </div>
           )}
           {(gradoEfectivoId || esAdmin) && (
             <>
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 mb-6 p-4 flex flex-col sm:flex-row justify-between items-center gap-4">
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] mb-3 px-2.5 py-2 flex-col sm:flex-row justify-between">
                 <div className="relative w-full sm:w-96">
-                  <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+                  <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#9CA3AF]" />
                   <input
                     type="text"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Buscar por apellidos, nombres, cédula..."
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+                    placeholder="Buscar por apellidos, nombres, cédula o representante..."
+                    className="h-8 w-full pl-10 pr-4  border border-[#BFC9D4] rounded-md text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
                   />
                 </div>
                 <div className="flex gap-2 flex-wrap">
@@ -1102,7 +1168,7 @@ export default function Estudiantes() {
                         {estudiantesAMostrar.length > 0 && (
                           <button
                             onClick={handleExportExcel}
-                            className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm"
+                            className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4  rounded-md text-[11px] font-medium shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                           >
                             <FaFileExcel /> Descargar Excel
                           </button>
@@ -1115,114 +1181,52 @@ export default function Estudiantes() {
                         setShowMassiveForm(true);
                         setValidationErrors([]);
                       }}
-                      className="inline-flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-all text-sm font-medium shadow-sm"
+                      className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4  rounded-md transition-colors text-[11px] font-medium shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                     >
-                      <FaUpload className="text-sm" /> Registrar Estudiantes
+                      <FaUpload className="text-[11px]" /> Registrar Estudiantes
                     </button>
                   )}
                 </div>
               </div>
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                {/* ✅ Contador movido al header de la tabla (encima de "Apellidos y Nombres") */}
-                {estudiantesAMostrar.length > 0 &&
-                  !cargandoLista &&
-                  (() => {
-                    const activos = estudiantes.filter((e) => e.activo).length;
-                    const inactivos = estudiantes.filter(
-                      (e) => !e.activo,
-                    ).length;
-                    const hombres = estudiantes.filter(
-                      (e) => e.sexo === "M",
-                    ).length;
-                    const mujeres = estudiantes.filter(
-                      (e) => e.sexo === "F",
-                    ).length;
-                    const sinGenero = estudiantes.length - hombres - mujeres;
-                    return (
-                      <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3 flex-wrap">
-                        <span className="text-xs text-slate-600">
-                          Mostrando{" "}
-                          <strong className="text-slate-900">
-                            {estudiantesAMostrar.length}
-                          </strong>{" "}
-                          estudiante
-                          {estudiantesAMostrar.length !== 1 ? "s" : ""}
-                          {searchTerm && (
-                            <span className="text-slate-500">
-                              {" "}
-                              de <strong>{estudiantes.length}</strong>
-                            </span>
-                          )}
-                        </span>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {/* Estado */}
-                          <div className="flex items-center gap-1.5 text-xs">
-                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 border border-green-200 font-semibold">
-                              <FaCheck className="text-[9px]" /> {activos}{" "}
-                              activo
-                              {activos !== 1 ? "s" : ""}
-                            </span>
-                            <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 border border-red-200 font-semibold">
-                              <FaTimes className="text-[9px]" /> {inactivos}{" "}
-                              inactivo
-                              {inactivos !== 1 ? "s" : ""}
-                            </span>
-                          </div>
-                          <span className="text-slate-300">·</span>
-                          {/* Género */}
-                          <div className="flex items-center gap-1.5 text-xs">
-                            <span
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-semibold"
-                              title="Hombres (sexo Masculino)"
-                            >
-                              <span className="w-4 h-4 rounded-full bg-sky-500 text-white text-[9px] font-bold flex items-center justify-center">
-                                M
-                              </span>
-                              {hombres}
-                            </span>
-                            <span
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-pink-50 text-pink-700 border border-pink-200 font-semibold"
-                              title="Mujeres (sexo Femenino)"
-                            >
-                              <span className="w-4 h-4 rounded-full bg-pink-500 text-white text-[9px] font-bold flex items-center justify-center">
-                                F
-                              </span>
-                              {mujeres}
-                            </span>
-                            {sinGenero > 0 && (
-                              <span
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-semibold"
-                                title="Sin género especificado"
-                              >
-                                <span className="w-4 h-4 rounded-full bg-slate-400 text-white text-[9px] font-bold flex items-center justify-center">
-                                  —
-                                </span>
-                                {sinGenero} s/d
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
+              <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
+                  <span className="text-[11px] text-[#64748B]">
+                    Mostrando{" "}
+                    <strong className="text-[#273444]">
+                      {estudiantesAMostrar.length}
+                    </strong>{" "}
+                    estudiantes
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMostrarInactivos((prev) => !prev)}
+                    aria-pressed={mostrarInactivos}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2.5 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                  >
+                    <FaUsers aria-hidden="true" className="text-[10px]" />
+                    {mostrarInactivos
+                      ? "Ocultar inactivos"
+                      : "Mostrar inactivos"}
+                  </button>
+                </div>
                 <div className="overflow-x-auto">
                   <table className="w-full">
-                    <thead className="bg-slate-50 border-b border-slate-200 hidden md:table-header-group">
+                    <thead className="bg-[#ECEFF3] border-b border-[#D8DEE6] hidden md:table-header-group">
                       <tr>
-                        <th className="px-5 py-3 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                        <th className="px-2.5 py-1.5 text-left text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
                           Apellidos y Nombres
                         </th>
                         {esAdmin && (
-                          <th className="px-5 py-3 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                          <th className="px-2.5 py-1.5 text-left text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
                             Grado
                           </th>
                         )}
                         {puedeRegistrar && (
                           <>
-                            <th className="px-5 py-3 text-center text-xs font-semibold text-slate-700 uppercase tracking-wider w-32">
+                            <th className="px-2.5 py-1.5 text-center text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider w-32">
                               Estado
                             </th>
-                            <th className="px-5 py-3 text-center text-xs font-semibold text-slate-700 uppercase tracking-wider w-40">
+                            <th className="px-2.5 py-1.5 text-center text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider w-40">
                               Acciones
                             </th>
                           </>
@@ -1232,10 +1236,10 @@ export default function Estudiantes() {
                     <tbody className="divide-y divide-slate-200">
                       {cargandoLista ? (
                         <tr>
-                          <td colSpan={4} className="px-5 py-16 text-center">
+                          <td colSpan={4} className="px-2.5 py-8 text-center">
                             <div className="flex flex-col items-center">
-                              <div className="animate-spin rounded-full h-10 w-10 border-2 border-blue-600 border-t-transparent mx-auto mb-3"></div>
-                              <p className="text-slate-600 text-sm font-medium">
+                              <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#244563] border-t-transparent mx-auto mb-3"></div>
+                              <p className="text-[#64748B] text-[11px] font-medium">
                                 Cargando estudiantes...
                               </p>
                             </div>
@@ -1243,18 +1247,18 @@ export default function Estudiantes() {
                         </tr>
                       ) : estudiantesAMostrar.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-5 py-16 text-center">
+                          <td colSpan={4} className="px-2.5 py-8 text-center">
                             <div className="flex flex-col items-center">
-                              <div className="bg-slate-100 rounded-full p-4 mb-3">
-                                <FaUsers className="text-3xl text-slate-400" />
+                              <div className="bg-[#ECEFF3] rounded-full p-3 mb-3">
+                                <FaUsers className="text-xl text-[#9CA3AF]" />
                               </div>
-                              <p className="text-slate-600 font-medium mb-1">
+                              <p className="text-[#64748B] font-medium mb-1">
                                 {searchTerm
                                   ? "No se encontraron estudiantes"
                                   : "No hay estudiantes registrados"}
                               </p>
                               {!searchTerm && puedeRegistrar && (
-                                <p className="text-slate-500 text-sm">
+                                <p className="text-[#6B7280] text-[11px]">
                                   Utilice el botón "Registrar Estudiantes" para
                                   agregar alumnos a este grado.
                                 </p>
@@ -1273,86 +1277,76 @@ export default function Estudiantes() {
                           return (
                             <tr
                               key={est.id}
-                              className={`block md:table-row border-b md:border-b-0 border-slate-100 last:border-b-0 hover:bg-slate-50 transition-colors ${!est.activo ? "bg-red-50/40" : ""}`}
+                              className={`block md:table-row border-b md:border-b-0 border-[#ECEFF3] last:border-b-0 hover:bg-[#ECEFF3] transition-colors ${!est.activo ? "bg-red-50/40" : ""}`}
                             >
                               <td
-                                className={`px-5 py-4 block md:table-cell ${!est.activo ? "opacity-60" : ""}`}
+                                className={`px-2.5 py-1.5 block md:table-cell ${!est.activo ? "opacity-60" : ""}`}
                               >
                                 <div className="flex flex-col">
                                   <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-semibold text-slate-900 text-sm">
+                                    <span className="font-semibold text-[#273444] text-[11px]">
                                       {est.apellidos} {est.nombres}
                                     </span>
-                                    {est.sexo && (
-                                      <span
-                                        className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold border ${
-                                          est.sexo === "F"
-                                            ? "bg-pink-50 border-pink-300 text-pink-700"
-                                            : "bg-sky-50 border-sky-300 text-sky-700"
-                                        }`}
-                                        title={
-                                          est.sexo === "F"
-                                            ? "Femenino"
-                                            : "Masculino"
-                                        }
-                                      >
-                                        {est.sexo}
-                                      </span>
-                                    )}
                                     {!est.activo && (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 border border-red-300 text-red-700 rounded text-[10px] font-bold">
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 border border-red-300 text-[#AD3038] rounded text-[10px] font-bold">
                                         <FaTimes className="text-[8px]" />{" "}
                                         INACTIVO
                                       </span>
                                     )}
                                     {est.conAdaptacion && (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-100 border border-purple-300 text-purple-700 rounded text-[10px] font-bold">
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#ECEFF3] border border-[#D8DEE6] text-[#4B5563] rounded text-[10px] font-bold">
                                         Adaptación
                                       </span>
                                     )}
                                   </div>
-                                  {est.cedula && (
-                                    <span className="text-slate-500 text-xs mt-1">
-                                      CI: {est.cedula}
-                                    </span>
-                                  )}
                                   {puedeEditar && (
                                     <div className="mt-3 flex flex-col gap-2 md:hidden">
-                                      <button
-                                        onClick={() =>
-                                          handleToggleActivo(est.id, est.activo)
-                                        }
-                                        className={`w-full inline-flex items-center justify-center px-3 py-2 rounded-lg text-sm font-semibold transition-all ${est.activo ? "bg-green-100 text-green-700 border border-green-200" : "bg-orange-100 text-orange-700 border border-orange-300"}`}
-                                      >
-                                        {est.activo ? (
-                                          <>
-                                            <FaCheck className="mr-2" /> Activo
-                                          </>
-                                        ) : (
-                                          <>
-                                            <FaCheck className="mr-2" />{" "}
-                                            Reactivar
-                                          </>
-                                        )}
-                                      </button>
+                                      {est.activo ? (
+                                        <span
+                                          className="inline-flex h-8 w-8 items-center justify-center text-[#244563]"
+                                          title="Estudiante activo"
+                                          aria-label="Estudiante activo"
+                                        >
+                                          <FaCheck
+                                            aria-hidden="true"
+                                            className="text-[11px]"
+                                          />
+                                        </span>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            handleToggleActivo(
+                                              est.id,
+                                              est.activo,
+                                            )
+                                          }
+                                          className="inline-flex h-8 items-center gap-1 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 text-[11px] font-semibold text-[#244563] transition-colors hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                        >
+                                          <FaCheck className="text-[10px]" />
+                                          Reactivar
+                                        </button>
+                                      )}
                                       <div className="flex gap-2">
                                         <button
                                           onClick={() => handleEdit(est)}
-                                          className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 text-sm font-medium transition-all"
+                                          className="min-h-8 flex-1 inline-flex items-center justify-center gap-2 px-3  rounded-md bg-[#EAF0F6] text-[#244563] hover:bg-[#EAF0F6] text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                                         >
                                           <FaEdit /> Editar
                                         </button>
-                                        <button
-                                          onClick={() => handleDelete(est.id)}
-                                          className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 text-sm font-medium transition-all"
-                                        >
-                                          <FaTrash /> Desactivar
-                                        </button>
+                                        {est.activo && (
+                                          <button
+                                            onClick={() => handleDelete(est.id)}
+                                            className="min-h-8 flex-1 inline-flex items-center justify-center gap-2 px-3  rounded-md bg-red-50 text-[#C93F45] hover:bg-red-100 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                          >
+                                            <FaTrash /> Desactivar
+                                          </button>
+                                        )}
                                       </div>
                                     </div>
                                   )}
                                   {!puedeEditar && (
-                                    <div className="mt-2 text-xs text-slate-400 italic md:hidden flex items-center gap-1">
+                                    <div className="mt-2 text-[10px] text-[#9CA3AF] italic md:hidden flex items-center gap-1">
                                       <FaLock className="text-[10px]" /> Solo
                                       lectura
                                     </div>
@@ -1360,13 +1354,13 @@ export default function Estudiantes() {
                                 </div>
                               </td>
                               {esAdmin && (
-                                <td className="hidden md:table-cell px-5 py-4">
+                                <td className="hidden md:table-cell px-2.5 py-1.5">
                                   {grado && (
                                     <div className="flex items-center gap-2">
-                                      <div className="bg-linear-to-br from-blue-500 to-purple-600 text-white rounded w-6 h-6 flex items-center justify-center text-xs font-bold">
+                                      <div className="bg-[#244563] text-white rounded w-6 h-6 flex items-center justify-center text-[10px] font-bold">
                                         {grado.paralelo}
                                       </div>
-                                      <div className="text-sm text-slate-700">
+                                      <div className="text-[11px] text-[#4B5563]">
                                         {grado.nombre}
                                       </div>
                                     </div>
@@ -1374,42 +1368,49 @@ export default function Estudiantes() {
                                 </td>
                               )}
                               {puedeEditar && (
-                                <td className="hidden md:table-cell px-5 py-4 text-center">
-                                  <button
-                                    onClick={() =>
-                                      handleToggleActivo(est.id, est.activo)
-                                    }
-                                    className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${est.activo ? "bg-green-100 text-green-700 border border-green-200 hover:bg-green-200" : "bg-orange-100 text-orange-700 border border-orange-300 hover:bg-orange-200"}`}
-                                  >
-                                    {est.activo ? (
-                                      <>
-                                        <FaCheck className="mr-1 text-[10px]" />{" "}
-                                        Activo
-                                      </>
-                                    ) : (
-                                      <>
-                                        <FaCheck className="mr-1 text-[10px]" />{" "}
-                                        Reactivar
-                                      </>
-                                    )}
-                                  </button>
+                                <td className="hidden md:table-cell px-2.5 py-1.5 text-center">
+                                  {est.activo ? (
+                                    <span
+                                      className="inline-flex h-8 w-8 items-center justify-center text-[#244563]"
+                                      title="Estudiante activo"
+                                      aria-label="Estudiante activo"
+                                    >
+                                      <FaCheck
+                                        aria-hidden="true"
+                                        className="text-[11px]"
+                                      />
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleToggleActivo(est.id, est.activo)
+                                      }
+                                      className="inline-flex h-8 items-center gap-1 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 text-[11px] font-semibold text-[#244563] transition-colors hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                    >
+                                      <FaCheck className="text-[10px]" />
+                                      Reactivar
+                                    </button>
+                                  )}
                                 </td>
                               )}
                               {puedeEditar && (
-                                <td className="hidden md:table-cell px-5 py-4">
+                                <td className="hidden md:table-cell px-2.5 py-1.5">
                                   <div className="flex justify-center gap-2">
                                     <button
                                       onClick={() => handleEdit(est)}
-                                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all bg-blue-50 text-blue-600 hover:bg-blue-100 text-xs font-medium"
+                                      className="min-h-8 inline-flex items-center gap-1 px-3  rounded-md transition-colors bg-[#EAF0F6] text-[#244563] hover:bg-[#EAF0F6] text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                                     >
                                       <FaEdit /> Editar
                                     </button>
-                                    <button
-                                      onClick={() => handleDelete(est.id)}
-                                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all bg-red-50 text-red-600 hover:bg-red-100 text-xs font-medium"
-                                    >
-                                      <FaTrash /> Desactivar
-                                    </button>
+                                    {est.activo && (
+                                      <button
+                                        onClick={() => handleDelete(est.id)}
+                                        className="min-h-8 inline-flex items-center gap-1 px-3  rounded-md transition-colors bg-red-50 text-[#C93F45] hover:bg-red-100 text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                      >
+                                        <FaTrash /> Desactivar
+                                      </button>
+                                    )}
                                   </div>
                                 </td>
                               )}
@@ -1425,28 +1426,27 @@ export default function Estudiantes() {
           )}
         </>
       )}
-
-      <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
+      <div className="fixed top-4 right-4 z-110 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
           const Icon = config.icon;
           return (
             <div
               key={toast.id}
-              className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
+              className={`pointer-events-auto bg-[#FFFFFF] border-l-4 ${config.bg} rounded-lg shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)] p-3 flex items-start gap-3 animate-in slide-in-from-right duration-300 border border-[#D8DEE6]`}
             >
               <div
                 className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
               >
-                <Icon className="text-white text-sm" />
+                <Icon className="text-white text-[11px]" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>
+                <p className={`font-semibold text-[11px] ${config.titleColor}`}>
                   {toast.title}
                 </p>
                 {toast.message && (
                   <p
-                    className={`text-xs ${config.msgColor} mt-0.5 whitespace-pre-line`}
+                    className={`text-[10px] ${config.msgColor} mt-0.5 whitespace-pre-line`}
                   >
                     {toast.message}
                   </p>
@@ -1454,7 +1454,7 @@ export default function Estudiantes() {
               </div>
               <button
                 onClick={() => cerrarToast(toast.id)}
-                className="text-gray-400 hover:text-gray-600 shrink-0 transition-colors"
+                className="min-h-8 text-gray-400 hover:text-gray-600 shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 <FaTimes className="w-4 h-4" />
               </button>
@@ -1462,37 +1462,36 @@ export default function Estudiantes() {
           );
         })}
       </div>
-
       {confirmModal.isOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="bg-linear-to-r from-slate-50 to-slate-100 px-6 pt-6 pb-4 border-b border-slate-200">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
-                  <ConfirmIcon className="text-slate-700 text-xl" />
+        <div className="fixed inset-0 bg-[#111827]/40 backdrop-blur-[2px] flex items-center justify-center z-100 p-3 animate-in fade-in duration-200">
+          <div className="bg-[#FFFFFF] rounded-lg shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)] max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200 border border-[#D8DEE6]">
+            <div className="bg-[#ECEFF3] px-4 pt-6 pb-4 border-b border-[#D8DEE6]">
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 rounded-full bg-[#D8DEE6] flex items-center justify-center shrink-0">
+                  <ConfirmIcon className="text-[#4B5563] text-sm" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-bold text-slate-900 mb-1">
+                  <h3 className="text-sm font-semibold text-[#273444] mb-1">
                     {confirmModal.title}
                   </h3>
-                  <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">
+                  <p className="text-[11px] text-[#64748B] leading-relaxed whitespace-pre-line">
                     {confirmModal.message}
                   </p>
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 bg-slate-50 flex gap-3 justify-end">
+            <div className="px-4 py-2 bg-[#ECEFF3] flex gap-3 justify-end">
               <button
                 onClick={confirmModal.onCancel}
-                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-sm font-semibold transition-all"
+                className="min-h-8 px-4  bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] border border-[#BFC9D4] rounded-md text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 {confirmModal.cancelText || "Cancelar"}
               </button>
               <button
                 onClick={confirmModal.onConfirm}
-                className={`px-4 py-2 ${confirmModal.confirmColor || "bg-red-600 hover:bg-red-700"} text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2`}
+                className={`min-h-8 px-4  ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"} text-white rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
               >
-                <ConfirmIcon className="text-xs" />{" "}
+                <ConfirmIcon className="text-[10px]" />{" "}
                 {confirmModal.confirmText || "Confirmar"}
               </button>
             </div>

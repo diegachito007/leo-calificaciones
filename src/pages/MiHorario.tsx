@@ -29,7 +29,6 @@ import {
   FaQuestionCircle,
   FaClock,
 } from "react-icons/fa";
-
 // ==================== CONFIGURACIÓN DE HORARIO ====================
 const DIAS_SEMANA = [
   { id: 1, nombre: "Lun", nombreLargo: "Lunes" },
@@ -47,12 +46,10 @@ for (let h = 1; h <= HORAS_DIA; h++) {
   FILAS_HORARIO.push({ tipo: "hora", hora: h });
   if (h === RECREO_DESPUES_DE_HORA) FILAS_HORARIO.push({ tipo: "recreo" });
 }
-
 interface BloqueHorario {
   dia: number; // 1..6
   horas: number[]; // 1..N
 }
-
 interface AsignaturaDocente {
   id?: string;
   docenteId: string;
@@ -62,14 +59,12 @@ interface AsignaturaDocente {
   activo: boolean;
   horario?: BloqueHorario[];
 }
-
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
-
 interface ConfirmModalState {
   isOpen: boolean;
   title: string;
@@ -81,11 +76,9 @@ interface ConfirmModalState {
   onConfirm: () => void;
   onCancel: () => void;
 }
-
 export default function MiHorario() {
   const { user, userData } = useAuth();
   const { grados, destrezas, ambitos, anioActivo, ready } = useData();
-
   const [asignaturas, setAsignaturas] = useState<AsignaturaDocente[]>([]);
   // ✅ Cache del grado: todas las asignaturas activas del grado+año (mías + de otros docentes)
   // Alimentado por onSnapshot para detección de conflictos en tiempo real.
@@ -102,7 +95,6 @@ export default function MiHorario() {
     onConfirm: () => {},
     onCancel: () => {},
   });
-
   const gradosFiltrados = (() => {
     if (
       userData?.role === "docente" &&
@@ -114,11 +106,9 @@ export default function MiHorario() {
     }
     return grados;
   })();
-
   const gradoEfectivoId =
     selectedGradoId ||
     (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : "");
-
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -130,11 +120,9 @@ export default function MiHorario() {
     },
     [],
   );
-
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
-
   const confirmar = useCallback(
     (
       title: string,
@@ -153,7 +141,7 @@ export default function MiHorario() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-red-600 hover:bg-red-700",
+          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -168,7 +156,6 @@ export default function MiHorario() {
     },
     [],
   );
-
   // ✅ ASIGNATURAS PROPIAS: listener en tiempo real
   useEffect(() => {
     if (!user?.uid || !anioActivo?.id) return;
@@ -192,7 +179,6 @@ export default function MiHorario() {
     );
     return () => unsubscribe();
   }, [user?.uid, anioActivo?.id]);
-
   // ✅ CACHE DEL GRADO: todas las asignaturas del grado+año (mías + de otros docentes)
   // Sirve para:
   //   1) Verificar disponibilidad de destrezas (como antes)
@@ -220,13 +206,11 @@ export default function MiHorario() {
     );
     return () => unsubscribe();
   }, [gradoEfectivoId, anioActivo?.id]);
-
   // ✅ HELPERS ====================
   const getAmbitoNombre = (ambitoId: string): string => {
     const ambito = ambitos.find((a) => a.id === ambitoId);
     return ambito?.nombre || "Sin ámbito";
   };
-
   const esGradoInicial = (gradoNombre: string): boolean => {
     const n = gradoNombre.toLowerCase();
     return (
@@ -235,7 +219,6 @@ export default function MiHorario() {
       n.includes("preparatoria")
     );
   };
-
   const destrezasDelGrado = (() => {
     if (!gradoEfectivoId) return [];
     const ambitosDelGrado = new Set(
@@ -243,16 +226,13 @@ export default function MiHorario() {
     );
     return destrezas.filter((d) => ambitosDelGrado.has(d.ambitoId));
   })();
-
   const asignaturasDelGrado = asignaturas.filter(
     (a) => a.gradoId === gradoEfectivoId,
   );
-
   const destrezasDisponibles = (() => {
     const asignadasIds = new Set(asignaturasDelGrado.map((a) => a.destrezaId));
     return destrezasDelGrado.filter((d) => !asignadasIds.has(d.id));
   })();
-
   const destrezasPorAmbito = (() => {
     const grupos: Record<string, { ambito: Ambito; destrezas: Destreza[] }> =
       {};
@@ -266,7 +246,6 @@ export default function MiHorario() {
     });
     return Object.values(grupos);
   })();
-
   // ✅ DISPONIBILIDAD DE DESTREZA: otro docente ya la tiene en este grado
   const verificarDisponibilidad = (destrezaId: string): boolean => {
     const asignacionPropia = asignaturas.find(
@@ -278,7 +257,6 @@ export default function MiHorario() {
     );
     return !ocupadaPorOtro;
   };
-
   // ✅ CONFLICTO DE HORARIO: busca si OTRO docente ya tiene ocupado el mismo día+hora
   // en este grado. Devuelve { conflict, nombreMateria } o null.
   const detectarConflictoHorario = (
@@ -307,13 +285,11 @@ export default function MiHorario() {
     }
     return null;
   };
-
   // ✅ Total de horas semanales del docente en este grado
   const horasSemanalesTotales = asignaturasDelGrado.reduce((acc, a) => {
     const h = (a.horario || []).reduce((s, b) => s + b.horas.length, 0);
     return acc + h;
   }, 0);
-
   // ==================== ACCIONES ====================
   const asignarMateria = async (destrezaId: string) => {
     if (!user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
@@ -355,7 +331,6 @@ export default function MiHorario() {
       setSaving(false);
     }
   };
-
   const asignarTodasDelAmbito = async (ambitoId: string) => {
     if (!user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
     const grupo = destrezasPorAmbito.find((g) => g.ambito.id === ambitoId);
@@ -409,7 +384,6 @@ export default function MiHorario() {
       setSaving(false);
     }
   };
-
   const removerMateria = async (asignacionId: string) => {
     const asignatura = asignaturas.find((a) => a.id === asignacionId);
     const destreza = asignatura
@@ -421,7 +395,7 @@ export default function MiHorario() {
       {
         confirmText: "Sí, quitar",
         cancelText: "Cancelar",
-        confirmColor: "bg-red-600 hover:bg-red-700",
+        confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]",
         icon: FaTrash,
       },
     );
@@ -445,7 +419,6 @@ export default function MiHorario() {
       setSaving(false);
     }
   };
-
   // ✅ TOGGLE DE HORA: asigna o quita una hora de una materia
   // Valida conflictos con otros docentes del mismo grado en tiempo real.
   const toggleHoraMateria = async (
@@ -456,11 +429,9 @@ export default function MiHorario() {
     if (!user?.uid) return;
     const asignatura = asignaturas.find((a) => a.id === asignacionId);
     if (!asignatura) return;
-
     const horarioActual: BloqueHorario[] = asignatura.horario || [];
     const bloqueDia = horarioActual.find((b) => b.dia === dia);
     const yaOcupada = bloqueDia?.horas.includes(hora) || false;
-
     // Si estamos QUITANDO una hora: no hay conflicto posible
     if (yaOcupada) {
       const nuevoHorario = horarioActual
@@ -469,7 +440,6 @@ export default function MiHorario() {
           return { ...b, horas: b.horas.filter((h) => h !== hora) };
         })
         .filter((b) => b.horas.length > 0);
-
       setSaving(true);
       try {
         await updateDoc(doc(db, "asignaturasDocente", asignacionId), {
@@ -483,7 +453,6 @@ export default function MiHorario() {
       }
       return;
     }
-
     // Si estamos AGREGANDO: validar conflicto con otros docentes
     const conflicto = detectarConflictoHorario(dia, hora, asignacionId);
     if (conflicto) {
@@ -497,7 +466,6 @@ export default function MiHorario() {
       );
       return;
     }
-
     const nuevoHorario = bloqueDia
       ? horarioActual.map((b) =>
           b.dia === dia
@@ -507,7 +475,6 @@ export default function MiHorario() {
       : [...horarioActual, { dia, horas: [hora] }].sort(
           (x, y) => x.dia - y.dia,
         );
-
     setSaving(true);
     try {
       await updateDoc(doc(db, "asignaturasDocente", asignacionId), {
@@ -520,20 +487,19 @@ export default function MiHorario() {
       setSaving(false);
     }
   };
-
   const toastConfig = {
     success: {
-      bg: "bg-green-50 border-green-400",
-      iconBg: "bg-green-500",
-      titleColor: "text-green-900",
-      msgColor: "text-green-700",
+      bg: "bg-[#EAF0F6] border-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#173047]",
+      msgColor: "text-[#1B354D]",
       icon: FaCheckCircle,
     },
     error: {
       bg: "bg-red-50 border-red-400",
-      iconBg: "bg-red-500",
+      iconBg: "bg-[#C93F45]",
       titleColor: "text-red-900",
-      msgColor: "text-red-700",
+      msgColor: "text-[#AD3038]",
       icon: FaTimesCircle,
     },
     warning: {
@@ -544,49 +510,44 @@ export default function MiHorario() {
       icon: FaExclamationTriangle,
     },
     info: {
-      bg: "bg-blue-50 border-blue-400",
-      iconBg: "bg-blue-500",
-      titleColor: "text-blue-900",
-      msgColor: "text-blue-700",
+      bg: "bg-[#EAF0F6] border-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#173047]",
+      msgColor: "text-[#1B354D]",
       icon: FaInfoCircle,
     },
   };
-
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
-
   if (!ready) {
     return (
       <Layout>
-        <div className="flex items-center justify-center py-20">
-          <FaSpinner className="animate-spin text-4xl text-blue-600" />
+        <div className="flex items-center justify-center py-10">
+          <FaSpinner className="animate-spin text-2xl text-[#244563]" />
         </div>
       </Layout>
     );
   }
-
   if (!anioActivo) {
     return (
       <Layout>
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-          <FaExclamationTriangle className="text-yellow-600 text-4xl mx-auto mb-3" />
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
+          <FaExclamationTriangle className="text-yellow-600 text-2xl mx-auto mb-3" />
           <p className="text-yellow-800">No hay año lectivo activo</p>
         </div>
       </Layout>
     );
   }
-
   const gradoActual = gradosFiltrados.find((g) => g.id === gradoEfectivoId);
   const esInicialOPreparatoria = gradoActual
     ? esGradoInicial(gradoActual.nombre)
     : false;
-
   return (
     <Layout>
-      <div className="space-y-6">
+      <div className="space-y-3">
         {gradosFiltrados.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-            <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-              <FaGraduationCap className="text-blue-600" />
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
+            <h3 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5">
+              <FaGraduationCap className="text-[#244563]" />
               Selecciona un Grado:
             </h3>
             <div className="flex flex-wrap gap-2">
@@ -599,26 +560,26 @@ export default function MiHorario() {
                   <button
                     key={grado.id}
                     onClick={() => setSelectedGradoId(grado.id)}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border-2 flex items-center gap-2 ${
+                    className={`h-8 px-2.5  rounded-md text-[11px] font-semibold transition-colors border flex items-center gap-2 ${
                       gradoEfectivoId === grado.id
-                        ? "bg-blue-600 text-white border-blue-600"
-                        : "bg-white text-slate-700 border-slate-200 hover:border-blue-400"
-                    }`}
+                        ? "bg-[#244563] text-white border-[#244563]"
+                        : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"
+                    } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
                   >
                     <span>
                       {grado.nombre} - {grado.paralelo}
                     </span>
                     {esInicial && (
-                      <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-bold">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-[#9A4518] font-bold">
                         Inicial
                       </span>
                     )}
                     {countAsignadas > 0 && (
                       <span
-                        className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
                           gradoEfectivoId === grado.id
-                            ? "bg-white text-blue-600"
-                            : "bg-blue-100 text-blue-700"
+                            ? "bg-[#FFFFFF] text-[#244563]"
+                            : "bg-[#EAF0F6] text-[#1B354D]"
                         }`}
                       >
                         {countAsignadas}
@@ -630,35 +591,34 @@ export default function MiHorario() {
             </div>
           </div>
         )}
-
         {gradoEfectivoId && (
-          <div className="bg-white rounded-xl shadow-sm border-2 border-green-200 overflow-hidden">
-            <div className="bg-linear-to-r from-green-600 to-green-700 px-5 py-3 flex items-center justify-between">
+          <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#C8D6E5] overflow-hidden">
+            <div className="bg-[#ECEFF3] border-b border-[#D8DEE6] px-3 py-2 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <FaCheckCircle className="text-white text-lg" />
-                <h3 className="text-white font-semibold">
+                <FaCheckCircle className="text-[#6B7280] text-xs" />
+                <h3 className="text-[#4B5563] text-[11px] font-semibold">
                   Mis Materias en {gradoActual?.nombre} -{" "}
                   {gradoActual?.paralelo}
                 </h3>
               </div>
               <div className="flex items-center gap-2">
-                <span className="bg-white/20 text-white px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1">
+                <span className="bg-[#ECEFF3] text-[#64748B] border border-[#E4E8EE] px-2 py-0.5 rounded-md text-[10px] font-bold flex items-center gap-1">
                   <FaClock className="text-[10px]" />
                   {horasSemanalesTotales}h/sem
                 </span>
-                <span className="bg-white text-green-700 px-3 py-1 rounded-full text-sm font-bold">
+                <span className="bg-[#FFFFFF] text-[#64748B] border border-[#E4E8EE] px-2 py-0.5 rounded-md text-[10px] font-bold">
                   {asignaturasDelGrado.length} materias
                 </span>
               </div>
             </div>
-            <div className="p-4">
+            <div className="p-3">
               {asignaturasDelGrado.length === 0 ? (
-                <div className="text-center py-6 text-slate-400">
-                  <FaBook className="text-3xl mx-auto mb-2" />
-                  <p className="text-sm">
+                <div className="text-center py-6 text-[#9CA3AF]">
+                  <FaBook className="text-xl mx-auto mb-2" />
+                  <p className="text-[11px]">
                     Aún no has asignado materias en este grado
                   </p>
-                  <p className="text-xs mt-1">
+                  <p className="text-[10px] mt-1">
                     Selecciona materias desde la lista de abajo
                   </p>
                 </div>
@@ -678,39 +638,34 @@ export default function MiHorario() {
                     return (
                       <div
                         key={asignatura.id}
-                        className="border-2 border-green-200 rounded-lg overflow-hidden hover:border-green-400 transition-all"
+                        className="border border-[#C8D6E5] rounded-lg overflow-hidden hover:border-[#6687A5] transition-colors"
                       >
-                        {/* Header de la materia */}
-                        <div className="flex items-center justify-between p-3 bg-green-50 border-b border-green-200">
+                        <div className="flex items-center justify-between p-3 bg-[#EAF0F6] border-b border-[#C8D6E5]">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <p className="font-semibold text-slate-900 text-sm">
+                              <p className="font-semibold text-[#273444] text-[11px]">
                                 {destreza.nombre}
                               </p>
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-200 text-green-800 font-bold">
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#C8D6E5] text-[#1B354D] font-bold">
                                 {horasDeLaMateria}h/sem
                               </span>
                             </div>
-                            <p className="text-xs text-green-700 font-medium mt-0.5">
+                            <p className="text-[10px] text-[#1B354D] font-medium mt-0.5">
                               {ambitoNombre}
                             </p>
                           </div>
                           <button
                             onClick={() => removerMateria(asignatura.id || "")}
                             disabled={saving}
-                            className="ml-2 p-2 text-red-600 hover:bg-red-100 rounded transition-all opacity-70 hover:opacity-100 disabled:opacity-30"
+                            className="min-h-8 ml-2 p-2 text-[#C93F45] hover:bg-red-100 rounded transition-colors opacity-70 hover:opacity-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                             title="Quitar materia del horario"
                           >
-                            <FaTrash className="text-xs" />
+                            <FaTrash className="text-[10px]" />
                           </button>
                         </div>
-
-                        {/* Grid de horario: días × horas */}
-                        {/* Grid de horario: Lun-Vie × horas 1-7 con RECREO */}
-                        <div className="p-3 bg-white overflow-x-auto">
+                        <div className="p-3 bg-[#FFFFFF] overflow-x-auto">
                           <div className="min-w-max">
                             <div className="flex items-stretch gap-1.5">
-                              {/* Columna de etiquetas */}
                               <div className="flex flex-col gap-1.5 shrink-0 w-14">
                                 <div className="h-6" />
                                 {FILAS_HORARIO.map((fila, i) =>
@@ -724,15 +679,13 @@ export default function MiHorario() {
                                   ) : (
                                     <div
                                       key={`h-${fila.hora}`}
-                                      className="h-8 flex items-center justify-center text-[10px] font-bold text-slate-500"
+                                      className="h-8 flex items-center justify-center text-[10px] font-bold text-[#6B7280]"
                                     >
                                       {fila.hora}ª
                                     </div>
                                   ),
                                 )}
                               </div>
-
-                              {/* Columnas de días */}
                               {DIAS_SEMANA.map((dia) => {
                                 const bloque = horario.find(
                                   (b) => b.dia === dia.id,
@@ -742,7 +695,7 @@ export default function MiHorario() {
                                     key={dia.id}
                                     className="flex flex-col gap-1.5 min-w-14"
                                   >
-                                    <div className="h-6 flex items-center justify-center text-[10px] font-bold text-slate-700 bg-slate-100 rounded">
+                                    <div className="h-6 flex items-center justify-center text-[10px] font-bold text-[#4B5563] bg-[#ECEFF3] rounded">
                                       {dia.nombre}
                                     </div>
                                     {FILAS_HORARIO.map((fila, i) =>
@@ -768,11 +721,11 @@ export default function MiHorario() {
                                               ? `${dia.nombreLargo} ${fila.hora}ª hora · clic para quitar`
                                               : `${dia.nombreLargo} ${fila.hora}ª hora · clic para asignar`
                                           }
-                                          className={`h-8 w-full rounded text-[10px] font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
+                                          className={`h-8 w-full rounded text-[10px] font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                                             bloque?.horas.includes(fila.hora)
-                                              ? "bg-green-600 text-white hover:bg-red-500 shadow-sm"
-                                              : "bg-slate-50 text-slate-300 hover:bg-blue-100 hover:text-blue-600 border border-slate-200"
-                                          }`}
+                                              ? "bg-[#244563] text-white hover:bg-[#C93F45] shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)]"
+                                              : "bg-[#ECEFF3] text-[#BFC9D4] hover:bg-[#EAF0F6] hover:text-[#244563] border border-[#D8DEE6]"
+                                          } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
                                         >
                                           {bloque?.horas.includes(fila.hora)
                                             ? "✓"
@@ -785,7 +738,7 @@ export default function MiHorario() {
                               })}
                             </div>
                           </div>
-                          <p className="text-[10px] text-slate-500 mt-2 leading-tight">
+                          <p className="text-[10px] text-[#6B7280] mt-2 leading-tight">
                             <FaInfoCircle className="inline text-[9px] mr-1" />
                             Clic en una celda para asignar/quitar. La fila{" "}
                             <span className="text-amber-700 font-bold">
@@ -802,13 +755,12 @@ export default function MiHorario() {
             </div>
           </div>
         )}
-
         {gradoEfectivoId && (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
-            <h3 className="text-base font-semibold text-slate-800 mb-1">
+          <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] p-3">
+            <h3 className="text-base font-semibold text-[#374151] mb-1">
               Materias Disponibles
             </h3>
-            <p className="text-xs text-slate-500 mb-4">
+            <p className="text-[10px] text-[#6B7280] mb-3">
               {esInicialOPreparatoria ? (
                 <>
                   <strong>Modo Inicial/Preparatoria:</strong> Usa el botón
@@ -824,31 +776,31 @@ export default function MiHorario() {
               )}
             </p>
             {destrezasDisponibles.length === 0 ? (
-              <div className="text-center py-8 text-slate-400">
-                <FaCheck className="text-3xl mx-auto mb-2 text-green-500" />
-                <p className="text-sm font-medium">
+              <div className="text-center py-8 text-[#9CA3AF]">
+                <FaCheck className="text-xl mx-auto mb-2 text-[#244563]" />
+                <p className="text-[11px] font-medium">
                   ¡Ya tienes todas las materias asignadas!
                 </p>
-                <p className="text-xs mt-1">
+                <p className="text-[10px] mt-1">
                   No hay más materias disponibles en este grado
                 </p>
               </div>
             ) : esInicialOPreparatoria ? (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 {destrezasPorAmbito.map(
                   ({ ambito, destrezas: destrezasAmbito }) => (
                     <div
                       key={ambito.id}
-                      className="border-2 border-purple-200 rounded-lg overflow-hidden"
+                      className="border border-[#D8DEE6] rounded-lg overflow-hidden"
                     >
-                      <div className="bg-purple-50 border-b border-purple-200 px-4 py-3 flex items-center justify-between">
+                      <div className="bg-[#ECEFF3] border-b border-[#D8DEE6] px-3 py-2 flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2 flex-1 min-w-0">
                           <FaBook className="text-purple-600 shrink-0" />
                           <div className="min-w-0">
-                            <h4 className="font-semibold text-purple-900 text-sm truncate">
+                            <h4 className="font-semibold text-[#273444] text-xs truncate">
                               {ambito.nombre}
                             </h4>
-                            <p className="text-xs text-purple-700">
+                            <p className="text-[10px] text-purple-700">
                               {destrezasAmbito.length} destreza
                               {destrezasAmbito.length !== 1 ? "s" : ""}{" "}
                               disponible
@@ -859,14 +811,14 @@ export default function MiHorario() {
                         <button
                           onClick={() => asignarTodasDelAmbito(ambito.id)}
                           disabled={saving}
-                          className="ml-3 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-purple-600 hover:bg-purple-700 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                          className="min-h-8 ml-3 flex items-center gap-2 px-3  rounded-md text-[10px] font-medium bg-[#244563] hover:bg-[#1B354D] text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                           title={`Asignar todas las destrezas de ${ambito.nombre}`}
                         >
                           {saving ? (
-                            <FaSpinner className="animate-spin text-xs" />
+                            <FaSpinner className="animate-spin text-[10px]" />
                           ) : (
                             <>
-                              <FaPlus className="text-xs" />
+                              <FaPlus className="text-[10px]" />
                               Asignar todo
                             </>
                           )}
@@ -876,23 +828,23 @@ export default function MiHorario() {
                         {destrezasAmbito.map((destreza) => (
                           <div
                             key={destreza.id}
-                            className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50 transition-all"
+                            className="flex items-center justify-between p-2.5 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] hover:border-[#C8D6E5] hover:bg-[#EAF0F6] transition-colors"
                           >
                             <div className="flex-1 min-w-0">
-                              <p className="font-medium text-slate-800 text-sm truncate">
+                              <p className="font-medium text-[#374151] text-[11px] truncate">
                                 {destreza.nombre}
                               </p>
                             </div>
                             <button
                               onClick={() => asignarMateria(destreza.id)}
                               disabled={saving}
-                              className="ml-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                              className="min-h-8 ml-3 flex items-center gap-1.5 px-3  rounded-md text-[10px] font-medium bg-[#244563] hover:bg-[#1B354D] text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                             >
                               {saving ? (
-                                <FaSpinner className="animate-spin text-xs" />
+                                <FaSpinner className="animate-spin text-[10px]" />
                               ) : (
                                 <>
-                                  <FaCheck className="text-xs" />
+                                  <FaCheck className="text-[10px]" />
                                   Asignar
                                 </>
                               )}
@@ -911,27 +863,27 @@ export default function MiHorario() {
                   return (
                     <div
                       key={destreza.id}
-                      className="flex items-center justify-between p-3 rounded-lg border-2 border-slate-200 bg-slate-50 hover:border-blue-300 hover:bg-blue-50 transition-all"
+                      className="flex items-center justify-between p-3 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] hover:border-[#C8D6E5] hover:bg-[#EAF0F6] transition-colors"
                     >
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-slate-800 text-sm truncate">
+                        <p className="font-semibold text-[#374151] text-[11px] truncate">
                           {destreza.nombre}
                         </p>
-                        <p className="text-xs text-slate-600 font-medium truncate flex items-center gap-1 mt-0.5">
-                          <FaBook className="text-xs text-purple-600" />
+                        <p className="text-[10px] text-[#64748B] font-medium truncate flex items-center gap-1 mt-0.5">
+                          <FaBook className="text-[10px] text-purple-600" />
                           {ambitoNombre}
                         </p>
                       </div>
                       <button
                         onClick={() => asignarMateria(destreza.id)}
                         disabled={saving}
-                        className="ml-3 flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                        className="min-h-8 ml-3 flex items-center gap-2 px-4  rounded-md text-[11px] font-medium bg-[#244563] hover:bg-[#1B354D] text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                       >
                         {saving ? (
-                          <FaSpinner className="animate-spin text-xs" />
+                          <FaSpinner className="animate-spin text-[10px]" />
                         ) : (
                           <>
-                            <FaCheck className="text-xs" />
+                            <FaCheck className="text-[10px]" />
                             Asignar
                           </>
                         )}
@@ -943,42 +895,40 @@ export default function MiHorario() {
             )}
           </div>
         )}
-
         {gradosFiltrados.length === 0 && ready && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
-            <FaExclamationTriangle className="text-yellow-600 text-4xl mx-auto mb-3" />
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center">
+            <FaExclamationTriangle className="text-yellow-600 text-2xl mx-auto mb-3" />
             <p className="text-yellow-800 font-medium mb-2">
               No tienes grados asignados
             </p>
-            <p className="text-sm text-yellow-700">
+            <p className="text-[11px] text-yellow-700">
               Contacta al administrador para que te asigne grados antes de
               configurar tu horario.
             </p>
           </div>
         )}
       </div>
-
-      <div className="fixed top-4 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
+      <div className="fixed top-4 right-4 z-110 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
           const Icon = config.icon;
           return (
             <div
               key={toast.id}
-              className={`pointer-events-auto bg-white border-l-4 ${config.bg} rounded-lg shadow-2xl p-4 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
+              className={`pointer-events-auto bg-[#FFFFFF] border-l-4 ${config.bg} rounded-lg shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)] p-3 flex items-start gap-3 animate-in slide-in-from-right duration-300 border border-[#D8DEE6]`}
             >
               <div
                 className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
               >
-                <Icon className="text-white text-sm" />
+                <Icon className="text-white text-[11px]" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-sm ${config.titleColor}`}>
+                <p className={`font-semibold text-[11px] ${config.titleColor}`}>
                   {toast.title}
                 </p>
                 {toast.message && (
                   <p
-                    className={`text-xs ${config.msgColor} mt-0.5 whitespace-pre-line`}
+                    className={`text-[10px] ${config.msgColor} mt-0.5 whitespace-pre-line`}
                   >
                     {toast.message}
                   </p>
@@ -986,7 +936,7 @@ export default function MiHorario() {
               </div>
               <button
                 onClick={() => cerrarToast(toast.id)}
-                className="text-gray-400 hover:text-gray-600 shrink-0 transition-colors"
+                className="min-h-8 text-gray-400 hover:text-gray-600 shrink-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 <FaTimes className="w-4 h-4" />
               </button>
@@ -994,37 +944,36 @@ export default function MiHorario() {
           );
         })}
       </div>
-
       {confirmModal.isOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="bg-linear-to-r from-slate-50 to-slate-100 px-6 pt-6 pb-4 border-b border-slate-200">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
-                  <ConfirmIcon className="text-slate-700 text-xl" />
+        <div className="fixed inset-0 bg-[#111827]/40 backdrop-blur-[2px] flex items-center justify-center z-100 p-3 animate-in fade-in duration-200">
+          <div className="bg-[#FFFFFF] rounded-lg shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)] max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200 border border-[#D8DEE6]">
+            <div className="bg-[#ECEFF3] px-4 pt-6 pb-4 border-b border-[#D8DEE6]">
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 rounded-full bg-[#D8DEE6] flex items-center justify-center shrink-0">
+                  <ConfirmIcon className="text-[#4B5563] text-sm" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-lg font-bold text-slate-900 mb-1">
+                  <h3 className="text-sm font-semibold text-[#273444] mb-1">
                     {confirmModal.title}
                   </h3>
-                  <p className="text-sm text-slate-600 leading-relaxed whitespace-pre-line">
+                  <p className="text-[11px] text-[#64748B] leading-relaxed whitespace-pre-line">
                     {confirmModal.message}
                   </p>
                 </div>
               </div>
             </div>
-            <div className="px-6 py-4 bg-slate-50 flex gap-3 justify-end">
+            <div className="px-4 py-4 bg-[#ECEFF3] flex gap-3 justify-end">
               <button
                 onClick={confirmModal.onCancel}
-                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-sm font-semibold transition-all"
+                className="min-h-8 px-4  bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] border border-[#BFC9D4] rounded-md text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 {confirmModal.cancelText || "Cancelar"}
               </button>
               <button
                 onClick={confirmModal.onConfirm}
-                className={`px-4 py-2 ${confirmModal.confirmColor || "bg-red-600 hover:bg-red-700"} text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2`}
+                className={`min-h-8 px-4  ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"} text-white rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
               >
-                <ConfirmIcon className="text-xs" />
+                <ConfirmIcon className="text-[10px]" />
                 {confirmModal.confirmText || "Confirmar"}
               </button>
             </div>

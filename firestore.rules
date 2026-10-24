@@ -1,0 +1,123 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function autenticado() {
+      return request.auth != null;
+    }
+    function activo() {
+      return autenticado()
+        && get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get('status', '') == 'active';
+    }
+    function esSuperAdmin() {
+      return activo()
+        && get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data.get('role', '') == 'super_admin';
+    }
+    function coleccionGeneral(collection) {
+      return !(collection in [
+        'usuarios', 'configuracionInstitucional', 'grados', 'configuracion',
+        'solicitudesMatriculas', 'representantes', 'matriculas'
+      ]);
+    }
+
+    match /usuarios/{userId} {
+      // El propio usuario necesita leer su perfil incluso antes de la aprobación.
+      allow get: if autenticado() && (request.auth.uid == userId || activo());
+      allow list: if activo();
+
+      allow create: if autenticado()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll([
+          'uid', 'email', 'displayName', 'photoURL', 'role', 'status',
+          'gradosAsignados', 'tutorDe', 'nombreDocumento', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'photoURL', 'role', 'status',
+          'gradosAsignados', 'tutorDe', 'nombreDocumento', 'createdAt'
+        ])
+        && request.resource.data.uid == userId
+        && request.resource.data.email == request.auth.token.get('email', '')
+        && request.resource.data.displayName is string
+        && (request.resource.data.photoURL == null || request.resource.data.photoURL is string)
+        && request.resource.data.role == 'docente'
+        && request.resource.data.status == 'pending'
+        && request.resource.data.gradosAsignados == []
+        && request.resource.data.tutorDe == []
+        && request.resource.data.nombreDocumento == ''
+        && request.resource.data.createdAt == request.time;
+
+      // Solo estos campos pueden ser editados por el dueño de un perfil activo.
+      allow update: if (
+        activo()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'nombreDocumento', 'displayName', 'photoURL',
+          'directorArea', 'updatedAt'
+        ])
+        && request.resource.data.get('nombreDocumento', '') is string
+        && request.resource.data.get('nombreDocumento', '').size() <= 80
+        && request.resource.data.get('directorArea', '') in [
+          '',
+          'nombreDirectorMatematica',
+          'nombreDirectorCienciasNaturales',
+          'nombreDirectorEstudiosSociales',
+          'nombreDirectorLenguaLiteratura'
+        ]
+      ) || (
+        esSuperAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'role', 'status', 'gradosAsignados', 'tutorDe',
+          'nombreDocumento', 'displayName', 'photoURL',
+          'directorArea', 'updatedAt'
+        ])
+        && request.resource.data.role in ['docente', 'super_admin']
+        && request.resource.data.status in [
+          'pending', 'active', 'rejected', 'blocked', 'deleted'
+        ]
+        && request.resource.data.get('directorArea', '') in [
+          '',
+          'nombreDirectorMatematica',
+          'nombreDirectorCienciasNaturales',
+          'nombreDirectorEstudiosSociales',
+          'nombreDirectorLenguaLiteratura'
+        ]
+        && (
+          request.auth.uid != userId
+          || !request.resource.data.diff(resource.data)
+            .affectedKeys().hasAny(['role', 'status'])
+        )
+      );
+      // Archivar cambia status; nunca se borra físicamente desde el cliente.
+      allow delete: if false;
+    }
+
+    match /configuracionInstitucional/{document} {
+      allow read: if true;
+      allow write: if esSuperAdmin();
+    }
+    match /grados/{gradoId} {
+      allow read: if activo();
+      allow write: if esSuperAdmin();
+    }
+    match /configuracion/{document} {
+      allow read: if activo();
+      allow write: if esSuperAdmin();
+    }
+
+    // Módulos de matrícula deshabilitados, incluidos sus descendientes.
+    match /solicitudesMatriculas/{document=**} {
+      allow read, write: if false;
+    }
+    match /representantes/{document=**} {
+      allow read, write: if false;
+    }
+    match /matriculas/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Compatibilidad con módulos existentes: pendiente revisar permisos por grado.
+    // No otorga acceso a subcolecciones ni a las colecciones excluidas arriba.
+    match /{collection}/{document} {
+      allow read, write: if coleccionGeneral(collection) && activo();
+    }
+  }
+}
