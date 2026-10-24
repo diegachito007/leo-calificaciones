@@ -20,7 +20,7 @@ import {
 } from "../utils/refuerzo";
 import type { Estudiante, Grado } from "../types";
 import Layout from "../components/Layout";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import { useNavigate } from "react-router-dom";
 import {
   FaExclamationTriangle,
@@ -539,7 +539,8 @@ export default function ReporteNotas() {
       if (nf >= 7) return;
       const estudiante = estudiantesMap.get(cal.estudianteId);
       const actividad = actividadesMap.get(cal.actividadId);
-      if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad)) return;
+      if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad))
+        return;
       if (estudiante.gradoId !== gradoTutorEfectivo) return;
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
@@ -682,7 +683,11 @@ export default function ReporteNotas() {
           .filter(
             (a) =>
               a.gradoId === gradoDocenteEfectivo &&
-              (esInicial ? (a.ambitoId || "") === u.id : a.destrezaId === u.id),
+              (esInicial
+                ? (a.ambitoId ||
+                    destrezas.find((d) => d.id === a.destrezaId)?.ambitoId ||
+                    "") === u.id
+                : a.destrezaId === u.id),
           )
           .sort(
             (a, b) =>
@@ -708,7 +713,11 @@ export default function ReporteNotas() {
     if (!estudianteDetalleId || !gradoDocenteEfectivo) return [];
     return actividadesVisibles
       .filter((a) => {
-        if (a.gradoId !== gradoDocenteEfectivo || !aplicaActividad(estudianteDetalle, a)) return false;
+        if (
+          a.gradoId !== gradoDocenteEfectivo ||
+          !aplicaActividad(estudianteDetalle, a)
+        )
+          return false;
         if (esInicialDocente) {
           const destreza = destrezas.find((d) => d.id === a.destrezaId);
           return misUnidadesDelGrado.has(
@@ -759,9 +768,19 @@ export default function ReporteNotas() {
     estrategiaActividad: string;
   }) => {
     if (!misDestrezasTodas.has(r.destrezaId)) return;
-    const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificaciones.find((c) => c.id === r.calificacionId)?.estudianteId);
-    const actividadRefuerzo = actividadesVisibles.find((a) => a.id === r.actividadId);
-    if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) return;
+    const estudianteRefuerzo = estudiantesFiltrados.find(
+      (e) =>
+        e.id ===
+        calificaciones.find((c) => c.id === r.calificacionId)?.estudianteId,
+    );
+    const actividadRefuerzo = actividadesVisibles.find(
+      (a) => a.id === r.actividadId,
+    );
+    if (
+      !actividadRefuerzo ||
+      !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)
+    )
+      return;
     const calificacionActual = calificaciones.find(
       (c) => c.id === r.calificacionId,
     );
@@ -797,10 +816,20 @@ export default function ReporteNotas() {
       const calificacionActual = calificaciones.find(
         (c) => c.id === refuerzoRegistro.calificacionId,
       );
-      const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificacionActual?.estudianteId);
-      const actividadRefuerzo = actividadesVisibles.find((a) => a.id === refuerzoRegistro.actividadId);
-      if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) {
-        mostrarAviso("warning", "Esta actividad no corresponde al estudiante. No se aplicó el refuerzo.");
+      const estudianteRefuerzo = estudiantesFiltrados.find(
+        (e) => e.id === calificacionActual?.estudianteId,
+      );
+      const actividadRefuerzo = actividadesVisibles.find(
+        (a) => a.id === refuerzoRegistro.actividadId,
+      );
+      if (
+        !actividadRefuerzo ||
+        !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)
+      ) {
+        mostrarAviso(
+          "warning",
+          "Esta actividad no corresponde al estudiante. No se aplicó el refuerzo.",
+        );
         setShowRefuerzoModal(false);
         setRefuerzoRegistro(null);
         return;
@@ -888,45 +917,142 @@ export default function ReporteNotas() {
       )
     : 0;
   // ==================== DESCARGA EXCEL ====================
-  const exportarSeccionExcel = (sec: UnidadSeccion) => {
+  const exportarSeccionExcel = (sec: UnidadSeccion, estudianteId?: string) => {
     try {
-      const data = estudiantesDelGradoDocente.map((est, idx) => {
-        let suma = 0;
-        let conteo = 0;
-        const row: Record<string, string | number> = {
-          "N°": idx + 1,
-          Apellidos: est.apellidos,
-          Nombres: est.nombres,
-        };
-        sec.actividades.forEach((a) => {
-          const cal = calMap.get(`${est.id}|${a.id}`);
-          const etiqueta = a.esConsolidado ? `[INSUMO]` : "";
-          const columna = `${etiqueta}${a.tipo}: ${a.detalle} (${a.fecha})`;
-          if (!aplicaActividad(est, a) || !cal || cal.nota == null) {
-            row[columna] = "—";
-          } else {
-            const nf = notaFinalDe(cal);
-            row[columna] = nf;
-            if (cal.refuerzo) {
-              row[`${columna} (Original)`] = cal.nota;
-              row[`${columna} (Refuerzo)`] = cal.refuerzo.nota;
-            }
-            suma += nf;
-            conteo++;
-          }
-        });
-        row["Promedio"] = conteo > 0 ? round2(suma / conteo) : "—";
-        return row;
-      });
-      const ws = XLSX.utils.json_to_sheet(data);
-      const colWidths = Object.keys(data[0] || {}).map((col) => {
-        const maxWidth = data.reduce((max, row) => {
-          const cellValue = String(row[col] ?? "");
-          return Math.max(max, cellValue.length);
-        }, col.length);
-        return { wch: Math.min(maxWidth + 2, 40) };
-      });
-      ws["!cols"] = colWidths;
+      const estudiantesExportar = estudianteId
+        ? estudiantesDelGradoDocente.filter((est) => est.id === estudianteId)
+        : estudiantesDelGradoDocente;
+      if (estudiantesExportar.length === 0) {
+        mostrarAviso(
+          "info",
+          "No hay estudiantes para exportar en este contexto.",
+        );
+        return;
+      }
+      const actividadesExportar = estudianteId
+        ? sec.actividades.filter((a) =>
+            aplicaActividad(estudiantesExportar[0], a),
+          )
+        : sec.actividades;
+      // Both layouts share applicability, final-grade and average rules.
+      const notaExportar = (
+        est: Estudiante,
+        actividad: ActividadData,
+      ): number | string => {
+        const cal = calMap.get(`${est.id}|${actividad.id}`);
+        if (!aplicaActividad(est, actividad) || !cal || cal.nota == null)
+          return "—";
+        return notaFinalDe(cal);
+      };
+      const promedioExportar = (est: Estudiante): number | string => {
+        const notas = actividadesExportar
+          .map((actividad) => notaExportar(est, actividad))
+          .filter((nota): nota is number => typeof nota === "number");
+        return notas.length
+          ? round2(notas.reduce((suma, nota) => suma + nota, 0) / notas.length)
+          : "—";
+      };
+      const data: (string | number)[][] = estudianteId
+        ? [
+            ["Apellidos", "Nombres", "Actividades", "Nota"],
+            ...actividadesExportar.map((actividad, index) => [
+              index === 0 ? estudiantesExportar[0].apellidos : "",
+              index === 0 ? estudiantesExportar[0].nombres : "",
+              `${actividad.esConsolidado ? "[INSUMO] " : ""}${actividad.tipo}: ${actividad.detalle} (${actividad.fecha})`,
+              notaExportar(estudiantesExportar[0], actividad),
+            ]),
+            [
+              actividadesExportar.length === 0
+                ? estudiantesExportar[0].apellidos
+                : "",
+              actividadesExportar.length === 0
+                ? estudiantesExportar[0].nombres
+                : "",
+              "Promedio",
+              promedioExportar(estudiantesExportar[0]),
+            ],
+          ]
+        : [
+            [
+              "",
+              "",
+              "",
+              ...actividadesExportar.map(
+                (a) => `${a.esConsolidado ? "[INSUMO] " : ""}${a.tipo}`,
+              ),
+              "",
+            ],
+            ["", "", "", ...actividadesExportar.map((a) => a.detalle), ""],
+            [
+              "N°",
+              "Apellidos",
+              "Nombres",
+              ...actividadesExportar.map((a) => `(${a.fecha})`),
+              "Promedio",
+            ],
+            ...estudiantesExportar.map((est, index) => [
+              index + 1,
+              est.apellidos,
+              est.nombres,
+              ...actividadesExportar.map((actividad) =>
+                notaExportar(est, actividad),
+              ),
+              promedioExportar(est),
+            ]),
+          ];
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      ws["!cols"] = estudianteId
+        ? [{ wch: 26 }, { wch: 26 }, { wch: 48 }, { wch: 12 }]
+        : [
+            { wch: 5 },
+            { wch: 26 },
+            { wch: 26 },
+            ...actividadesExportar.map(() => ({ wch: 20 })),
+            { wch: 12 },
+          ];
+      ws["!rows"] = data.map((_, index) => ({
+        hpt: estudianteId ? (index === 0 ? 20 : 28) : index === 1 ? 28 : 20,
+      }));
+      const ultimaColumna = data[0].length - 1;
+      data.forEach((fila, r) =>
+        fila.forEach((valor, c) => {
+          const cell = ws[XLSX.utils.encode_cell({ r, c })];
+          if (!cell) return;
+          const encabezado = r < (estudianteId ? 1 : 3);
+          const promedio = estudianteId
+            ? r === data.length - 1
+            : c === ultimaColumna;
+          const esNota = !encabezado && (estudianteId ? c === 3 : c >= 3);
+          const baja = esNota && typeof valor === "number" && valor < 7;
+          cell.s = {
+            font: {
+              name: "Calibri",
+              sz: 11,
+              bold: encabezado || promedio,
+              color: { rgb: baja ? "9C0006" : "273444" },
+            },
+            alignment: {
+              vertical: "center",
+              horizontal: esNota || encabezado ? "center" : "left",
+              wrapText: true,
+            },
+            fill: {
+              patternType: "solid",
+              fgColor: {
+                rgb: baja
+                  ? "FFC7CE"
+                  : encabezado
+                    ? "EAF0F6"
+                    : promedio
+                      ? "F2F5F8"
+                      : "FFFFFF",
+              },
+            },
+            border: { bottom: { style: "thin", color: { rgb: "D8DEE6" } } },
+          };
+          if (esNota && typeof valor === "number") cell.z = "0.##";
+        }),
+      );
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, sec.nombre.substring(0, 31));
       const now = new Date();
@@ -935,10 +1061,20 @@ export default function ReporteNotas() {
         gradoDocenteActual?.nombre.replace(/ /g, "_") || "Grado";
       const paralelo = gradoDocenteActual?.paralelo.replace(/ /g, "_") || "";
       const materiaLimpia = sec.nombre.replace(/[^a-zA-Z0-9]/g, "_");
-      const nombreArchivo = `${nombreGrado}_${paralelo}_${materiaLimpia}_${fechaStr}.xlsx`;
+      const estudianteSufijo = estudianteId
+        ? `_${estudiantesExportar[0].apellidos}_${estudiantesExportar[0].nombres}_${estudianteId}`.replace(
+            /[^a-zA-Z0-9_-]/g,
+            "_",
+          )
+        : "";
+      const nombreArchivo = `${nombreGrado}_${paralelo}_${materiaLimpia}${estudianteSufijo}_${fechaStr}.xlsx`;
       XLSX.writeFile(wb, nombreArchivo);
     } catch (error) {
       console.error("Error exportando Excel:", error);
+      mostrarAviso(
+        "error",
+        "No se pudo descargar el informe Excel. Inténtalo nuevamente.",
+      );
     }
   };
   // ==================== RENDER ====================
@@ -1319,160 +1455,89 @@ export default function ReporteNotas() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-max border-collapse text-[11px]">
+                <table className="w-full border-collapse text-[11px]">
                   <thead className="bg-[#ECEFF3] border-b border-[#D8DEE6]">
                     <tr>
-                      <th className="uppercase tracking-wide text-center px-2 py-1.5 font-semibold text-[#4B5563] text-[10px] w-8">
-                        #
-                      </th>
-                      <th className="uppercase tracking-wide text-left px-2 py-1.5 font-semibold text-[#4B5563] text-[10px] min-w-47.5 sticky left-0 z-10 border-r border-[#E4E8EE] bg-[#ECEFF3]">
-                        Estudiante
-                      </th>
-                      {sec.actividades.map((a) => (
+                      {[
+                        "Estudiante",
+                        "Número de actividades",
+                        "Notas menores a 7",
+                        "Reporte individual",
+                        "Descargar Excel individual",
+                      ].map((titulo) => (
                         <th
-                          key={a.id}
-                          className="min-w-23 max-w-32.5 border-r border-[#E4E8EE] px-1.5 py-1.5 text-center align-top font-semibold text-[#64748B]"
-                          title={`${a.tipo}: ${a.detalle} · ${a.fecha}`}
+                          key={titulo}
+                          scope="col"
+                          className="px-3 py-2 text-left text-[10px] font-semibold text-[#4B5563]"
                         >
-                          {a.esConsolidado && (
-                            <div className="text-[9px] font-bold text-[#9A4518] uppercase tracking-wide">
-                              Insumo
-                            </div>
-                          )}
-                          <div className="truncate text-[10px] font-semibold text-[#4B5563]">
-                            {a.tipo}
-                          </div>
-                          <div
-                            className="text-[10px] font-normal text-[#64748B] truncate max-w-26"
-                            title={a.detalle}
-                          >
-                            {a.detalle}
-                          </div>
-                          <div className="text-[10px] font-normal tabular-nums text-[#6B7280]">
-                            {a.fecha}
-                          </div>
+                          {titulo}
                         </th>
                       ))}
-                      <th className="sticky right-0 z-10 w-14 border-l border-[#D8DEE6] bg-[#ECEFF3] px-1.5 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
-                        Prom
-                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E4E8EE]">
-                    {estudiantesDelGradoDocente.map((est, idx) => {
-                      let suma = 0;
-                      let conteo = 0;
+                    {estudiantesDelGradoDocente.map((est) => {
+                      const asignadas = sec.actividades.filter((a) =>
+                        aplicaActividad(est, a),
+                      );
+                      const notasBajas = asignadas.flatMap((actividad) => {
+                        const cal = calMap.get(`${est.id}|${actividad.id}`);
+                        if (!cal || cal.nota == null) return [];
+                        const nota = notaFinalDe(cal);
+                        return nota < 7 ? [{ actividad, nota }] : [];
+                      });
                       return (
                         <tr
                           key={est.id}
-                          className="group transition-colors hover:bg-[#ECEFF3]"
+                          className="transition-colors hover:bg-[#ECEFF3]"
                         >
-                          <td className="px-1.5 py-1 text-center text-[10px] text-[#6B7280]">
-                            {idx + 1}
+                          <td className="px-3 py-2 font-medium text-[#374151]">
+                            {est.apellidos} {est.nombres}
                           </td>
-                          <td className="sticky left-0 z-10 max-w-62.5 border-r border-[#E4E8EE] bg-[#FFFFFF] px-2 py-1 text-[11px] font-medium text-[#374151] group-hover:bg-[#ECEFF3]">
-                            <div className="flex min-w-0 items-center gap-1.5">
-                              <span className="min-w-0 truncate" title={`${est.apellidos} ${est.nombres}`}>
-                                {est.apellidos} {est.nombres}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => setEstudianteDetalleId(est.id)}
-                                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[#244563] transition-colors hover:bg-[#EAF0F6] hover:text-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                                title={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
-                                aria-label={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
-                              >
-                                <FaEye aria-hidden="true" className="text-[10px]" />
-                              </button>
+                          <td className="px-3 py-2 tabular-nums text-[#4B5563]">
+                            {asignadas.length}
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-1">
+                              {notasBajas.length > 0 ? (
+                                notasBajas.map(({ actividad, nota }) => (
+                                  <span
+                                    key={actividad.id}
+                                    className="rounded bg-red-50 px-1.5 py-0.5 font-semibold text-[#AD3038]"
+                                    title={`${actividad.tipo}: ${actividad.detalle} (${actividad.fecha})`}
+                                    aria-label={`${actividad.detalle}: ${round2(nota)}`}
+                                  >
+                                    {round2(nota)}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-[#64748B]">
+                                  Sin notas menores a 7
+                                </span>
+                              )}
                             </div>
                           </td>
-                          {sec.actividades.map((a) => {
-                            const cal = calMap.get(`${est.id}|${a.id}`);
-                            if (!aplicaActividad(est, a) || !cal || cal.nota == null) {
-                              return (
-                                <td
-                                  key={a.id}
-                                  className="px-1.5 py-1 text-center text-[#BFC9D4] text-[10px]"
-                                  title={!aplicaActividad(est, a) ? "No aplica para este estudiante" : "Sin nota registrada"}
-                                >
-                                  —
-                                </td>
-                              );
-                            }
-                            const nf = notaFinalDe(cal);
-                            suma += nf;
-                            conteo++;
-                            const puedeRefuerzo =
-                              !a.esConsolidado &&
-                              nf < 7 &&
-                              misDestrezasTodas.has(a.destrezaId);
-                            const cls =
-                              nf >= 9
-                                ? "bg-[#EAF0F6] text-[#1B354D]"
-                                : nf >= 7
-                                  ? "bg-[#EAF0F6] text-[#244563]"
-                                  : nf >= 5
-                                    ? "bg-amber-50 text-amber-700"
-                                    : "bg-red-50 text-[#AD3038]";
-                            return (
-                              <td key={a.id} className="border-r border-[#E4E8EE] px-1.5 py-1 text-center">
-                                {puedeRefuerzo ? (
-                                  <button
-                                    onClick={() =>
-                                      abrirRefuerzo({
-                                        calificacionId: cal.id,
-                                        actividadId: a.id,
-                                        estudianteNombre: `${est.apellidos} ${est.nombres}`,
-                                        materiaNombre: sec.nombre,
-                                        actividadDetalle: a.detalle,
-                                        notaOriginal: cal.nota,
-                                        destrezaId: a.destrezaId,
-                                        estrategiaActividad:
-                                          a.estrategiaNota || "promediar",
-                                      })
-                                    }
-                                    className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors cursor-pointer hover:ring-2 hover:ring-[#FDBA74]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FDBA74]/40 ${cls}`}
-                                    title={
-                                      cal.refuerzo
-                                        ? "Aplicar otro refuerzo mientras la nota final siga bajo 7"
-                                        : "Aplicar refuerzo"
-                                    }
-                                  >
-                                    {round2(nf)}
-                                    {cal.refuerzo && <span className="ml-0.5 text-[9px]">✓</span>}
-                                  </button>
-                                ) : (
-                                  <span
-                                    className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${cls}`}
-                                    title={
-                                      cal.refuerzo
-                                        ? `Refuerzo de ${cal.nota} → ${round2(nf)}`
-                                        : a.esConsolidado
-                                          ? "Insumo consolidado (promedio)"
-                                          : undefined
-                                    }
-                                  >
-                                    {round2(nf)}
-                                    {cal.refuerzo && (
-                                      <span className="ml-0.5 text-[9px]">✓</span>
-                                    )}
-                                  </span>
-                                )}
-                              </td>
-                            );
-                          })}
-                          <td className="sticky right-0 z-10 border-l border-[#D8DEE6] bg-[#FFFFFF] px-1.5 py-1 text-center group-hover:bg-[#ECEFF3]">
-                            <span
-                              className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                conteo === 0
-                                  ? "text-[#9CA3AF]"
-                                  : suma / conteo >= 7
-                                    ? "bg-[#EAF0F6] text-[#1B354D]"
-                                    : "bg-red-50 text-[#AD3038]"
-                              }`}
+                          <td className="px-3 py-2">
+                            <button
+                              type="button"
+                              onClick={() => setEstudianteDetalleId(est.id)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                              title={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
+                              aria-label={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
                             >
-                              {conteo > 0 ? round2(suma / conteo) : "—"}
-                            </span>
+                              <FaEye aria-hidden="true" />
+                            </button>
+                          </td>
+                          <td className="px-3 py-2">
+                            <button
+                              type="button"
+                              onClick={() => exportarSeccionExcel(sec, est.id)}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                              title={`Descargar Excel de ${est.apellidos} ${est.nombres}`}
+                              aria-label={`Descargar Excel de ${est.apellidos} ${est.nombres}`}
+                            >
+                              <FaFileExcel aria-hidden="true" />
+                            </button>
                           </td>
                         </tr>
                       );

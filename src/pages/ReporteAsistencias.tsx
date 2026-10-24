@@ -747,8 +747,11 @@ export default function ReporteAsistencias() {
     });
   }, [asistencias, gradoTutorEfectivo, ambitos, destrezas]);
 
-  const nombreMateria = (id: string) =>
-    materiasGradoTutor.find((m) => m.id === id)?.nombre || "Materia";
+  const nombreMateria = useCallback(
+    (id: string) =>
+      materiasGradoTutor.find((m) => m.id === id)?.nombre || "Materia",
+    [materiasGradoTutor],
+  );
 
   const materiasDocenteEnGrado = useMemo(() => {
     if (!gradoDocenteEfectivo || !userUid) return [];
@@ -765,7 +768,7 @@ export default function ReporteAsistencias() {
     });
   }, [gradoDocenteEfectivo, userUid, asignaturasDocente, destrezas, ambitos]);
 
-  // ✅ Matriz tutor: estudiante → fecha → materia (incluye la hora del registro)
+  // A record belongs to one pedagogical hour, even when saved as a block.
   const matrizTutor = useMemo(() => {
     const mapa: Record<
       string,
@@ -773,17 +776,7 @@ export default function ReporteAsistencias() {
         string,
         Record<
           string,
-          {
-            estado: EstadoAsistencia;
-            observacion?: string;
-            asistenciaId: string;
-            hora?: number;
-            representanteAsistio?: boolean;
-            representanteNota?: string;
-            actaNumero?: string;
-            representantePor?: string;
-            representanteEl?: Timestamp | Date;
-          }
+          AsistenciaData & { estado: EstadoAsistencia; asistenciaId: string }
         >
       >
     > = {};
@@ -794,54 +787,31 @@ export default function ReporteAsistencias() {
         if (!estadoConfig(estado)) return;
         if (!mapa[a.estudianteId]) mapa[a.estudianteId] = {};
         if (!mapa[a.estudianteId][a.fecha]) mapa[a.estudianteId][a.fecha] = {};
-        const materiaId = a.ambitoId || "sin_materia";
-        mapa[a.estudianteId][a.fecha][materiaId] = {
+        mapa[a.estudianteId][a.fecha][a.id] = {
+          ...a,
           estado,
-          observacion: a.observacion,
           asistenciaId: a.id,
-          hora: a.hora,
-          representanteAsistio: a.representanteAsistio,
-          representanteNota: a.representanteNota,
-          actaNumero: a.actaNumero,
-          representantePor: a.representantePor,
-          representanteEl: a.representanteEl,
         };
       });
     return mapa;
   }, [asistencias, gradoTutorEfectivo]);
 
   const matrizDocente = useMemo(() => {
-    if (!gradoDocenteEfectivo || !userUid) {
-      return {} as Record<
-        string,
-        Record<
-          string,
-          Record<
-            string,
-            {
-              estado: EstadoAsistencia;
-              asistenciaId: string;
-              observacion?: string;
-            }
-          >
-        >
-      >;
-    }
-    const misMaterias = new Set(materiasDocenteEnGrado.map((m) => m.id));
     const mapa: Record<
       string,
       Record<
         string,
         Record<
           string,
-          {
+          (AsistenciaData & {
             estado: EstadoAsistencia;
             asistenciaId: string;
-            observacion?: string;
-          }
+          })[]
         >
       >
     > = {};
+    if (!gradoDocenteEfectivo || !userUid) return mapa;
+    const misMaterias = new Set(materiasDocenteEnGrado.map((m) => m.id));
     asistencias
       .filter(
         (a) =>
@@ -856,12 +826,21 @@ export default function ReporteAsistencias() {
         const materiaId = a.ambitoId!;
         if (!mapa[materiaId]) mapa[materiaId] = {};
         if (!mapa[materiaId][a.fecha]) mapa[materiaId][a.fecha] = {};
-        mapa[materiaId][a.fecha][a.estudianteId] = {
+        if (!mapa[materiaId][a.fecha][a.estudianteId])
+          mapa[materiaId][a.fecha][a.estudianteId] = [];
+        mapa[materiaId][a.fecha][a.estudianteId].push({
+          ...a,
           estado,
           asistenciaId: a.id,
-          observacion: a.observacion,
-        };
+        });
       });
+    Object.values(mapa).forEach((fechas) =>
+      Object.values(fechas).forEach((estudiantes) =>
+        Object.values(estudiantes).forEach((regs) =>
+          regs.sort((a, b) => (a.hora ?? 99) - (b.hora ?? 99)),
+        ),
+      ),
+    );
     return mapa;
   }, [asistencias, gradoDocenteEfectivo, userUid, materiasDocenteEnGrado]);
 
@@ -957,7 +936,7 @@ export default function ReporteAsistencias() {
         const des = destrezas.find((x) => x.id === a.ambitoId);
         return {
           fecha: a.fecha,
-          materia: amb?.nombre || des?.nombre || "General",
+          materia: `${amb?.nombre || des?.nombre || "General"} · ${a.hora == null ? "Sin hora" : `${a.hora}ª hora`}`,
           estado: a.estado as EstadoAsistencia,
           observacion: a.observacion,
           acta: !!a.representanteAsistio,
@@ -1156,13 +1135,11 @@ export default function ReporteAsistencias() {
     const regs = matrizTutor[estudianteActaId] || {};
     const lista: RegistroFuga[] = [];
     Object.entries(regs).forEach(([fecha, materias]) => {
-      Object.entries(materias).forEach(([materiaId, reg]) => {
+      Object.entries(materias).forEach(([, reg]) => {
         if (reg.estado === "F") {
           lista.push({
             fecha,
-            materiaNombre:
-              materiasGradoTutor.find((m) => m.id === materiaId)?.nombre ||
-              "Materia",
+            materiaNombre: `${nombreMateria(reg.ambitoId || "sin_materia")} · ${reg.hora == null ? "Sin hora" : `${reg.hora}ª hora`}`,
             asistenciaId: reg.asistenciaId,
             representanteAsistio: !!reg.representanteAsistio,
             representanteNota: reg.representanteNota,
@@ -1174,7 +1151,7 @@ export default function ReporteAsistencias() {
       });
     });
     return lista.sort((a, b) => a.fecha.localeCompare(b.fecha));
-  }, [estudianteActaId, matrizTutor, materiasGradoTutor]);
+  }, [estudianteActaId, matrizTutor, nombreMateria]);
 
   const gruposPendientes = useMemo(() => {
     const map = new Map<
@@ -1342,8 +1319,9 @@ export default function ReporteAsistencias() {
 
         const idsConProblema = new Set<string>();
         fechasConDatos.forEach((f) => {
-          Object.entries(matrizMateria[f] || {}).forEach(([estId, reg]) => {
-            if (reg.estado !== "P") idsConProblema.add(estId);
+          Object.entries(matrizMateria[f] || {}).forEach(([estId, regs]) => {
+            if (regs.some((reg) => reg.estado !== "P"))
+              idsConProblema.add(estId);
           });
         });
 
@@ -1367,13 +1345,17 @@ export default function ReporteAsistencias() {
               J = 0;
             const celdas = fechasConDatos
               .map((f) => {
-                const reg = matrizMateria[f]?.[est.id];
-                if (!reg || reg.estado === "P") return `<td class="sin">—</td>`;
-                if (reg.estado === "I") I++;
-                else if (reg.estado === "F") F++;
-                else if (reg.estado === "A") A++;
-                else if (reg.estado === "J") J++;
-                return `<td class="st-${reg.estado}">${reg.estado}</td>`;
+                const regs = matrizMateria[f]?.[est.id] || [];
+                if (!regs.length) return `<td class="sin">—</td>`;
+                return `<td>${regs
+                  .map((reg) => {
+                    if (reg.estado === "I") I++;
+                    else if (reg.estado === "F") F++;
+                    else if (reg.estado === "A") A++;
+                    else if (reg.estado === "J") J++;
+                    return `<div class="st-${reg.estado}">${reg.hora == null ? "Sin hora" : `${reg.hora}ª`} · ${reg.estado}</div>`;
+                  })
+                  .join("")}</td>`;
               })
               .join("");
             return `<tr><td class="num">${idx + 1}</td><td class="name">${est.apellidos} ${est.nombres}</td>${celdas}<td class="${I ? "st-I" : ""}">${I || "—"}</td><td class="${F ? "st-F" : ""}">${F || "—"}</td><td class="${A ? "st-A" : ""}">${A || "—"}</td><td class="${J ? "st-J" : ""}">${J || "—"}</td></tr>`;
@@ -1536,14 +1518,12 @@ export default function ReporteAsistencias() {
       const est = estudiantesGradoTutor.find((e) => e.id === estId);
       const nombreEst = est ? `${est.apellidos} ${est.nombres}` : estId;
       Object.entries(fechas).forEach(([fecha, materias]) => {
-        Object.entries(materias).forEach(([materiaId, reg]) => {
+        Object.entries(materias).forEach(([, reg]) => {
           if (reg.estado === "P") return;
           filas.push({
             estudiante: nombreEst,
             fecha,
-            materia:
-              materiasGradoTutor.find((m) => m.id === materiaId)?.nombre ||
-              "General",
+            materia: `${nombreMateria(reg.ambitoId || "sin_materia")} · ${reg.hora == null ? "Sin hora" : `${reg.hora}ª hora`}`,
             estado: reg.estado,
             observacion: reg.observacion,
             acta: reg.representanteAsistio,
@@ -1936,9 +1916,8 @@ export default function ReporteAsistencias() {
             >
               {periodos.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.nombre} (
-                  {formatFechaCorta(parseFechaLocal(p.fechaInicio))} -{" "}
-                  {formatFechaCorta(parseFechaLocal(p.fechaFin))})
+                  {p.nombre} ({formatFechaCorta(parseFechaLocal(p.fechaInicio))}{" "}
+                  - {formatFechaCorta(parseFechaLocal(p.fechaFin))})
                 </option>
               ))}
             </select>
@@ -1971,10 +1950,7 @@ export default function ReporteAsistencias() {
                       const cfg = ESTADO_CONFIG[e.value];
                       const Icon = cfg.icon;
                       return (
-                        <div
-                          key={e.value}
-                          className="flex items-center gap-2"
-                        >
+                        <div key={e.value} className="flex items-center gap-2">
                           <div
                             className={`flex h-5 w-5 shrink-0 items-center justify-center rounded ${cfg.bgColor}`}
                           >
@@ -2192,31 +2168,49 @@ export default function ReporteAsistencias() {
                                 className="border-r border-[#E4E8EE] px-1 py-1.5 align-top"
                               >
                                 {registrosMaterias.length === 0 ? (
-                                  <div className="flex h-10 w-full items-center justify-center text-sm text-[#BFC9D4]">
-                                    —
+                                  <div className="flex flex-col items-center gap-1 text-[10px] text-[#9CA3AF]">
+                                    {Array.from({ length: 7 }, (_, hora) => (
+                                      <div key={hora}>
+                                        {hora + 1}ª · Sin registro
+                                      </div>
+                                    ))}
                                   </div>
                                 ) : (
                                   /* ✅ Lista vertical: hora + sigla de materia + icono de estado */
                                   <div className="mx-auto flex min-w-20 flex-col gap-1">
+                                    {Array.from({ length: 7 }, (_, i) => i + 1)
+                                      .filter(
+                                        (hora) =>
+                                          !registrosMaterias.some(
+                                            ([, reg]) => reg.hora === hora,
+                                          ),
+                                      )
+                                      .map((hora) => (
+                                        <div
+                                          key={`sin-registro-${hora}`}
+                                          style={{ order: hora }}
+                                          className="text-center text-[10px] text-[#9CA3AF]"
+                                        >
+                                          {hora}ª · Sin registro
+                                        </div>
+                                      ))}
                                     {[...registrosMaterias]
                                       .sort(
                                         (a, b) =>
-                                          (a[1].hora ?? 99) -
-                                            (b[1].hora ?? 99) ||
-                                          nombreMateria(a[0]).localeCompare(
-                                            nombreMateria(b[0]),
-                                          ),
+                                          (a[1].hora ?? 99) - (b[1].hora ?? 99),
                                       )
-                                      .map(([materiaId, reg]) => {
+                                      .map(([, reg]) => {
                                         const config =
                                           ESTADO_CONFIG[reg.estado];
                                         if (!config) return null;
                                         const Icon = config.icon;
-                                        const materiaNombre =
-                                          nombreMateria(materiaId);
+                                        const materiaNombre = nombreMateria(
+                                          reg.ambitoId || "sin_materia",
+                                        );
                                         return (
                                           <div
-                                            key={materiaId}
+                                            key={reg.asistenciaId}
+                                            style={{ order: reg.hora ?? 99 }}
                                             className="flex items-center justify-center gap-1"
                                             title={`${materiaNombre}: ${config.label}${reg.observacion ? ` • ${reg.observacion}` : ""}${reg.representanteAsistio ? ` • ✔ Acta N° ${reg.actaNumero || "s/n"}` : ""}`}
                                           >
@@ -2328,7 +2322,7 @@ export default function ReporteAsistencias() {
                 <span>
                   <strong className="text-[#4B5563]">Nota:</strong>{" "}
                   {tipoReporte === "semanal"
-                    ? "Vista detallada de la semana. Cada celda muestra la jornada: hora + materia + estado. «Inas.» cuenta solo inasistencias injustificadas (i). «Fugas» (f) requieren acta de compromiso."
+                    ? "Vista por horas: 7 horas diarias. Cada registro muestra hora, materia y estado; sin registro no equivale a ausencia. «Inas.» cuenta solo inasistencias injustificadas (i). «Fugas» (f) requieren acta de compromiso."
                     : `Mostrando primeros ${diasVisibles.length} días de ${diasAMostrar.length} días hábiles del período.`}{" "}
                   {tipoReporte !== "semanal" &&
                     "La justificación solo está disponible en vista semanal."}
@@ -2410,8 +2404,8 @@ export default function ReporteAsistencias() {
                       const estudiantesConProblemas = new Set<string>();
                       fechasVisiblesMateria.forEach((fecha) => {
                         Object.entries(matrizMateria[fecha] || {}).forEach(
-                          ([estId, reg]) => {
-                            if (reg.estado !== "P")
+                          ([estId, regs]) => {
+                            if (regs.some((reg) => reg.estado !== "P"))
                               estudiantesConProblemas.add(estId);
                           },
                         );
@@ -2433,18 +2427,24 @@ export default function ReporteAsistencias() {
                       estudiantesLista.forEach((est) => {
                         conteosPorEst[est.id] = { I: 0, F: 0, A: 0, J: 0 };
                         fechasVisiblesMateria.forEach((fecha) => {
-                          const reg = matrizMateria[fecha]?.[est.id];
-                          if (reg && reg.estado !== "P") {
-                            conteosPorEst[est.id][
-                              reg.estado as "I" | "F" | "A" | "J"
-                            ]++;
-                          }
+                          (matrizMateria[fecha]?.[est.id] || []).forEach(
+                            (reg) => {
+                              if (reg.estado !== "P")
+                                conteosPorEst[est.id][
+                                  reg.estado as "I" | "F" | "A" | "J"
+                                ]++;
+                            },
+                          );
                         });
                       });
 
                       const totalRegistros = fechasVisiblesMateria.reduce(
                         (acc, f) =>
-                          acc + Object.keys(matrizMateria[f] || {}).length,
+                          acc +
+                          Object.values(matrizMateria[f] || {}).reduce(
+                            (total, regs) => total + regs.length,
+                            0,
+                          ),
                         0,
                       );
 
@@ -2571,42 +2571,46 @@ export default function ReporteAsistencias() {
                                         </td>
                                         {fechasVisiblesMateria.map(
                                           (fechaISO) => {
-                                            const reg =
-                                              matrizMateria[fechaISO]?.[est.id];
-                                            if (!reg || reg.estado === "P") {
-                                              return (
-                                                <td
-                                                  key={fechaISO}
-                                                  className="border-r border-[#E4E8EE] px-2 py-2 text-center text-[#9CA3AF]"
-                                                >
-                                                  —
-                                                </td>
-                                              );
-                                            }
-                                            const cfg =
-                                              ESTADO_CONFIG[
-                                                reg.estado as EstadoAsistencia
-                                              ];
-                                            if (!cfg)
-                                              return (
-                                                <td
-                                                  key={fechaISO}
-                                                  className="border-r border-[#E4E8EE] px-2 py-2 text-center"
-                                                >
-                                                  —
-                                                </td>
-                                              );
-                                            const Icon = cfg.icon;
+                                            const regs =
+                                              matrizMateria[fechaISO]?.[
+                                                est.id
+                                              ] || [];
                                             return (
                                               <td
                                                 key={fechaISO}
                                                 className="border-r border-[#E4E8EE] px-2 py-2 text-center"
                                               >
-                                                <div
-                                                  className={`inline-flex h-7 w-7 items-center justify-center rounded ${cfg.bgColor} ${cfg.textColor}`}
-                                                  title={`${cfg.label}${reg.observacion ? ` • ${reg.observacion}` : ""}`}
-                                                >
-                                                  <Icon className="text-[10px]" />
+                                                <div className="flex flex-col items-center gap-1">
+                                                  {regs.length === 0
+                                                    ? "—"
+                                                    : regs.map((reg) => {
+                                                        const cfg =
+                                                          ESTADO_CONFIG[
+                                                            reg.estado
+                                                          ];
+                                                        if (!cfg) return null;
+                                                        const Icon = cfg.icon;
+                                                        return (
+                                                          <div
+                                                            key={
+                                                              reg.asistenciaId
+                                                            }
+                                                            className="flex items-center gap-1"
+                                                          >
+                                                            <span className="text-[10px] text-[#64748B]">
+                                                              {reg.hora == null
+                                                                ? "Sin hora"
+                                                                : `${reg.hora}ª`}
+                                                            </span>
+                                                            <span
+                                                              className={`inline-flex h-7 w-7 items-center justify-center rounded ${cfg.bgColor} ${cfg.textColor}`}
+                                                              title={`${cfg.label}${reg.observacion ? ` • ${reg.observacion}` : ""}`}
+                                                            >
+                                                              <Icon className="text-[10px]" />
+                                                            </span>
+                                                          </div>
+                                                        );
+                                                      })}
                                                 </div>
                                               </td>
                                             );
