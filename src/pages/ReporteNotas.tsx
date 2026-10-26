@@ -20,6 +20,8 @@ import {
 } from "../utils/refuerzo";
 import type { Estudiante, Grado } from "../types";
 import Layout from "../components/Layout";
+import NotificacionNotas from "../components/NotificacionNotas";
+import { contextoNotificacion, type InformeNotificacion } from "../utils/notificacionNotas";
 import * as XLSX from "xlsx-js-style";
 import { useNavigate } from "react-router-dom";
 import {
@@ -36,10 +38,28 @@ import {
   FaTimes,
   FaFileExcel,
   FaEye,
+  FaWhatsapp,
   FaClipboardList,
   FaCheck,
 } from "react-icons/fa";
 // ==================== INTERFACES ====================
+type EstudianteConContacto = Estudiante & {
+  nombreRepresentante?: string;
+  celularRepresentante?: string;
+};
+// Ecuador: 09XXXXXXXX, 9XXXXXXXX o 5939XXXXXXXX. Otros países: + o 00.
+const normalizarCelularRepresentante = (valor?: string): string | null => {
+  const original = (valor || "").trim();
+  if (!original || !/^\+?[\d\s().-]+$/.test(original)) return null;
+  let numero = original.replace(/\D/g, "");
+  const internacional = original.startsWith("+") || numero.startsWith("00");
+  if (numero.startsWith("00")) numero = numero.slice(2);
+  if (/^09\d{8}$/.test(numero)) return `593${numero.slice(1)}`;
+  if (/^9\d{8}$/.test(numero)) return `593${numero}`;
+  if (/^5939\d{8}$/.test(numero)) return numero;
+  if (numero.startsWith("593")) return null;
+  return internacional && /^[1-9]\d{7,14}$/.test(numero) ? numero : null;
+};
 interface ActividadData {
   id: string;
   tipo: string;
@@ -169,6 +189,8 @@ export default function ReporteNotas() {
   const { grados, ambitos, destrezas, anioActivo, periodoActual, ready } =
     useData();
   const navigate = useNavigate();
+  const [informeNotificacion, setInformeNotificacion] = useState<InformeNotificacion | null>(null);
+  const [contadoresNotificacion, setContadoresNotificacion] = useState<Record<string, number>>({});
   const [asignaturasDocente, setAsignaturasDocente] = useState<
     AsignaturaDocente[]
   >([]);
@@ -210,6 +232,12 @@ export default function ReporteNotas() {
     setAviso({ type, message });
     setTimeout(() => setAviso(null), 6000);
   };
+  useEffect(() => {
+    if (!user?.uid) return;
+    return onSnapshot(query(collection(db, "notificacionesNotas"), where("docenteId", "==", user.uid)), (snap) => {
+      setContadoresNotificacion(Object.fromEntries(snap.docs.map(d => [d.id, d.data().enviadas || 0])));
+    }, () => setAviso({type:"warning", message:"No se pudo consultar el contador de notificaciones. Revisa los permisos de Firestore y la conexión."}));
+  }, [user?.uid]);
   const esAdmin = userData?.role === "super_admin";
   const esTutor = (userData?.tutorDe || []).length > 0;
   const tieneMaterias = asignaturasDocente.length > 0;
@@ -539,8 +567,7 @@ export default function ReporteNotas() {
       if (nf >= 7) return;
       const estudiante = estudiantesMap.get(cal.estudianteId);
       const actividad = actividadesMap.get(cal.actividadId);
-      if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad))
-        return;
+      if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad)) return;
       if (estudiante.gradoId !== gradoTutorEfectivo) return;
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
@@ -684,9 +711,7 @@ export default function ReporteNotas() {
             (a) =>
               a.gradoId === gradoDocenteEfectivo &&
               (esInicial
-                ? (a.ambitoId ||
-                    destrezas.find((d) => d.id === a.destrezaId)?.ambitoId ||
-                    "") === u.id
+                ? (a.ambitoId || destrezas.find((d) => d.id === a.destrezaId)?.ambitoId || "") === u.id
                 : a.destrezaId === u.id),
           )
           .sort(
@@ -713,11 +738,7 @@ export default function ReporteNotas() {
     if (!estudianteDetalleId || !gradoDocenteEfectivo) return [];
     return actividadesVisibles
       .filter((a) => {
-        if (
-          a.gradoId !== gradoDocenteEfectivo ||
-          !aplicaActividad(estudianteDetalle, a)
-        )
-          return false;
+        if (a.gradoId !== gradoDocenteEfectivo || !aplicaActividad(estudianteDetalle, a)) return false;
         if (esInicialDocente) {
           const destreza = destrezas.find((d) => d.id === a.destrezaId);
           return misUnidadesDelGrado.has(
@@ -756,6 +777,28 @@ export default function ReporteNotas() {
     misDestrezasDelGrado,
     calMap,
   ]);
+  const prepararInformeNotificacion = (sec: UnidadSeccion, est: EstudianteConContacto): InformeNotificacion | null => {
+    const celular = normalizarCelularRepresentante(est.celularRepresentante);
+    if (!celular || !user?.uid || !anioActivo?.id || !periodoActual?.id) return null;
+    const hoy = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Guayaquil",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+    const asignadas = sec.actividades.filter(a => aplicaActividad(est, a) && (!a.fecha || a.fecha.slice(0,10) <= hoy));
+    const calificadas = asignadas.flatMap(actividad => {
+      const cal = calMap.get(`${est.id}|${actividad.id}`);
+      if (!cal || cal.nota == null) return [];
+      const nota = notaFinalDe(cal);
+      return Number.isFinite(nota) ? [{actividad, nota}] : [];
+    });
+    return {
+      estudianteId: est.id, estudiante: `${est.apellidos} ${est.nombres}`,
+      representante: est.nombreRepresentante?.trim() || "", celular,
+      grado: `${gradoDocenteActual?.nombre || ""} ${gradoDocenteActual?.paralelo || ""}`.trim(),
+      gradoId: gradoDocenteEfectivo, materia: sec.nombre, materiaId: sec.id,
+      periodo: periodoActual.nombre, periodoId: periodoActual.id, anioId: anioActivo.id, docenteId: user.uid,
+      asignadas: asignadas.length, calificadas: calificadas.length,
+      promedio: calificadas.length ? round2(calificadas.reduce((s,n)=>s+n.nota,0)/calificadas.length) : null,
+      bajas: calificadas.filter(n=>n.nota<7).map(({actividad,nota})=>({fecha:actividad.fecha,tipo:actividad.tipo,actividad:actividad.detalle,nota})),
+    };
+  };
   // ==================== REFUERZO ====================
   const abrirRefuerzo = (r: {
     calificacionId: string;
@@ -768,19 +811,9 @@ export default function ReporteNotas() {
     estrategiaActividad: string;
   }) => {
     if (!misDestrezasTodas.has(r.destrezaId)) return;
-    const estudianteRefuerzo = estudiantesFiltrados.find(
-      (e) =>
-        e.id ===
-        calificaciones.find((c) => c.id === r.calificacionId)?.estudianteId,
-    );
-    const actividadRefuerzo = actividadesVisibles.find(
-      (a) => a.id === r.actividadId,
-    );
-    if (
-      !actividadRefuerzo ||
-      !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)
-    )
-      return;
+    const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificaciones.find((c) => c.id === r.calificacionId)?.estudianteId);
+    const actividadRefuerzo = actividadesVisibles.find((a) => a.id === r.actividadId);
+    if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) return;
     const calificacionActual = calificaciones.find(
       (c) => c.id === r.calificacionId,
     );
@@ -816,20 +849,10 @@ export default function ReporteNotas() {
       const calificacionActual = calificaciones.find(
         (c) => c.id === refuerzoRegistro.calificacionId,
       );
-      const estudianteRefuerzo = estudiantesFiltrados.find(
-        (e) => e.id === calificacionActual?.estudianteId,
-      );
-      const actividadRefuerzo = actividadesVisibles.find(
-        (a) => a.id === refuerzoRegistro.actividadId,
-      );
-      if (
-        !actividadRefuerzo ||
-        !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)
-      ) {
-        mostrarAviso(
-          "warning",
-          "Esta actividad no corresponde al estudiante. No se aplicó el refuerzo.",
-        );
+      const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificacionActual?.estudianteId);
+      const actividadRefuerzo = actividadesVisibles.find((a) => a.id === refuerzoRegistro.actividadId);
+      if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) {
+        mostrarAviso("warning", "Esta actividad no corresponde al estudiante. No se aplicó el refuerzo.");
         setShowRefuerzoModal(false);
         setRefuerzoRegistro(null);
         return;
@@ -923,25 +946,16 @@ export default function ReporteNotas() {
         ? estudiantesDelGradoDocente.filter((est) => est.id === estudianteId)
         : estudiantesDelGradoDocente;
       if (estudiantesExportar.length === 0) {
-        mostrarAviso(
-          "info",
-          "No hay estudiantes para exportar en este contexto.",
-        );
+        mostrarAviso("info", "No hay estudiantes para exportar en este contexto.");
         return;
       }
       const actividadesExportar = estudianteId
-        ? sec.actividades.filter((a) =>
-            aplicaActividad(estudiantesExportar[0], a),
-          )
+        ? sec.actividades.filter((a) => aplicaActividad(estudiantesExportar[0], a))
         : sec.actividades;
       // Both layouts share applicability, final-grade and average rules.
-      const notaExportar = (
-        est: Estudiante,
-        actividad: ActividadData,
-      ): number | string => {
+      const notaExportar = (est: Estudiante, actividad: ActividadData): number | string => {
         const cal = calMap.get(`${est.id}|${actividad.id}`);
-        if (!aplicaActividad(est, actividad) || !cal || cal.nota == null)
-          return "—";
+        if (!aplicaActividad(est, actividad) || !cal || cal.nota == null) return "—";
         return notaFinalDe(cal);
       };
       const promedioExportar = (est: Estudiante): number | string => {
@@ -962,97 +976,49 @@ export default function ReporteNotas() {
               notaExportar(estudiantesExportar[0], actividad),
             ]),
             [
-              actividadesExportar.length === 0
-                ? estudiantesExportar[0].apellidos
-                : "",
-              actividadesExportar.length === 0
-                ? estudiantesExportar[0].nombres
-                : "",
+              actividadesExportar.length === 0 ? estudiantesExportar[0].apellidos : "",
+              actividadesExportar.length === 0 ? estudiantesExportar[0].nombres : "",
               "Promedio",
               promedioExportar(estudiantesExportar[0]),
             ],
           ]
         : [
-            [
-              "",
-              "",
-              "",
-              ...actividadesExportar.map(
-                (a) => `${a.esConsolidado ? "[INSUMO] " : ""}${a.tipo}`,
-              ),
-              "",
-            ],
+            ["", "", "", ...actividadesExportar.map((a) => `${a.esConsolidado ? "[INSUMO] " : ""}${a.tipo}`), ""],
             ["", "", "", ...actividadesExportar.map((a) => a.detalle), ""],
-            [
-              "N°",
-              "Apellidos",
-              "Nombres",
-              ...actividadesExportar.map((a) => `(${a.fecha})`),
-              "Promedio",
-            ],
+            ["N°", "Apellidos", "Nombres", ...actividadesExportar.map((a) => `(${a.fecha})`), "Promedio"],
             ...estudiantesExportar.map((est, index) => [
               index + 1,
               est.apellidos,
               est.nombres,
-              ...actividadesExportar.map((actividad) =>
-                notaExportar(est, actividad),
-              ),
+              ...actividadesExportar.map((actividad) => notaExportar(est, actividad)),
               promedioExportar(est),
             ]),
           ];
       const ws = XLSX.utils.aoa_to_sheet(data);
       ws["!cols"] = estudianteId
         ? [{ wch: 26 }, { wch: 26 }, { wch: 48 }, { wch: 12 }]
-        : [
-            { wch: 5 },
-            { wch: 26 },
-            { wch: 26 },
-            ...actividadesExportar.map(() => ({ wch: 20 })),
-            { wch: 12 },
-          ];
+        : [{ wch: 5 }, { wch: 26 }, { wch: 26 },
+            ...actividadesExportar.map(() => ({ wch: 20 })), { wch: 12 }];
       ws["!rows"] = data.map((_, index) => ({
-        hpt: estudianteId ? (index === 0 ? 20 : 28) : index === 1 ? 28 : 20,
+        hpt: estudianteId ? (index === 0 ? 20 : 28) : (index === 1 ? 28 : 20),
       }));
       const ultimaColumna = data[0].length - 1;
-      data.forEach((fila, r) =>
-        fila.forEach((valor, c) => {
-          const cell = ws[XLSX.utils.encode_cell({ r, c })];
-          if (!cell) return;
-          const encabezado = r < (estudianteId ? 1 : 3);
-          const promedio = estudianteId
-            ? r === data.length - 1
-            : c === ultimaColumna;
-          const esNota = !encabezado && (estudianteId ? c === 3 : c >= 3);
-          const baja = esNota && typeof valor === "number" && valor < 7;
-          cell.s = {
-            font: {
-              name: "Calibri",
-              sz: 11,
-              bold: encabezado || promedio,
-              color: { rgb: baja ? "9C0006" : "273444" },
-            },
-            alignment: {
-              vertical: "center",
-              horizontal: esNota || encabezado ? "center" : "left",
-              wrapText: true,
-            },
-            fill: {
-              patternType: "solid",
-              fgColor: {
-                rgb: baja
-                  ? "FFC7CE"
-                  : encabezado
-                    ? "EAF0F6"
-                    : promedio
-                      ? "F2F5F8"
-                      : "FFFFFF",
-              },
-            },
-            border: { bottom: { style: "thin", color: { rgb: "D8DEE6" } } },
-          };
-          if (esNota && typeof valor === "number") cell.z = "0.##";
-        }),
-      );
+      data.forEach((fila, r) => fila.forEach((valor, c) => {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (!cell) return;
+        const encabezado = r < (estudianteId ? 1 : 3);
+        const promedio = estudianteId ? r === data.length - 1 : c === ultimaColumna;
+        const esNota = !encabezado && (estudianteId ? c === 3 : c >= 3);
+        const baja = esNota && typeof valor === "number" && valor < 7;
+        cell.s = {
+          font: { name: "Calibri", sz: 11, bold: encabezado || promedio,
+            color: { rgb: baja ? "9C0006" : "273444" } },
+          alignment: { vertical: "center", horizontal: esNota || encabezado ? "center" : "left", wrapText: true },
+          fill: { patternType: "solid", fgColor: { rgb: baja ? "FFC7CE" : encabezado ? "EAF0F6" : promedio ? "F2F5F8" : "FFFFFF" } },
+          border: { bottom: { style: "thin", color: { rgb: "D8DEE6" } } },
+        };
+        if (esNota && typeof valor === "number") cell.z = "0.##";
+      }));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, sec.nombre.substring(0, 31));
       const now = new Date();
@@ -1062,19 +1028,13 @@ export default function ReporteNotas() {
       const paralelo = gradoDocenteActual?.paralelo.replace(/ /g, "_") || "";
       const materiaLimpia = sec.nombre.replace(/[^a-zA-Z0-9]/g, "_");
       const estudianteSufijo = estudianteId
-        ? `_${estudiantesExportar[0].apellidos}_${estudiantesExportar[0].nombres}_${estudianteId}`.replace(
-            /[^a-zA-Z0-9_-]/g,
-            "_",
-          )
+        ? `_${estudiantesExportar[0].apellidos}_${estudiantesExportar[0].nombres}_${estudianteId}`.replace(/[^a-zA-Z0-9_-]/g, "_")
         : "";
       const nombreArchivo = `${nombreGrado}_${paralelo}_${materiaLimpia}${estudianteSufijo}_${fechaStr}.xlsx`;
       XLSX.writeFile(wb, nombreArchivo);
     } catch (error) {
       console.error("Error exportando Excel:", error);
-      mostrarAviso(
-        "error",
-        "No se pudo descargar el informe Excel. Inténtalo nuevamente.",
-      );
+      mostrarAviso("error", "No se pudo descargar el informe Excel. Inténtalo nuevamente.");
     }
   };
   // ==================== RENDER ====================
@@ -1458,18 +1418,8 @@ export default function ReporteNotas() {
                 <table className="w-full border-collapse text-[11px]">
                   <thead className="bg-[#ECEFF3] border-b border-[#D8DEE6]">
                     <tr>
-                      {[
-                        "Estudiante",
-                        "Número de actividades",
-                        "Notas menores a 7",
-                        "Reporte individual",
-                        "Descargar Excel individual",
-                      ].map((titulo) => (
-                        <th
-                          key={titulo}
-                          scope="col"
-                          className="px-3 py-2 text-left text-[10px] font-semibold text-[#4B5563]"
-                        >
+                      {["Estudiante", "Número de actividades", "Notas menores a 7", "Acciones"].map((titulo) => (
+                        <th key={titulo} scope="col" className="px-3 py-2 text-left text-[10px] font-semibold text-[#4B5563]">
                           {titulo}
                         </th>
                       ))}
@@ -1477,9 +1427,7 @@ export default function ReporteNotas() {
                   </thead>
                   <tbody className="divide-y divide-[#E4E8EE]">
                     {estudiantesDelGradoDocente.map((est) => {
-                      const asignadas = sec.actividades.filter((a) =>
-                        aplicaActividad(est, a),
-                      );
+                      const asignadas = sec.actividades.filter((a) => aplicaActividad(est, a));
                       const notasBajas = asignadas.flatMap((actividad) => {
                         const cal = calMap.get(`${est.id}|${actividad.id}`);
                         if (!cal || cal.nota == null) return [];
@@ -1487,10 +1435,7 @@ export default function ReporteNotas() {
                         return nota < 7 ? [{ actividad, nota }] : [];
                       });
                       return (
-                        <tr
-                          key={est.id}
-                          className="transition-colors hover:bg-[#ECEFF3]"
-                        >
+                        <tr key={est.id} className="transition-colors hover:bg-[#ECEFF3]">
                           <td className="px-3 py-2 font-medium text-[#374151]">
                             {est.apellidos} {est.nombres}
                           </td>
@@ -1499,45 +1444,51 @@ export default function ReporteNotas() {
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap gap-1">
-                              {notasBajas.length > 0 ? (
-                                notasBajas.map(({ actividad, nota }) => (
-                                  <span
-                                    key={actividad.id}
-                                    className="rounded bg-red-50 px-1.5 py-0.5 font-semibold text-[#AD3038]"
-                                    title={`${actividad.tipo}: ${actividad.detalle} (${actividad.fecha})`}
-                                    aria-label={`${actividad.detalle}: ${round2(nota)}`}
-                                  >
-                                    {round2(nota)}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="text-[#64748B]">
-                                  Sin notas menores a 7
+                              {notasBajas.length > 0 ? notasBajas.map(({ actividad, nota }) => (
+                                <span key={actividad.id}
+                                  className="rounded bg-red-50 px-1.5 py-0.5 font-semibold text-[#AD3038]"
+                                  title={`${actividad.tipo}: ${actividad.detalle} (${actividad.fecha})`}
+                                  aria-label={`${actividad.detalle}: ${round2(nota)}`}>
+                                  {round2(nota)}
                                 </span>
-                              )}
+                              )) : <span className="text-[#64748B]">Sin notas menores a 7</span>}
                             </div>
                           </td>
                           <td className="px-3 py-2">
-                            <button
-                              type="button"
+                            <div className="flex items-center gap-1 whitespace-nowrap">
+                            <button type="button"
                               onClick={() => setEstudianteDetalleId(est.id)}
                               className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                               title={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
-                              aria-label={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
-                            >
+                              aria-label={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}>
                               <FaEye aria-hidden="true" />
                             </button>
-                          </td>
-                          <td className="px-3 py-2">
-                            <button
-                              type="button"
+                            <button type="button"
                               onClick={() => exportarSeccionExcel(sec, est.id)}
                               className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                               title={`Descargar Excel de ${est.apellidos} ${est.nombres}`}
-                              aria-label={`Descargar Excel de ${est.apellidos} ${est.nombres}`}
-                            >
+                              aria-label={`Descargar Excel de ${est.apellidos} ${est.nombres}`}>
                               <FaFileExcel aria-hidden="true" />
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const informe = prepararInformeNotificacion(sec, est);
+                                if (!informe) {
+                                  mostrarAviso("warning", "Registra un celular válido del representante en el módulo Estudiantes. Para Ecuador usa 09XXXXXXXX; para otro país incluye + y el código de país.");
+                                  return;
+                                }
+                                setInformeNotificacion(informe);
+                              }}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded text-green-700 hover:bg-green-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700/40"
+                              title={`Compartir mini informe con el representante de ${est.apellidos} ${est.nombres}`}
+                              aria-label={`Compartir mini informe con el representante de ${est.apellidos} ${est.nombres}`}>
+                              <FaWhatsapp aria-hidden="true" />
+                            </button>
+                            <span className="text-[10px] tabular-nums text-[#64748B]" title="Notificaciones confirmadas de este docente, estudiante, materia y período">
+                              {contadoresNotificacion[contextoNotificacion({docenteId:user?.uid || "", anioId:anioActivo?.id || "", periodoId:periodoActual?.id || "", gradoId:gradoDocenteEfectivo, materiaId:sec.id, estudianteId:est.id})] || 0}
+                            </span>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1550,6 +1501,7 @@ export default function ReporteNotas() {
         </div>
       )}
 
+      {informeNotificacion && <NotificacionNotas informe={informeNotificacion} cerrar={() => setInformeNotificacion(null)} />}
       {/* Modal de detalle del estudiante */}
       {estudianteDetalle && (
         <div
