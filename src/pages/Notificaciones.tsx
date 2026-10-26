@@ -907,12 +907,25 @@ export default function Notificaciones() {
                   grupo.visitas.map((v) => (
                     <article
                       key={v.id}
-                      className="rounded-md border border-[#D8DEE6] p-3"
+                      className="rounded-md border border-[#C96522] border-l-4 bg-white p-2.5"
                     >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <strong>
-                          {mostrarFecha(v.fecha)} · {v.asistente}
-                        </strong>
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <div className="grid gap-2 sm:grid-cols-2 sm:gap-6">
+                          <div>
+                            <p className="text-[10px] font-semibold text-[#64748B]">
+                              Fecha real de asistencia
+                            </p>
+                            <p className="mt-1 font-semibold">
+                              {mostrarFecha(v.fecha)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-semibold text-[#64748B]">
+                              Nombre de quien asistió
+                            </p>
+                            <p className="mt-1 font-semibold">{v.asistente}</p>
+                          </div>
+                        </div>
                         <button
                           className={boton}
                           disabled={ocupado}
@@ -938,25 +951,63 @@ export default function Notificaciones() {
                           ? " (registro conjunto anterior)"
                           : ""}
                       </p>
-                      <p className="mt-2">
-                        {v.atencionFirmada ? "✓" : "□"} Atención a padres
-                        firmada
+                      <dl className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                        <div className="min-w-0 rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-2">
+                          <dt className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                            Documentos físicos
+                          </dt>
+                          <dd className="space-y-1.5">
+                            <div className="flex flex-wrap items-center justify-between gap-1.5">
+                              <span>Atención a padres de familia</span>
+                              <span
+                                className={`rounded px-2 py-0.5 text-[10px] font-semibold ${v.atencionFirmada ? "bg-[#EAF0F6] text-[#244563]" : "bg-white text-[#64748B]"}`}
+                              >
+                                {v.atencionFirmada
+                                  ? "✓ Firma registrada"
+                                  : "Firma no registrada"}
+                              </span>
+                            </div>
+                            {v.origen !== "espontanea" && (
+                              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                <span>Acta de bajo rendimiento</span>
+                                <span
+                                  className={`rounded px-2 py-0.5 text-[10px] font-semibold ${v.actaFirmada ? "bg-[#EAF0F6] text-[#244563]" : "bg-white text-[#64748B]"}`}
+                                >
+                                  {v.actaFirmada
+                                    ? "✓ Firma registrada"
+                                    : "Firma no registrada"}
+                                </span>
+                              </div>
+                            )}
+                          </dd>
+                        </div>
                         {v.origen !== "espontanea" && (
-                          <>
-                            {" "}
-                            · {v.actaFirmada ? "✓" : "□"} Acta de bajo
-                            rendimiento firmada · {decisiones[v.refuerzo]}
-                          </>
+                          <div className="min-w-0 rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-2">
+                            <dt className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                              Decisión de refuerzo
+                            </dt>
+                            <dd className="font-semibold text-[#244563]">
+                              {decisiones[v.refuerzo]}
+                            </dd>
+                          </div>
                         )}
-                      </p>
-                      <p className="mt-1">
-                        Archivo físico: {v.referenciaFisica || "Sin referencia"}
-                      </p>
-                      {v.observaciones && (
-                        <p className="mt-1 whitespace-pre-wrap">
-                          {v.observaciones}
-                        </p>
-                      )}
+                        <div className="min-w-0 rounded-md border border-[#D8DEE6] p-2">
+                          <dt className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                            Referencia del archivo físico
+                          </dt>
+                          <dd className="whitespace-pre-wrap wrap-break-word">
+                            {v.referenciaFisica || "Sin referencia registrada"}
+                          </dd>
+                        </div>
+                        <div className="min-w-0 rounded-md border border-[#D8DEE6] p-2">
+                          <dt className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                            Observaciones y acuerdos
+                          </dt>
+                          <dd className="whitespace-pre-wrap wrap-break-word">
+                            {v.observaciones || "Sin observaciones registradas"}
+                          </dd>
+                        </div>
+                      </dl>
                     </article>
                   ))
                 )}
