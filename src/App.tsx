@@ -24,6 +24,7 @@ import PendingApproval from "./pages/PendingApproval";
 import MiHorario from "./pages/MiHorario";
 import ReporteAsistencias from "./pages/ReporteAsistencias";
 import ReporteNotas from "./pages/ReporteNotas";
+import Notificaciones from "./pages/Notificaciones";
 import ArchivedAccount from "./pages/ArchivedAccount";
 import MigracionAsistencia from "./pages/MigracionAsistencia";
 import EnMantenimiento from "./pages/EnMantenimiento";
@@ -262,6 +263,8 @@ function AppRoutes() {
           </PrivateRoute>
         }
       />
+
+      <Route path="/notificaciones" element={<PrivateRoute><Notificaciones /></PrivateRoute>} />
 
       {/* Perfil personal */}
       <Route

@@ -39,6 +39,7 @@ import {
   FaClock,
   FaHandsHelping,
   FaClipboardList,
+  FaBell,
 } from "react-icons/fa";
 interface InstitutionData {
   nombreInstitucion?: string;
@@ -495,6 +496,16 @@ export default function Dashboard() {
       stats: `${stats.notasEnRiesgo} nota${stats.notasEnRiesgo !== 1 ? "s" : ""}`,
       badge: "TUTOR/DOCENTE",
       roles: ["docente"] as ActiveRole[],
+    },
+    {
+      path: "/notificaciones",
+      name: "Notificaciones",
+      icon: FaBell,
+      color: "from-teal-600 to-teal-700",
+      desc: "Citaciones, asistencia de representantes, actas y seguimiento",
+      stats: "Ver seguimiento",
+      badge: "DOCENTE",
+      roles: ["super_admin", "docente"] as ActiveRole[],
     },
     {
       path: "/refuerzo-pedagogico",

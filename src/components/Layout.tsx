@@ -27,6 +27,7 @@ import {
   FaTimes,
   FaExchangeAlt,
   FaClipboardList,
+  FaBell,
 } from "react-icons/fa";
 interface LayoutProps {
   children: ReactNode;
@@ -67,6 +68,12 @@ const NAV_ITEMS: NavItem[] = [
     to: "/reporte-notas",
     label: "Reporte Notas",
     icon: FaExclamationTriangle,
+    roles: ["super_admin", "docente"],
+  },
+  {
+    to: "/notificaciones",
+    label: "Notificaciones",
+    icon: FaBell,
     roles: ["super_admin", "docente"],
   },
   {
