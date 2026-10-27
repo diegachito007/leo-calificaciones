@@ -28,7 +28,6 @@ import { useData } from "../context/DataContext";
 import type { Estudiante } from "../types";
 import { db } from "../lib/firebase";
 import Layout from "../components/Layout";
-import DiagnosticoPPE from "../components/DiagnosticoPPE";
 import { getPPECached, invalidatePPECache } from "../utils/ppeCache";
 
 type EstudiantePPE = Estudiante & { id: string };
@@ -861,10 +860,6 @@ export default function PPE() {
 
   return (
     <Layout>
-      {import.meta.env.DEV &&
-        new URLSearchParams(window.location.search).get("diagnosticoPPE") === "1" && (
-          <DiagnosticoPPE />
-        )}
       <div className="space-y-3">
         <header className="flex flex-col gap-3 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3 shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between">
           <div>
