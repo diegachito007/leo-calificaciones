@@ -28,6 +28,8 @@ import { useData } from "../context/DataContext";
 import type { Estudiante } from "../types";
 import { db } from "../lib/firebase";
 import Layout from "../components/Layout";
+import DiagnosticoPPE from "../components/DiagnosticoPPE";
+import { getPPECached, invalidatePPECache } from "../utils/ppeCache";
 
 type EstudiantePPE = Estudiante & { id: string };
 type EstadoPPE = "presente" | "ausente" | "justificado" | "atraso";
@@ -197,22 +199,22 @@ export default function PPE() {
 
       try {
         const [estSnap, configSnap, actSnap] = await Promise.all([
-          getDocs(
-            query(collection(db, "estudiantes"), where("activo", "==", true)),
+          getPPECached(`ppe:${docenteId}:${anioLectivoId}:estudiantes-activos`, () =>
+            getDocs(query(collection(db, "estudiantes"), where("activo", "==", true))),
           ),
-          getDocs(
-            query(
+          getPPECached(`ppe:${docenteId}:${anioLectivoId}:configuracion`, () =>
+            getDocs(query(
               collection(db, "ppeConfiguraciones"),
               where("docenteId", "==", docenteId),
               where("anioLectivoId", "==", anioLectivoId),
-            ),
+            )),
           ),
-          getDocs(
-            query(
+          getPPECached(`ppe:${docenteId}:${anioLectivoId}:actividades`, () =>
+            getDocs(query(
               collection(db, "ppeActividades"),
               where("docenteId", "==", docenteId),
               where("anioLectivoId", "==", anioLectivoId),
-            ),
+            )),
           ),
         ]);
 
@@ -306,20 +308,20 @@ export default function PPE() {
 
       try {
         const [asisSnap, notasSnap] = await Promise.all([
-          getDocs(
-            query(
+          getPPECached(`ppe:${docenteId}:${anioLectivoId}:asistencia-fecha:${fecha}`, () =>
+            getDocs(query(
               collection(db, "ppeAsistencias"),
               where("docenteId", "==", docenteId),
               where("anioLectivoId", "==", anioLectivoId),
               where("fecha", "==", fecha),
-            ),
+            )),
           ),
-          getDocs(
-            query(
+          getPPECached(`ppe:${docenteId}:${anioLectivoId}:calificaciones`, () =>
+            getDocs(query(
               collection(db, "ppeCalificaciones"),
               where("docenteId", "==", docenteId),
               where("anioLectivoId", "==", anioLectivoId),
-            ),
+            )),
           ),
         ]);
 
@@ -377,6 +379,7 @@ export default function PPE() {
         },
         { merge: true },
       );
+      invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:configuracion`);
       setEstudianteIds(seleccionTemporal);
       setShowSelector(false);
       setMensaje({
@@ -433,6 +436,7 @@ export default function PPE() {
         });
         await batch.commit();
       }
+      invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:`);
       setMensaje({
         tipo: "ok",
         texto: `Asistencia guardada para ${pendientes.length} estudiante(s).`,
@@ -472,6 +476,7 @@ export default function PPE() {
         fecha: fechaActividad,
         descripcion: descripcionActividad.trim(),
       };
+      invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:actividades`);
       setActividades((prev) => [nueva, ...prev]);
       setActividadSeleccionada(ref.id);
       setTituloActividad("");
@@ -531,6 +536,7 @@ export default function PPE() {
         return;
       }
       await batch.commit();
+      invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:`);
       setMensaje({ tipo: "ok", texto: `Se guardaron ${cantidad} nota(s).` });
       await cargarReporte();
     } catch (e) {
@@ -545,19 +551,19 @@ export default function PPE() {
     if (!docenteId || !anioLectivoId) return;
     try {
       const [asisSnap, notasSnap] = await Promise.all([
-        getDocs(
-          query(
+        getPPECached(`ppe:${docenteId}:${anioLectivoId}:reporte-asistencias`, () =>
+          getDocs(query(
             collection(db, "ppeAsistencias"),
             where("docenteId", "==", docenteId),
             where("anioLectivoId", "==", anioLectivoId),
-          ),
+          )),
         ),
-        getDocs(
-          query(
+        getPPECached(`ppe:${docenteId}:${anioLectivoId}:reporte-calificaciones`, () =>
+          getDocs(query(
             collection(db, "ppeCalificaciones"),
             where("docenteId", "==", docenteId),
             where("anioLectivoId", "==", anioLectivoId),
-          ),
+          )),
         ),
       ]);
       setReporteAsistencias(
@@ -855,6 +861,10 @@ export default function PPE() {
 
   return (
     <Layout>
+      {import.meta.env.DEV &&
+        new URLSearchParams(window.location.search).get("diagnosticoPPE") === "1" && (
+          <DiagnosticoPPE />
+        )}
       <div className="space-y-3">
         <header className="flex flex-col gap-3 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3 shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between">
           <div>

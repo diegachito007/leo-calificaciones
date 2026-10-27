@@ -679,13 +679,37 @@ function ContenidoCalificaciones() {
     0,
   );
 
-  // ✅ Paleta natural por materia (misma materia = mismo color en todos los días y grados)
+  // Paleta segura por materia: cada índice usado abajo existe y hay respaldo.
   const PALETA_MATERIAS = [
     {
       fondo: "bg-[#EAF0F6]",
       anillo: "ring-[#C8D6E5]",
       punto: "bg-[#244563]",
       hover: "hover:bg-[#E2EAF3]",
+    },
+    {
+      fondo: "bg-[#F3E8FF]",
+      anillo: "ring-[#D8B4FE]",
+      punto: "bg-[#7E22CE]",
+      hover: "hover:bg-[#EDE0FF]",
+    },
+    {
+      fondo: "bg-[#DCFCE7]",
+      anillo: "ring-[#86EFAC]",
+      punto: "bg-[#15803D]",
+      hover: "hover:bg-[#D1FAE5]",
+    },
+    {
+      fondo: "bg-[#FEF3C7]",
+      anillo: "ring-[#FCD34D]",
+      punto: "bg-[#B45309]",
+      hover: "hover:bg-[#FDECC8]",
+    },
+    {
+      fondo: "bg-[#FFE4E6]",
+      anillo: "ring-[#FDA4AF]",
+      punto: "bg-[#BE123C]",
+      hover: "hover:bg-[#FECDD3]",
     },
   ];
   const colorPorMateria = (nombre: string, idFallback: string) => {
@@ -694,26 +718,29 @@ function ContenidoCalificaciones() {
       .toLowerCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "");
+
+    // eslint-disable-next-line no-useless-assignment
+    let indice = 0;
     if (/(educacion fisica|deporte|arte|musica|dibujo)/.test(clave)) {
-      return PALETA_MATERIAS[4];
+      indice = 4;
+    } else if (/(social|historia|filosof|ciudadan)/.test(clave)) {
+      indice = 3;
+    } else if (/(natural|biolog|quimic|fisica)/.test(clave)) {
+      indice = 2;
+    } else if (/(lengua|literatura|ingl|idioma)/.test(clave)) {
+      indice = 1;
+    } else if (/(matem|inform)/.test(clave)) {
+      indice = 0;
+    } else {
+      let hash = 0;
+      for (let i = 0; i < clave.length; i += 1) {
+        hash = (hash * 31 + clave.charCodeAt(i)) >>> 0;
+      }
+      indice = hash % PALETA_MATERIAS.length;
     }
-    if (/(social|historia|filosof|ciudadan)/.test(clave)) {
-      return PALETA_MATERIAS[3];
-    }
-    if (/(natural|biolog|quimic|fisica)/.test(clave)) {
-      return PALETA_MATERIAS[2];
-    }
-    if (/(lengua|literatura|ingl|idioma)/.test(clave)) {
-      return PALETA_MATERIAS[1];
-    }
-    if (/(matem|inform)/.test(clave)) {
-      return PALETA_MATERIAS[0];
-    }
-    let hash = 0;
-    for (let i = 0; i < clave.length; i += 1) {
-      hash = (hash * 31 + clave.charCodeAt(i)) >>> 0;
-    }
-    return PALETA_MATERIAS[hash % PALETA_MATERIAS.length];
+
+    // Protección adicional para que un índice inesperado nunca deje la pantalla en blanco.
+    return PALETA_MATERIAS[indice] ?? PALETA_MATERIAS[0];
   };
 
   const actividadSeleccionada = actividades.find(
@@ -2419,8 +2446,7 @@ function ContenidoCalificaciones() {
             onClick={() => {
               reintentarCalificaciones();
               horarioCompartido.reintentar();
-              if (gradoEfectivoId)
-                asegurarEstudiantesCache(claveNomina, true);
+              if (gradoEfectivoId) asegurarEstudiantesCache(claveNomina, true);
             }}
           >
             Reintentar
@@ -4702,7 +4728,9 @@ function ContenidoCalificaciones() {
                       setActividadForm({
                         ...actividadForm,
                         dirigidaA: e.target.value as
-                          "general" | "ambos" | "especial",
+                          | "general"
+                          | "ambos"
+                          | "especial",
                       })
                     }
                     className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-xs text-[#374151] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20"
