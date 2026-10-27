@@ -1,18 +1,17 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import {
   collection,
-  query,
-  where,
   addDoc,
   deleteDoc,
   doc,
-  onSnapshot,
   updateDoc,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { Destreza, Ambito } from "../types";
+import { claveAccesoEstudiantes } from "../utils/estudiantesCache";
+import { useHorarioPanel, claveHorario, leerHorario } from "../utils/panelCache";
 import Layout from "../components/Layout";
 import {
   FaGraduationCap,
@@ -50,15 +49,6 @@ interface BloqueHorario {
   dia: number; // 1..6
   horas: number[]; // 1..N
 }
-interface AsignaturaDocente {
-  id?: string;
-  docenteId: string;
-  gradoId: string;
-  destrezaId: string;
-  anioLectivoId: string;
-  activo: boolean;
-  horario?: BloqueHorario[];
-}
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
@@ -79,12 +69,6 @@ interface ConfirmModalState {
 export default function MiHorario() {
   const { user, userData } = useAuth();
   const { grados, destrezas, ambitos, anioActivo, ready } = useData();
-  const [asignaturas, setAsignaturas] = useState<AsignaturaDocente[]>([]);
-  // ✅ Cache del grado: todas las asignaturas activas del grado+año (mías + de otros docentes)
-  // Alimentado por onSnapshot para detección de conflictos en tiempo real.
-  const [asignaturasGradoCache, setAsignaturasGradoCache] = useState<
-    AsignaturaDocente[]
-  >([]);
   const [saving, setSaving] = useState(false);
   const [selectedGradoId, setSelectedGradoId] = useState<string>("");
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -97,18 +81,27 @@ export default function MiHorario() {
   });
   const gradosFiltrados = (() => {
     if (
-      userData?.role === "docente" &&
-      userData?.gradosAsignados &&
-      userData.gradosAsignados.length > 0
+      userData?.role === "docente"
     ) {
-      const asignados = new Set(userData.gradosAsignados);
+      const asignados = new Set(userData.gradosAsignados || []);
       return grados.filter((g) => asignados.has(g.id));
     }
     return grados;
   })();
-  const gradoEfectivoId =
-    selectedGradoId ||
-    (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : "");
+  const gradoEfectivoId = gradosFiltrados.some(g => g.id === selectedGradoId)
+    ? selectedGradoId : gradosFiltrados[0]?.id || "";
+  const acceso = claveAccesoEstudiantes(user?.uid, userData);
+  const propias = useHorarioPanel(acceso, anioActivo?.id || "", "propias", user?.uid || "");
+  const delGrado = useHorarioPanel(acceso, anioActivo?.id || "", "grado", gradoEfectivoId);
+  const asignaturas = propias.items;
+  const asignaturasGradoCache = delGrado.items;
+  const puedeEditar = propias.listo && delGrado.listo && !propias.desdeCache && !delGrado.desdeCache;
+  const leerPropias = () => leerHorario(claveHorario(acceso, anioActivo?.id || "", "propias", user?.uid || ""));
+  const leerDelGrado = () => leerHorario(claveHorario(acceso, anioActivo?.id || "", "grado", gradoEfectivoId));
+  const datosVigentes = () => {
+    const a = leerPropias(); const g = leerDelGrado();
+    return a.listo && g.listo && !a.desdeCache && !g.desdeCache;
+  };
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -156,56 +149,6 @@ export default function MiHorario() {
     },
     [],
   );
-  // ✅ ASIGNATURAS PROPIAS: listener en tiempo real
-  useEffect(() => {
-    if (!user?.uid || !anioActivo?.id) return;
-    const q = query(
-      collection(db, "asignaturasDocente"),
-      where("docenteId", "==", user.uid),
-      where("anioLectivoId", "==", anioActivo.id),
-      where("activo", "==", true),
-    );
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const asignaturasData = snapshot.docs.map(
-          (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
-        );
-        setAsignaturas(asignaturasData);
-      },
-      (error) => {
-        console.error("Error escuchando asignaturas:", error);
-      },
-    );
-    return () => unsubscribe();
-  }, [user?.uid, anioActivo?.id]);
-  // ✅ CACHE DEL GRADO: todas las asignaturas del grado+año (mías + de otros docentes)
-  // Sirve para:
-  //   1) Verificar disponibilidad de destrezas (como antes)
-  //   2) Detectar conflictos de horario (nueva): si otro docente ya tiene día+hora
-  useEffect(() => {
-    if (!gradoEfectivoId || !anioActivo?.id) return;
-    const q = query(
-      collection(db, "asignaturasDocente"),
-      where("gradoId", "==", gradoEfectivoId),
-      where("anioLectivoId", "==", anioActivo.id),
-      where("activo", "==", true),
-    );
-    const unsubscribe = onSnapshot(
-      q,
-      (snap) => {
-        setAsignaturasGradoCache(
-          snap.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
-          ),
-        );
-      },
-      (error) => {
-        console.error("Error escuchando asignaturas del grado:", error);
-      },
-    );
-    return () => unsubscribe();
-  }, [gradoEfectivoId, anioActivo?.id]);
   // ✅ HELPERS ====================
   const getAmbitoNombre = (ambitoId: string): string => {
     const ambito = ambitos.find((a) => a.id === ambitoId);
@@ -248,11 +191,11 @@ export default function MiHorario() {
   })();
   // ✅ DISPONIBILIDAD DE DESTREZA: otro docente ya la tiene en este grado
   const verificarDisponibilidad = (destrezaId: string): boolean => {
-    const asignacionPropia = asignaturas.find(
+    const asignacionPropia = leerPropias().items.find(
       (a) => a.gradoId === gradoEfectivoId && a.destrezaId === destrezaId,
     );
     if (asignacionPropia) return true;
-    const ocupadaPorOtro = asignaturasGradoCache.some(
+    const ocupadaPorOtro = leerDelGrado().items.some(
       (a) => a.destrezaId === destrezaId && a.docenteId !== user?.uid,
     );
     return !ocupadaPorOtro;
@@ -292,7 +235,7 @@ export default function MiHorario() {
   }, 0);
   // ==================== ACCIONES ====================
   const asignarMateria = async (destrezaId: string) => {
-    if (!user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
+    if (!puedeEditar || saving || !user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
     setSaving(true);
     try {
       const disponible = verificarDisponibilidad(destrezaId);
@@ -332,7 +275,7 @@ export default function MiHorario() {
     }
   };
   const asignarTodasDelAmbito = async (ambitoId: string) => {
-    if (!user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
+    if (!puedeEditar || saving || !user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
     const grupo = destrezasPorAmbito.find((g) => g.ambito.id === ambitoId);
     if (!grupo) return;
     const totalDestrezas = grupo.destrezas.length;
@@ -346,12 +289,17 @@ export default function MiHorario() {
         icon: FaPlus,
       },
     );
-    if (!confirmado) return;
+    if (!confirmado || !datosVigentes()) return;
     setSaving(true);
     try {
       let asignadas = 0;
       let omitidas = 0;
       for (const destreza of grupo.destrezas) {
+        if (!datosVigentes()) throw new Error("El contexto del horario cambió");
+        if (leerPropias().items.some(a => a.gradoId === gradoEfectivoId && a.destrezaId === destreza.id)) {
+          omitidas++;
+          continue;
+        }
         const disponible = verificarDisponibilidad(destreza.id);
         if (!disponible) {
           omitidas++;
@@ -385,6 +333,7 @@ export default function MiHorario() {
     }
   };
   const removerMateria = async (asignacionId: string) => {
+    if (!puedeEditar || saving) return;
     const asignatura = asignaturas.find((a) => a.id === asignacionId);
     const destreza = asignatura
       ? destrezas.find((d) => d.id === asignatura.destrezaId)
@@ -399,7 +348,7 @@ export default function MiHorario() {
         icon: FaTrash,
       },
     );
-    if (!confirmado) return;
+    if (!confirmado || !datosVigentes()) return;
     setSaving(true);
     try {
       await deleteDoc(doc(db, "asignaturasDocente", asignacionId));
@@ -426,7 +375,7 @@ export default function MiHorario() {
     dia: number,
     hora: number,
   ) => {
-    if (!user?.uid) return;
+    if (!puedeEditar || saving || !user?.uid) return;
     const asignatura = asignaturas.find((a) => a.id === asignacionId);
     if (!asignatura) return;
     const horarioActual: BloqueHorario[] = asignatura.horario || [];
@@ -544,6 +493,14 @@ export default function MiHorario() {
   return (
     <Layout>
       <div className="space-y-3">
+        {(propias.error || delGrado.error) ? (
+          <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+            No se pudo consultar el horario. Comprueba la conexión y los permisos.
+            <button className="ml-3 underline" onClick={() => { propias.reintentar(); delGrado.reintentar(); }}>Reintentar</button>
+          </div>
+        ) : !puedeEditar && gradoEfectivoId ? (
+          <p className="text-xs text-slate-600">Verificando el horario antes de permitir cambios…</p>
+        ) : null}
         {gradosFiltrados.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
             <h3 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5">
@@ -656,7 +613,7 @@ export default function MiHorario() {
                           </div>
                           <button
                             onClick={() => removerMateria(asignatura.id || "")}
-                            disabled={saving}
+                            disabled={saving || !puedeEditar}
                             className="min-h-8 ml-2 p-2 text-[#C93F45] hover:bg-red-100 rounded transition-colors opacity-70 hover:opacity-100 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                             title="Quitar materia del horario"
                           >
@@ -715,7 +672,7 @@ export default function MiHorario() {
                                               fila.hora,
                                             )
                                           }
-                                          disabled={saving}
+                                          disabled={saving || !puedeEditar}
                                           title={
                                             bloque?.horas.includes(fila.hora)
                                               ? `${dia.nombreLargo} ${fila.hora}ª hora · clic para quitar`
@@ -810,7 +767,7 @@ export default function MiHorario() {
                         </div>
                         <button
                           onClick={() => asignarTodasDelAmbito(ambito.id)}
-                          disabled={saving}
+                          disabled={saving || !puedeEditar}
                           className="min-h-8 ml-3 flex items-center gap-2 px-3  rounded-md text-[10px] font-medium bg-[#244563] hover:bg-[#1B354D] text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                           title={`Asignar todas las destrezas de ${ambito.nombre}`}
                         >
@@ -837,7 +794,7 @@ export default function MiHorario() {
                             </div>
                             <button
                               onClick={() => asignarMateria(destreza.id)}
-                              disabled={saving}
+                              disabled={saving || !puedeEditar}
                               className="min-h-8 ml-3 flex items-center gap-1.5 px-3  rounded-md text-[10px] font-medium bg-[#244563] hover:bg-[#1B354D] text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                             >
                               {saving ? (
@@ -876,7 +833,7 @@ export default function MiHorario() {
                       </div>
                       <button
                         onClick={() => asignarMateria(destreza.id)}
-                        disabled={saving}
+                        disabled={saving || !puedeEditar}
                         className="min-h-8 ml-3 flex items-center gap-2 px-4  rounded-md text-[11px] font-medium bg-[#244563] hover:bg-[#1B354D] text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                       >
                         {saving ? (

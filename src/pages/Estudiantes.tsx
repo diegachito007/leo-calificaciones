@@ -1,20 +1,19 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 import {
   collection,
-  query,
-  orderBy,
   updateDoc,
   doc,
   serverTimestamp,
-  where,
   addDoc,
-  onSnapshot,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { Estudiante } from "../types";
 import Layout from "../components/Layout";
+import { configurarDiagnostico, medirEscritura } from "../utils/diagnosticoConsultas";
+import { claveAccesoEstudiantes, claveConsultaEstudiantes, leerEstudiantesCache, observarEstudiantesCache, asegurarEstudiantesCache } from "../utils/estudiantesCache";
+configurarDiagnostico(false);
 import {
   FaEdit,
   FaTrash,
@@ -76,10 +75,6 @@ type EstudianteConRepresentante = Estudiante & {
 export default function Estudiantes() {
   const { user, userData } = useAuth();
   const { grados, anioActivo, ready } = useData();
-  const [estudiantes, setEstudiantes] = useState<EstudianteConRepresentante[]>(
-    [],
-  );
-  const [gradoCargado, setGradoCargado] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [mostrarInactivos, setMostrarInactivos] = useState(false);
@@ -119,7 +114,7 @@ export default function Estudiantes() {
     return grados;
   })();
   const gradoEfectivoId =
-    selectedGradoId ||
+    (selectedGradoId && gradosFiltrados.some(g => g.id === selectedGradoId) ? selectedGradoId : null) ||
     (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : null);
   const docenteSinGrados =
     userData?.role === "docente" &&
@@ -206,39 +201,24 @@ export default function Estudiantes() {
     setEditingId(null);
     setValidationErrors([]);
   };
+  const accesoCache = claveAccesoEstudiantes(user?.uid, userData);
+  const claveCache = ready && !docenteSinGrados
+    ? claveConsultaEstudiantes(accesoCache, anioActivo?.id || "", gradoEfectivoId)
+    : "";
+  const leerCache = () => leerEstudiantesCache(claveCache);
+  const nomina = useSyncExternalStore(observarEstudiantesCache, leerCache, leerCache);
+  const estudiantes = nomina.items;
   useEffect(() => {
-    if (!ready) return;
-    const esDocente = userData?.role === "docente";
-    if (esDocente && !gradoEfectivoId) return;
-    const claveGrado = gradoEfectivoId ?? "__todos__";
-    const q = gradoEfectivoId
-      ? query(
-          collection(db, "estudiantes"),
-          where("gradoId", "==", gradoEfectivoId),
-          orderBy("apellidos", "asc"),
-        )
-      : query(collection(db, "estudiantes"), orderBy("apellidos", "asc"));
-    const unsubscribe = onSnapshot(
-      q,
-      (snap) => {
-        setEstudiantes(
-          snap.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as EstudianteConRepresentante,
-          ),
-        );
-        setGradoCargado(claveGrado);
-      },
-      (error) => {
-        console.error("Error escuchando estudiantes:", error);
-        setGradoCargado(claveGrado);
-      },
-    );
-    return () => unsubscribe();
-  }, [ready, gradoEfectivoId, userData?.role]);
-  const cargandoLista =
-    ready && (gradoEfectivoId !== null || esAdmin)
-      ? gradoCargado !== (gradoEfectivoId ?? "__todos__")
-      : false;
+    asegurarEstudiantesCache(claveCache);
+    // La caché es dueña del listener; navegar solo desconecta el observador React.
+  }, [claveCache]);
+  const cargandoLista = !!claveCache && (nomina.estado === "inicial" || nomina.estado === "cargando");
+  const nominaVerificada = nomina.estado === "listo" && !nomina.desdeCacheSDK;
+  const comprobarNomina = () => {
+    if (nominaVerificada) return true;
+    mostrarToast("warning", "Espera la sincronización", "La nómina debe estar sincronizada antes de guardar para comprobar duplicados y estados.");
+    return false;
+  };
   const handleExportExcel = () => {
     if (estudiantesAMostrar.length === 0) {
       mostrarToast("warning", "Sin datos", "No hay estudiantes para exportar.");
@@ -373,6 +353,7 @@ export default function Estudiantes() {
     return { students, errors };
   };
   async function guardarEstudiantesMasivos() {
+    if (!comprobarNomina() || !puedeRegistrar) return;
     if (!anioActivo) {
       mostrarToast(
         "warning",
@@ -444,7 +425,7 @@ export default function Estudiantes() {
       }
       const promesas = [
         ...aCrear.map(async (est) => {
-          await addDoc(collection(db, "estudiantes"), {
+          await medirEscritura("Crear estudiante", () => addDoc(collection(db, "estudiantes"), {
             cedula: est.cedula,
             apellidos: est.apellidos,
             nombres: est.nombres,
@@ -453,16 +434,16 @@ export default function Estudiantes() {
             activo: true,
             createdAt: serverTimestamp(),
             createdBy: user?.uid,
-          });
+          }));
         }),
         ...aReactivar.map(async (est) => {
-          await updateDoc(doc(db, "estudiantes", est.id), {
+          await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", est.id), {
             apellidos: est.apellidos,
             nombres: est.nombres,
             activo: true,
             updatedAt: serverTimestamp(),
             updatedBy: user?.uid,
-          } as never);
+          } as never));
         }),
       ];
       await Promise.all(promesas);
@@ -526,6 +507,9 @@ export default function Estudiantes() {
     return errors;
   };
   async function guardarEstudianteIndividual() {
+    if (!comprobarNomina()) return;
+    const actual = estudiantes.find(e => e.id === editingId);
+    if (!actual || !puedeGestionarEstudiantes(actual.gradoId)) return;
     const errors = validarEstudiante(
       formData.cedula,
       formData.apellidos,
@@ -538,7 +522,7 @@ export default function Estudiantes() {
     }
     try {
       if (editingId) {
-        await updateDoc(doc(db, "estudiantes", editingId), {
+        await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", editingId), {
           apellidos: formData.apellidos.trim(),
           nombres: formData.nombres.trim(),
           cedula: formData.cedula.trim(),
@@ -549,7 +533,7 @@ export default function Estudiantes() {
           nombreRepresentante: formData.nombreRepresentante.trim(),
           celularRepresentante: formData.celularRepresentante.trim(),
           updatedAt: serverTimestamp(),
-        });
+        }));
         mostrarToast(
           "success",
           "Estudiante actualizado",
@@ -615,12 +599,12 @@ export default function Estudiantes() {
         icon: FaTimes,
       },
     );
-    if (!confirmado) return;
+    if (!confirmado || !comprobarNomina()) return;
     try {
-      await updateDoc(doc(db, "estudiantes", id), {
+      await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", id), {
         activo: false,
         updatedAt: serverTimestamp(),
-      });
+      }));
       mostrarToast(
         "success",
         "Estudiante desactivado",
@@ -636,6 +620,7 @@ export default function Estudiantes() {
     }
   }
   async function handleToggleActivo(id: string, estadoActual: boolean) {
+    if (!comprobarNomina()) return;
     const estudiante = estudiantes.find((e) => e.id === id);
     if (!estudiante) return;
     if (!puedeGestionarEstudiantes(estudiante.gradoId)) {
@@ -647,10 +632,10 @@ export default function Estudiantes() {
       return;
     }
     try {
-      await updateDoc(doc(db, "estudiantes", id), {
+      await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", id), {
         activo: !estadoActual,
         updatedAt: serverTimestamp(),
-      });
+      }));
       mostrarToast(
         "success",
         estadoActual ? "Estudiante desactivado" : "Estudiante reactivado",
@@ -727,6 +712,15 @@ export default function Estudiantes() {
   }
   return (
     <Layout>
+      {nomina.estado === "error" && (
+        <div role="alert" className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {nomina.error}
+          <button type="button" onClick={() => asegurarEstudiantesCache(claveCache, true)} className="ml-3 rounded bg-[#244563] px-3 py-1 text-white">Reintentar</button>
+        </div>
+      )}
+      {nomina.estado === "listo" && nomina.desdeCacheSDK && (
+        <p role="status" className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Mostrando la última nómina disponible. Esperando sincronización para habilitar el guardado.</p>
+      )}
       {docenteSinGrados && (
         <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg px-4 py-12 mb-3">
           <div className="flex items-start gap-3 max-w-3xl">

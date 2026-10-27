@@ -5,11 +5,11 @@ import {
   useRef,
   useMemo,
   Fragment,
+  useSyncExternalStore,
 } from "react";
 import {
   collection,
   query,
-  orderBy,
   addDoc,
   updateDoc,
   doc,
@@ -26,7 +26,28 @@ import { useData } from "../context/DataContext";
 import { Link } from "react-router-dom";
 import type { Estudiante } from "../types";
 import Layout from "../components/Layout";
-import { cacheGet, cacheSet, cacheInvalidate } from "../utils/sessionCache";
+import { cacheInvalidate } from "../utils/sessionCache";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  asegurarEstudiantesCache,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+} from "../utils/estudiantesCache";
+import { useHorarioPanel, invalidarNotasPanel } from "../utils/panelCache";
+import {
+  documentoConId,
+  fusionarBorradorNotas,
+  prepararCalificaciones,
+  capturarContextoCalificaciones,
+  observarConsultaCalificaciones,
+  leerActividadesCalificaciones,
+  leerNotasCalificaciones,
+  observarCalificaciones,
+  revisionCalificaciones,
+  erroresCalificaciones,
+  reintentarCalificaciones,
+} from "../utils/calificacionesCache";
 import {
   construirRefuerzoConHistorial,
   type EntradaRefuerzo,
@@ -191,8 +212,6 @@ const ESTRATEGIAS_NOTA = [
   { value: "reemplazar", label: "Reemplazar (Refuerzo reemplaza Original)" },
   { value: "maxima", label: "Máxima (Mayor entre Original y Refuerzo)" },
 ];
-const TTL_ACTIVIDADES = 1000 * 60 * 15;
-const TTL_CALIFICACIONES = 1000 * 60 * 5;
 const NOMBRES_DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie"];
 const HORAS_DIA = [1, 2, 3, 4, 5, 6, 7];
 
@@ -265,6 +284,17 @@ const esFechaAnteriorAHoy = (fecha: string): boolean => {
 
 export default function Calificaciones() {
   const { user, userData } = useAuth();
+  const { anioActivo } = useData();
+  // Reiniciar borradores al cambiar cuenta, permisos o año, sin vaciar la caché al navegar.
+  const contexto = JSON.stringify([
+    claveAccesoEstudiantes(user?.uid, userData),
+    anioActivo?.id,
+  ]);
+  return <ContenidoCalificaciones key={contexto} />;
+}
+
+function ContenidoCalificaciones() {
+  const { user, userData } = useAuth();
   const {
     grados,
     ambitos,
@@ -275,16 +305,33 @@ export default function Calificaciones() {
     ready,
   } = useData();
 
+  const pantallaVigente = useRef(true);
+  useEffect(() => {
+    pantallaVigente.current = true;
+    return () => {
+      pantallaVigente.current = false;
+    };
+  }, []);
   const [panel, setPanel] = useState<0 | 1 | 2>(0);
   const [vistaPanel0, setVistaPanel0] = useState<"horario" | "lista">(
     "horario",
   );
-  const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [actividades, setActividades] = useState<ActividadData[]>([]);
   const [isSaving, setIsSaving] = useState(false);
-  const [asignaturasDocente, setAsignaturasDocente] = useState<
-    AsignaturaDocente[]
-  >([]);
+  const acceso = claveAccesoEstudiantes(user?.uid, userData);
+  const anioCache = anioActivo?.id || "";
+  const horarioCompartido = useHorarioPanel(
+    acceso,
+    anioCache,
+    "propias",
+    user?.uid || "",
+  );
+  const asignaturasDocente = horarioCompartido.items;
+  useSyncExternalStore(observarCalificaciones, revisionCalificaciones);
+  const erroresCarga = erroresCalificaciones();
+  useEffect(() => {
+    if (acceso && anioCache) prepararCalificaciones(acceso, anioCache);
+  }, [acceso, anioCache]);
   const [selectedGradoId, setSelectedGradoId] = useState("");
   const [selectedGradoNombre, setSelectedGradoNombre] = useState("");
   const [selectedMateriaId, setSelectedMateriaId] = useState("");
@@ -422,6 +469,28 @@ export default function Calificaciones() {
     return grados;
   })();
   const gradoEfectivoId = selectedGradoId;
+  const claveNomina = claveConsultaEstudiantes(
+    acceso,
+    anioCache,
+    gradoEfectivoId || null,
+  );
+  const nomina = useSyncExternalStore(
+    observarEstudiantesCache,
+    useCallback(
+      () =>
+        gradoEfectivoId && panel !== 0
+          ? leerEstudiantesCache(claveNomina)
+          : null,
+      [claveNomina, gradoEfectivoId, panel],
+    ),
+  );
+  useEffect(() => {
+    if (gradoEfectivoId && panel !== 0) asegurarEstudiantesCache(claveNomina);
+  }, [gradoEfectivoId, panel, claveNomina]);
+  const estudiantes = useMemo(
+    () => nomina?.items.filter((e) => e.activo === true) || [],
+    [nomina],
+  );
   const gradoEfectivoNombre = selectedGradoNombre;
   const docenteSinGrados =
     userData?.role === "docente" &&
@@ -783,7 +852,8 @@ export default function Calificaciones() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
+          confirmColor:
+            options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((p) => ({ ...p, isOpen: false }));
@@ -941,83 +1011,26 @@ export default function Calificaciones() {
     );
   };
 
-  // ==================== CARGA ====================
-  useEffect(() => {
-    if (!user?.uid || !anioActivo?.id) return;
-    const q = query(
-      collection(db, "asignaturasDocente"),
-      where("docenteId", "==", user.uid),
-      where("anioLectivoId", "==", anioActivo.id),
-      where("activo", "==", true),
-    );
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setAsignaturasDocente(
-          snapshot.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
-          ),
-        );
-      },
-      (e) => console.error(e),
-    );
-    return () => unsubscribe();
-  }, [user?.uid, anioActivo?.id]);
-
-  const cargarActividades = useCallback(async (destrezaId: string) => {
-    try {
-      const q = query(
-        collection(db, "actividades"),
-        where("destrezaId", "==", destrezaId),
-        orderBy("fecha", "desc"),
-      );
-      const snap = await getDocs(q);
-      const data = snap.docs.map(
-        (d) => ({ id: d.id, ...d.data() }) as ActividadData,
-      );
-      cacheSet(`actividades_${destrezaId}`, data);
-      setActividades(data);
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
-  const cargarCalificaciones = useCallback(async (actividadId: string) => {
-    try {
-      const q = query(
-        collection(db, "calificaciones"),
-        where("actividadId", "==", actividadId),
-      );
-      const snap = await getDocs(q);
-      const map: Record<
-        string,
-        {
-          nota: string;
-          observacion: string;
-          refuerzo?: RefuerzoData | null;
-          docenteId?: string;
-          editadoPor?: string;
-        }
-      > = {};
-      snap.docs.forEach((d) => {
-        const c = d.data() as unknown as CalificacionData;
-        map[c.estudianteId] = {
-          nota:
-            typeof c.nota === "number"
-              ? String(round2(c.nota))
-              : String(c.nota ?? ""),
-          observacion: c.observacion || "",
-          refuerzo: c.refuerzo || null,
-          docenteId: c.docenteId,
-          editadoPor: c.editadoPor,
-        };
-      });
-      cacheSet(`calificaciones_${actividadId}`, map);
-      setCalificaciones(map);
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
+  // Las escrituras se reflejan mediante docChanges; estas esperas NO vuelven a consultar listas.
+  const capturarOperacion = () => {
+    const validar = capturarContextoCalificaciones(acceso, anioCache);
+    const comprobar = () => {
+      validar();
+      if (!pantallaVigente.current)
+        throw new Error("La pantalla de trabajo ya se cerró.");
+    };
+    comprobar();
+    return comprobar;
+  };
+  const validarNomina = () => {
+    const estado = leerEstudiantesCache(claveNomina);
+    if (estado.estado !== "listo" || estado.desdeCacheSDK)
+      throw new Error("Espera a que se sincronice la nómina antes de guardar.");
+  };
+  const cargarActividades = (id: string) =>
+    leerActividadesCalificaciones(acceso, anioCache, id);
+  const cargarCalificaciones = (id: string) =>
+    leerNotasCalificaciones(acceso, anioCache, [id]);
 
   // ✅ GUARDAR ASISTENCIA: un registro por estudiante POR HORA del scope
   const guardarAsistencia = async () => {
@@ -1040,6 +1053,8 @@ export default function Calificaciones() {
     const horas = horasAsistencia.length ? horasAsistencia : [1];
     setIsSaving(true);
     try {
+      const validarOperacion = capturarOperacion();
+      validarNomina();
       const anioLectivoId = anioActivo?.id || "";
       const periodoId = periodoActual?.id || "";
       const ambitoIdParaGuardar = esGradoInicialActual
@@ -1114,7 +1129,11 @@ export default function Calificaciones() {
           operaciones++;
         });
       });
-      if (operaciones > 0) await batch.commit();
+      if (operaciones > 0) {
+        validarOperacion();
+        await batch.commit();
+        validarOperacion();
+      }
       mostrarToast(
         "success",
         "Asistencia guardada",
@@ -1143,6 +1162,8 @@ export default function Calificaciones() {
     }
     setIsSaving(true);
     try {
+      const validarOperacion = capturarOperacion();
+      validarNomina();
       const datos = {
         tipo: actividadForm.tipo,
         detalle: actividadForm.detalle.trim(),
@@ -1163,9 +1184,11 @@ export default function Calificaciones() {
       };
       let id: string | null = null;
       if (editingActividadId) {
+        validarOperacion();
         await updateDoc(doc(db, "actividades", editingActividadId), datos);
         id = editingActividadId;
       } else {
+        validarOperacion();
         const r = await addDoc(collection(db, "actividades"), {
           ...datos,
           createdAt: serverTimestamp(),
@@ -1197,6 +1220,11 @@ export default function Calificaciones() {
         "No se pudo guardar la actividad.",
       );
     } finally {
+      invalidarNotasPanel();
+      if (selectedActividadId)
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
       setIsSaving(false);
     }
   };
@@ -1215,16 +1243,22 @@ export default function Calificaciones() {
     if (!ok) return;
     setIsSaving(true);
     try {
-      const snap = await getDocs(
-        query(
-          collection(db, "calificaciones"),
-          where("actividadId", "==", actividadId),
-        ),
-      );
+      const validarOperacion = capturarOperacion();
+      validarNomina();
+      const snap = await leerNotasCalificaciones(acceso, anioCache, [
+        actividadId,
+      ]);
       const batch = writeBatch(db);
       snap.docs.forEach((d) => batch.delete(d.ref));
       batch.delete(doc(db, "actividades", actividadId));
+      validarOperacion();
       await batch.commit();
+      validarOperacion();
+      invalidarNotasPanel();
+      if (selectedActividadId)
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
       mostrarToast(
         "success",
         "Actividad eliminada",
@@ -1267,6 +1301,8 @@ export default function Calificaciones() {
     }
     setIsConsolidando(true);
     try {
+      const validarOperacion = capturarOperacion();
+      validarNomina();
       const fuentes = consolidables.filter(
         (a) => a.id && consolidarSeleccionadas.includes(a.id),
       );
@@ -1290,11 +1326,10 @@ export default function Calificaciones() {
       const fuenteDe = new Map(fuentes.map((f) => [f.id!, f]));
       const acum: Record<string, { suma: number; conteo: number }> = {};
       for (let i = 0; i < ids.length; i += 30) {
-        const snap = await getDocs(
-          query(
-            collection(db, "calificaciones"),
-            where("actividadId", "in", ids.slice(i, i + 30)),
-          ),
+        const snap = await leerNotasCalificaciones(
+          acceso,
+          anioCache,
+          ids.slice(i, i + 30),
         );
         snap.docs.forEach((d) => {
           const c = d.data() as unknown as CalificacionData;
@@ -1366,9 +1401,15 @@ export default function Calificaciones() {
           updatedAt: serverTimestamp(),
         });
       });
+      validarOperacion();
       await batch.commit();
-      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
+      validarOperacion();
+      invalidarNotasPanel();
+      if (selectedActividadId)
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
       cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
+
       await cargarActividades(destrezaEfectivaId);
       mostrarToast(
         "success",
@@ -1428,25 +1469,30 @@ export default function Calificaciones() {
 
     setIsSaving(true);
     try {
+      const validarOperacion = capturarOperacion();
+      validarNomina();
       const batch = writeBatch(db);
 
       // 1. Eliminar las calificaciones generadas por este insumo
-      const calsSnap = await getDocs(
-        query(
-          collection(db, "calificaciones"),
-          where("actividadId", "==", insumoId),
-        ),
-      );
+      const calsSnap = await leerNotasCalificaciones(acceso, anioCache, [
+        insumoId,
+      ]);
       calsSnap.docs.forEach((d) => batch.delete(d.ref));
 
       // 2. Eliminar la actividad insumo
       batch.delete(doc(db, "actividades", insumoId));
 
+      validarOperacion();
       await batch.commit();
+      validarOperacion();
+      invalidarNotasPanel();
+      if (selectedActividadId)
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
 
       // Invalidar datos derivados y limpiar selección si estaba apuntando al insumo eliminado.
-      cacheInvalidate(`calificaciones_${insumoId}`);
-      cacheInvalidate(`calificacionesMatriz_${insumo.destrezaId}`);
+
       if (selectedActividadId === insumoId) {
         setSelectedActividadId("");
         setCalificaciones({});
@@ -1488,12 +1534,11 @@ export default function Calificaciones() {
     }
     setIsSaving(true);
     try {
-      const existentesSnap = await getDocs(
-        query(
-          collection(db, "calificaciones"),
-          where("actividadId", "==", selectedActividadId),
-        ),
-      );
+      const validarOperacion = capturarOperacion();
+      validarNomina();
+      const existentesSnap = await leerNotasCalificaciones(acceso, anioCache, [
+        selectedActividadId,
+      ]);
       const existentesMap = new Map<
         string,
         { id: string; data: CalificacionData }
@@ -1537,6 +1582,14 @@ export default function Calificaciones() {
           refuerzo: calificacion.refuerzo || existente?.data.refuerzo || null,
           updatedAt: serverTimestamp(),
         };
+        if (
+          existente &&
+          existente.data.nota === datos.nota &&
+          (existente.data.observacion || "") === datos.observacion &&
+          JSON.stringify(existente.data.refuerzo || null) ===
+            JSON.stringify(datos.refuerzo)
+        )
+          return;
         if (!existente) {
           batch.set(doc(collection(db, "calificaciones")), {
             ...datos,
@@ -1562,9 +1615,14 @@ export default function Calificaciones() {
         operaciones++;
       });
       if (operaciones > 0) {
+        validarOperacion();
         await batch.commit();
-        cacheInvalidate(`calificaciones_${selectedActividadId}`);
+        validarOperacion();
+        invalidarNotasPanel();
+        if (selectedActividadId)
+          cacheInvalidate(`calificaciones_${selectedActividadId}`);
         cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+        cacheInvalidate(`actividades_${destrezaEfectivaId}`);
       }
       mostrarToast(
         "success",
@@ -1598,12 +1656,13 @@ export default function Calificaciones() {
     }
     setIsSaving(true);
     try {
-      const snap = await getDocs(
-        query(
-          collection(db, "calificaciones"),
-          where("estudianteId", "==", refuerzoEstudianteId),
-          where("actividadId", "==", selectedActividadId),
-        ),
+      const validarOperacion = capturarOperacion();
+      validarNomina();
+      const snap = await leerNotasCalificaciones(
+        acceso,
+        anioCache,
+        [selectedActividadId],
+        refuerzoEstudianteId,
       );
       if (snap.empty) {
         mostrarToast(
@@ -1639,6 +1698,7 @@ export default function Calificaciones() {
           }),
         ),
       };
+      validarOperacion();
       await updateDoc(doc(db, "calificaciones", snap.docs[0].id), {
         refuerzo: refuerzoData,
         updatedAt: serverTimestamp(),
@@ -1646,7 +1706,7 @@ export default function Calificaciones() {
       mostrarToast("success", "Refuerzo aplicado", "Se aplicó correctamente.");
       setShowRefuerzoModal(false);
       setRefuerzoEstudianteId(null);
-      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+
       await cargarCalificaciones(selectedActividadId);
     } catch (e) {
       console.error(e);
@@ -1656,6 +1716,11 @@ export default function Calificaciones() {
         "No se pudo aplicar el refuerzo.",
       );
     } finally {
+      invalidarNotasPanel();
+      if (selectedActividadId)
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
       setIsSaving(false);
     }
   };
@@ -1671,8 +1736,18 @@ export default function Calificaciones() {
     }
     setGuardandoCelda(true);
     try {
-      const key = `${estudianteId}|${actividadId}`;
-      const calExistente = calificacionesMatriz[key];
+      const validarOperacion = capturarOperacion();
+      validarNomina();
+      const existentes = await leerNotasCalificaciones(
+        acceso,
+        anioCache,
+        [actividadId],
+        estudianteId,
+      );
+      const documento = existentes.docs[0];
+      const calExistente = documento
+        ? ({ ...documento.data(), id: documento.id } as CalificacionData)
+        : undefined;
       const act = actividadesMatriz.find((a) => a.id === actividadId);
       if (!act) return;
       if (act.esConsolidado) {
@@ -1715,11 +1790,13 @@ export default function Calificaciones() {
         return;
       }
       if (calExistente?.id) {
+        validarOperacion();
         await updateDoc(doc(db, "calificaciones", calExistente.id), {
           nota: round2(notaNum),
           updatedAt: serverTimestamp(),
         });
       } else {
+        validarOperacion();
         await addDoc(collection(db, "calificaciones"), {
           estudianteId,
           actividadId,
@@ -1728,17 +1805,6 @@ export default function Calificaciones() {
           createdAt: serverTimestamp(),
         });
       }
-      setCalificacionesMatriz((prev) => ({
-        ...prev,
-        [key]: {
-          ...calExistente,
-          estudianteId,
-          actividadId,
-          nota: round2(notaNum),
-        },
-      }));
-      cacheInvalidate(`calificaciones_${actividadId}`);
-      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
       setCeldaActiva(null);
       setNotaTemporal("");
     } catch (e) {
@@ -1749,6 +1815,11 @@ export default function Calificaciones() {
         "No se pudo guardar la calificación.",
       );
     } finally {
+      invalidarNotasPanel();
+      if (selectedActividadId)
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
+      cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
       setGuardandoCelda(false);
     }
   };
@@ -1873,6 +1944,8 @@ export default function Calificaciones() {
     }
     setIsSaving(true);
     try {
+      const validarOperacion = capturarOperacion();
+      validarNomina();
       const batch = writeBatch(db);
       cambios.forEach((c) => {
         const base = fichaBase[c.actividadId];
@@ -1907,8 +1980,15 @@ export default function Calificaciones() {
           });
         }
       });
+      validarOperacion();
       await batch.commit();
+      validarOperacion();
+      invalidarNotasPanel();
+      if (selectedActividadId)
+        cacheInvalidate(`calificaciones_${selectedActividadId}`);
       cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
+      cacheInvalidate(`actividades_${destrezaEfectivaId}`);
+
       mostrarToast(
         "success",
         "Ficha guardada",
@@ -2062,133 +2142,103 @@ export default function Calificaciones() {
   };
 
   // ==================== EFFECTS ====================
-  useEffect(() => {
-    if (!gradoEfectivoId || panel === 0) return;
-    const q = query(
-      collection(db, "estudiantes"),
-      where("gradoId", "==", gradoEfectivoId),
-      where("activo", "==", true),
-      orderBy("apellidos", "asc"),
-    );
-    return onSnapshot(
-      q,
-      (s) =>
-        setEstudiantes(
-          s.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
-        ),
-      (e) => console.error(e),
-    );
-  }, [gradoEfectivoId, panel]);
 
   useEffect(() => {
-    if (!destrezaEfectivaId || panel === 0) return;
-    let mounted = true;
-    (async () => {
-      const ck = `actividades_${destrezaEfectivaId}`;
-      const cached = cacheGet<ActividadData[]>(ck, TTL_ACTIVIDADES);
-      if (cached) {
-        if (mounted) setActividades(cached);
-        return;
-      }
-      try {
-        await cargarActividades(destrezaEfectivaId);
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [destrezaEfectivaId, panel, cargarActividades]);
+    if (!acceso || !anioCache || !destrezaEfectivaId || panel === 0) return;
+    return observarConsultaCalificaciones(
+      acceso,
+      anioCache,
+      "actividades",
+      destrezaEfectivaId,
+      (s) => {
+        setActividades(s.docs.map((d) => documentoConId<ActividadData>(d)));
+      },
+    );
+  }, [acceso, anioCache, destrezaEfectivaId, panel]);
 
   useEffect(() => {
-    if (!selectedActividadId || panel !== 2) {
-      if (panel === 2) {
-        const t = setTimeout(() => {
-          setCalificaciones({});
-          setAsistenciasDiaActividad({});
-        }, 0);
-        return () => clearTimeout(t);
-      }
+    if (!acceso || !anioCache || !selectedActividadId || panel !== 2) return;
+    // Conservar los campos editados localmente y actualizar los demás desde el servidor.
+    let anterior: typeof calificaciones = {};
+    let primeraEntrega = true;
+    const filas = new WeakMap<object, (typeof calificaciones)[string]>();
+    return observarConsultaCalificaciones(
+      acceso,
+      anioCache,
+      "calificaciones",
+      selectedActividadId,
+      (s) => {
+        const siguiente: typeof calificaciones = {};
+        s.docs.forEach((d) => {
+          const c = documentoConId<CalificacionData>(d);
+          const fila = filas.get(c) || {
+            nota:
+              typeof c.nota === "number"
+                ? String(round2(c.nota))
+                : String(c.nota ?? ""),
+            observacion: c.observacion || "",
+            refuerzo: c.refuerzo || null,
+            docenteId: c.docenteId,
+            editadoPor: c.editadoPor,
+          };
+          filas.set(c, fila);
+          siguiente[c.estudianteId] = fila;
+        });
+        const base = anterior;
+        const reemplazar = primeraEntrega;
+        primeraEntrega = false;
+        anterior = siguiente;
+        setCalificaciones((actual) => {
+          if (reemplazar) return siguiente;
+          return fusionarBorradorNotas(actual, base, siguiente);
+        });
+      },
+    );
+  }, [acceso, anioCache, selectedActividadId, panel]);
+
+  const idsMatriz = JSON.stringify(
+    actividadesVisibles
+      .map((a) => a.id)
+      .filter(Boolean)
+      .sort(),
+  );
+  useEffect(() => {
+    if (
+      !acceso ||
+      !anioCache ||
+      panel !== 2 ||
+      vistaCalificaciones !== "matriz"
+    )
       return;
-    }
-    let mounted = true;
-    (async () => {
-      const ck = `calificaciones_${selectedActividadId}`;
-      const cached = cacheGet<
-        Record<
-          string,
-          {
-            nota: string;
-            observacion: string;
-            refuerzo?: RefuerzoData | null;
-            docenteId?: string;
-            editadoPor?: string;
-          }
-        >
-      >(ck, TTL_CALIFICACIONES);
-      if (cached) {
-        if (mounted) setCalificaciones(cached);
-        return;
-      }
-      try {
-        await cargarCalificaciones(selectedActividadId);
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [selectedActividadId, panel, cargarCalificaciones]);
-
-  useEffect(() => {
-    if (panel !== 2 || vistaCalificaciones !== "matriz") return;
-    if (!destrezaEfectivaId || actividadesVisibles.length === 0) return;
-    let mounted = true;
-    (async () => {
-      const ck = `calificacionesMatriz_${destrezaEfectivaId}`;
-      const cached = cacheGet<Record<string, CalificacionData>>(
-        ck,
-        TTL_CALIFICACIONES,
-      );
-      if (cached) {
-        if (mounted) setCalificacionesMatriz(cached);
-        return;
-      }
-      setLoadingMatriz(true);
-      try {
-        const ids = actividadesVisibles
-          .map((a) => a.id)
-          .filter(Boolean) as string[];
-        const map: Record<string, CalificacionData> = {};
-        for (let i = 0; i < ids.length; i += 30) {
-          const snap = await getDocs(
-            query(
-              collection(db, "calificaciones"),
-              where("actividadId", "in", ids.slice(i, i + 30)),
-            ),
-          );
-          snap.docs.forEach((d) => {
-            const data = d.data() as unknown as CalificacionData;
-            map[`${data.estudianteId}|${data.actividadId}`] = {
-              id: d.id,
-              ...data,
-            };
+    const ids = JSON.parse(idsMatriz) as string[];
+    if (!ids.length) return;
+    const pendientes = new Set(ids);
+    const detener = ids.map((id) =>
+      observarConsultaCalificaciones(
+        acceso,
+        anioCache,
+        "calificaciones",
+        id,
+        (s, listo) => {
+          if (listo) pendientes.delete(id);
+          setLoadingMatriz(pendientes.size > 0);
+          setCalificacionesMatriz((prev) => {
+            const nuevo = Object.fromEntries(
+              Object.entries(prev).filter(
+                ([, c]) => ids.includes(c.actividadId) && c.actividadId !== id,
+              ),
+            );
+            s.docs.forEach((d) => {
+              const c = documentoConId<CalificacionData>(d);
+              nuevo[`${c.estudianteId}|${c.actividadId}`] = c;
+            });
+            return nuevo;
           });
-        }
-        cacheSet(ck, map);
-        if (mounted) setCalificacionesMatriz(map);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        if (mounted) setLoadingMatriz(false);
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [panel, vistaCalificaciones, destrezaEfectivaId, actividadesVisibles]);
+        },
+      ),
+    );
+    return () => detener.forEach((fn) => fn());
+  }, [acceso, anioCache, panel, vistaCalificaciones, idsMatriz]);
 
   const actividadesMatriz = [...actividadesVisibles]
     .filter((a): a is ActividadData & { id: string } => !!a.id)
@@ -2354,6 +2404,29 @@ export default function Calificaciones() {
 
   return (
     <Layout>
+      {(erroresCarga.length > 0 ||
+        horarioCompartido.error ||
+        nomina?.error) && (
+        <div
+          role="alert"
+          className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+        >
+          No se pudieron sincronizar todos los datos. Revisa tu conexión y
+          permisos.
+          <button
+            type="button"
+            className="ml-3 underline"
+            onClick={() => {
+              reintentarCalificaciones();
+              horarioCompartido.reintentar();
+              if (gradoEfectivoId)
+                asegurarEstudiantesCache(claveNomina, true);
+            }}
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
       {docenteSinGrados && (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3">
           <div className="flex items-start gap-2.5">
@@ -4629,9 +4702,7 @@ export default function Calificaciones() {
                       setActividadForm({
                         ...actividadForm,
                         dirigidaA: e.target.value as
-                          | "general"
-                          | "ambos"
-                          | "especial",
+                          "general" | "ambos" | "especial",
                       })
                     }
                     className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-xs text-[#374151] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20"

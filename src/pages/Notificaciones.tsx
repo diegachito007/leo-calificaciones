@@ -24,6 +24,7 @@ import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import { db } from "../lib/firebase";
 import type { Estudiante } from "../types";
+import { cargarCacheNotificaciones } from "../utils/notificacionesCache";
 import {
   fechaLimiteISO,
   generarPdfNotificacion,
@@ -196,61 +197,67 @@ export default function Notificaciones() {
     if (!uid || !anioActivo?.id) return;
     let vivo = true;
     const anio = anioActivo.id;
-    void (async () => {
-      try {
-        const asignadas = await getDocs(
+    const rol = userData?.role || "";
+    const gradosActivos = grados
+      .filter((g) => g.anioLectivoId === anio && g.activo)
+      .map((g) => g.id)
+      .sort();
+    const clave = JSON.stringify([uid, anio, rol, gradosActivos]);
+
+    void cargarCacheNotificaciones(clave, async () => {
+      const asignadas = await getDocs(
+        query(
+          collection(db, "asignaturasDocente"),
+          where("docenteId", "==", uid),
+          where("anioLectivoId", "==", anio),
+          where("activo", "==", true),
+        ),
+      );
+      const ids = new Set<string>(
+        asignadas.docs.map((d) => d.data().gradoId as string),
+      );
+      if (rol === "super_admin") {
+        grados
+          .filter((g) => g.anioLectivoId === anio && g.activo)
+          .forEach((g) => ids.add(g.id));
+      }
+      const gradoIds = Array.from(ids).filter((id) =>
+        grados.some((g) => g.id === id && g.anioLectivoId === anio),
+      );
+      const items: Estudiante[] = [];
+      for (let i = 0; i < gradoIds.length; i += 10) {
+        const snap = await getDocs(
           query(
-            collection(db, "asignaturasDocente"),
-            where("docenteId", "==", uid),
-            where("anioLectivoId", "==", anio),
+            collection(db, "estudiantes"),
+            where("gradoId", "in", gradoIds.slice(i, i + 10)),
             where("activo", "==", true),
           ),
         );
-        const ids = new Set<string>(
-          asignadas.docs.map((d) => d.data().gradoId as string),
-        );
-        if (userData?.role === "super_admin")
-          grados
-            .filter((g) => g.anioLectivoId === anio && g.activo)
-            .forEach((g) => ids.add(g.id));
-        const gradoIds = Array.from(ids).filter((id) =>
-          grados.some((g) => g.id === id && g.anioLectivoId === anio),
-        );
-        const items: Estudiante[] = [];
-        for (let i = 0; i < gradoIds.length; i += 10) {
-          const snap = await getDocs(
-            query(
-              collection(db, "estudiantes"),
-              where("gradoId", "in", gradoIds.slice(i, i + 10)),
-              where("activo", "==", true),
-            ),
-          );
-          snap.docs.forEach((d) => {
-            const e = { ...d.data(), id: d.id } as Estudiante;
-            if (e.anioLectivoId === anio) items.push(e);
-          });
-        }
-        if (vivo)
-          setAlumnos({
-            uid,
-            anio,
-            items: items.sort((a, b) =>
-              `${a.apellidos} ${a.nombres}`.localeCompare(
-                `${b.apellidos} ${b.nombres}`,
-              ),
-            ),
-          });
-      } catch {
+        snap.docs.forEach((d) => {
+          const e = { ...d.data(), id: d.id } as Estudiante;
+          if (e.anioLectivoId === anio) items.push(e);
+        });
+      }
+      return items.sort((a, b) =>
+        `${a.apellidos} ${a.nombres}`.localeCompare(
+          `${b.apellidos} ${b.nombres}`,
+        ),
+      );
+    })
+      .then((items) => {
+        if (vivo) setAlumnos({ uid, anio, items });
+      })
+      .catch(() => {
         if (vivo)
           setError(
             "No se pudieron cargar los estudiantes para atención sin notificación. Revisa conexión y permisos.",
           );
-      }
-    })();
+      });
+
     return () => {
       vivo = false;
     };
-  }, [uid, anioActivo?.id, userData, grados]);
+  }, [uid, anioActivo?.id, userData?.role, grados]);
   useEffect(() => {
     if (!uid || !sel || !verCambios) return;
     return onSnapshot(

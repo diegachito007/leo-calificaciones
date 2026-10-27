@@ -15,6 +15,10 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { auth, googleProvider, db } from "../lib/firebase";
+import { configurarAccesoReporteNotas } from "../utils/reporteNotasCache";
+import { configurarAccesoCalificaciones } from "../utils/calificacionesCache";
+import { configurarAccesoPanel } from "../utils/panelCache";
+import { configurarAccesoEstudiantes } from "../utils/estudiantesCache";
 import type { AppUser } from "../types";
 
 interface AuthContextType {
@@ -58,6 +62,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       unsubscribeProfile = undefined;
 
       setUser(firebaseUser);
+      configurarAccesoEstudiantes();
+      configurarAccesoPanel();
+      configurarAccesoCalificaciones();
+      configurarAccesoReporteNotas();
       setUserData(null);
       setLoading(Boolean(firebaseUser));
 
@@ -72,7 +80,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         profileTimer = setTimeout(() => {
           if (!isCurrentSession()) return;
-          setAuthError("No se pudo verificar el perfil a tiempo. Revisa tu conexión y reintenta.");
+          setAuthError(
+            "No se pudo verificar el perfil a tiempo. Revisa tu conexión y reintenta.",
+          );
           setLoading(false);
         }, 20000);
 
@@ -98,7 +108,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
                 nombreDocumento: "",
                 createdAt: serverTimestamp(),
               });
-
             }
           });
 
@@ -112,20 +121,42 @@ export function AuthProvider({ children }: AuthProviderProps) {
             (snapshot) => {
               if (!isCurrentSession()) return;
               // No autorizar navegación a partir de un rol/estado antiguo en caché.
-              if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
+              if (
+                snapshot.metadata.fromCache ||
+                snapshot.metadata.hasPendingWrites
+              )
+                return;
               clearTimeout(profileTimer);
               setAuthError(null);
 
               if (snapshot.exists()) {
                 const data = snapshot.data();
-                if (!['pending', 'active', 'rejected', 'blocked', 'deleted'].includes(data.status)
-                    || !['docente', 'super_admin'].includes(data.role)) {
+                if (
+                  ![
+                    "pending",
+                    "active",
+                    "rejected",
+                    "blocked",
+                    "deleted",
+                  ].includes(data.status) ||
+                  !["docente", "super_admin"].includes(data.role)
+                ) {
+                  configurarAccesoEstudiantes();
+                  configurarAccesoPanel();
+                  configurarAccesoCalificaciones();
+                  configurarAccesoReporteNotas();
                   setUserData(null);
-                  setAuthError("El perfil tiene un rol o estado no válido. Contacta al administrador.");
+                  setAuthError(
+                    "El perfil tiene un rol o estado no válido. Contacta al administrador.",
+                  );
                   setLoading(false);
                   return;
                 }
 
+                configurarAccesoEstudiantes(firebaseUser.uid, data);
+                configurarAccesoPanel(firebaseUser.uid, data);
+                configurarAccesoCalificaciones(firebaseUser.uid, data);
+                configurarAccesoReporteNotas(firebaseUser.uid, data);
                 setUserData({
                   uid: firebaseUser.uid,
                   email: firebaseUser.email ?? "",
@@ -140,7 +171,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
                   createdAt: data.createdAt || new Date().toISOString(),
                 });
               } else {
-                setAuthError("No existe el perfil. Contacta al administrador; no se recreará durante esta sesión.");
+                setAuthError(
+                  "No existe el perfil. Contacta al administrador; no se recreará durante esta sesión.",
+                );
+                configurarAccesoEstudiantes();
+                configurarAccesoPanel();
+                configurarAccesoCalificaciones();
+                configurarAccesoReporteNotas();
                 setUserData(null);
               }
 
@@ -150,7 +187,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
               if (!isCurrentSession()) return;
 
               clearTimeout(profileTimer);
-              setAuthError("No se pudo consultar tu perfil. Reintenta o contacta al administrador.");
+              setAuthError(
+                "No se pudo consultar tu perfil. Reintenta o contacta al administrador.",
+              );
               console.error("Error al escuchar el perfil:", {
                 code: error.code,
                 message: error.message,
@@ -158,6 +197,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
                 projectId: db.app.options.projectId,
               });
 
+              configurarAccesoEstudiantes();
+              configurarAccesoPanel();
+              configurarAccesoCalificaciones();
+              configurarAccesoReporteNotas();
               setUserData(null);
               setLoading(false);
             },
@@ -166,13 +209,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
           if (!isCurrentSession()) return;
 
           clearTimeout(profileTimer);
-          setAuthError("No se pudo verificar tu perfil en el servidor. Comprueba tu conexión y los permisos.");
+          setAuthError(
+            "No se pudo verificar tu perfil en el servidor. Comprueba tu conexión y los permisos.",
+          );
           console.error(`Error al ${operation}:`, {
             error,
             path: userRef.path,
             projectId: db.app.options.projectId,
           });
 
+          configurarAccesoEstudiantes();
+          configurarAccesoPanel();
+          configurarAccesoCalificaciones();
+          configurarAccesoReporteNotas();
           setUserData(null);
           setLoading(false);
         }
@@ -185,6 +234,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       disposed = true;
       clearTimeout(profileTimer);
       sessionVersion++;
+      configurarAccesoEstudiantes();
+      configurarAccesoPanel();
+      configurarAccesoCalificaciones();
+      configurarAccesoReporteNotas();
       unsubscribeAuth();
       unsubscribeProfile?.();
     };

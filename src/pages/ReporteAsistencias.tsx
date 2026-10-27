@@ -7,7 +7,6 @@ import {
   serverTimestamp,
   getDocs,
   Timestamp,
-  onSnapshot,
   writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
@@ -15,6 +14,16 @@ import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { Estudiante, Ambito, Destreza } from "../types";
 import Layout from "../components/Layout";
+import { claveAccesoEstudiantes } from "../utils/estudiantesCache";
+import { useHorarioPanel } from "../utils/panelCache";
+import {
+  cargarCacheReporteAsistencias,
+  cargarNominaReporteAsistencias,
+  claveCacheReporteAsistencias,
+  configurarContextoReporteAsistencias,
+  invalidarCacheReporteAsistencias,
+  parchearCacheReporteAsistencias,
+} from "../utils/reporteAsistenciasCache";
 import {
   FaUserCheck,
   FaUserTimes,
@@ -294,12 +303,7 @@ const abrevMateria = (nombre: string): string => {
 export default function ReporteAsistencias() {
   const { user, userData } = useAuth();
   const { grados, ambitos, destrezas, periodos, anioActivo, ready } = useData();
-  // ✅ Caché en memoria: 1 sola lectura por rango, sin relecturas al navegar
-  const cacheAsistencias = useRef<Map<string, AsistenciaData[]>>(new Map());
-
-  const [asignaturasDocente, setAsignaturasDocente] = useState<
-    AsignaturaDocente[]
-  >([]);
+  const [revisionRefresco, setRevisionRefresco] = useState(0);
   const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
   const [asistencias, setAsistencias] = useState<AsistenciaData[]>([]);
   const [loadingEstudiantes, setLoadingEstudiantes] = useState(true);
@@ -344,30 +348,22 @@ export default function ReporteAsistencias() {
   const [showLeyenda, setShowLeyenda] = useState(false);
   const periodoInicializado = useRef(false);
 
-  // ✅ Primitiva estable (evita preserve-manual-memoization del React Compiler)
+  // Comparte el contexto de acceso/año y reutiliza la escucha de asignaturas
+  // que ya administra panelCache (Dashboard/MiHorario).
   const userUid = user?.uid;
+  const accesoCache = claveAccesoEstudiantes(userUid, userData);
+  const anioCache = anioActivo?.id || "";
+  const horarioPropio = useHorarioPanel(
+    accesoCache,
+    anioCache,
+    "propias",
+    userUid || "",
+  );
+  const asignaturasDocente = horarioPropio.items as AsignaturaDocente[];
 
   useEffect(() => {
-    if (!userUid || !anioActivo?.id) return;
-    const q = query(
-      collection(db, "asignaturasDocente"),
-      where("docenteId", "==", userUid),
-      where("anioLectivoId", "==", anioActivo.id),
-      where("activo", "==", true),
-    );
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setAsignaturasDocente(
-          snapshot.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
-          ),
-        );
-      },
-      (error) => console.error("Error escuchando asignaturas:", error),
-    );
-    return () => unsubscribe();
-  }, [userUid, anioActivo?.id]);
+    configurarContextoReporteAsistencias(accesoCache, anioCache);
+  }, [accesoCache, anioCache]);
 
   const esTutor = (userData?.tutorDe?.length ?? 0) > 0;
 
@@ -432,52 +428,71 @@ export default function ReporteAsistencias() {
   useEffect(() => {
     if (!ready) return;
     const gradosPermitidos = [
-      ...gradosTutor.map((g) => g.id),
-      ...gradosDocente.map((g) => g.id),
-    ];
+      ...new Set([
+        ...gradosTutor.map((g) => g.id),
+        ...gradosDocente.map((g) => g.id),
+      ]),
+    ].sort();
     let isMounted = true;
     const fetchEstudiantes = async () => {
       if (isMounted) setLoadingEstudiantes(true);
-      if (gradosPermitidos.length === 0) {
+      if (!accesoCache || !anioCache || gradosPermitidos.length === 0) {
         if (isMounted) {
           setEstudiantes([]);
           setLoadingEstudiantes(false);
         }
         return;
       }
+      const claveNomina = JSON.stringify([
+        accesoCache,
+        anioCache,
+        "nomina-activa",
+        gradosPermitidos,
+      ]);
       try {
-        const chunks: string[][] = [];
-        for (let i = 0; i < gradosPermitidos.length; i += 10)
-          chunks.push(gradosPermitidos.slice(i, i + 10));
-        const todos: Estudiante[] = [];
-        for (const chunk of chunks) {
-          const q = query(
-            collection(db, "estudiantes"),
-            where("activo", "==", true),
-            where("gradoId", "in", chunk),
-          );
-          const snap = await getDocs(q);
-          todos.push(
-            ...snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
-          );
-        }
-        if (isMounted) {
-          todos.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
-          setEstudiantes(todos);
-        }
+        const todos = await cargarNominaReporteAsistencias<Estudiante>(
+          claveNomina,
+          async () => {
+            const chunks: string[][] = [];
+            for (let i = 0; i < gradosPermitidos.length; i += 10)
+              chunks.push(gradosPermitidos.slice(i, i + 10));
+            const resultado: Estudiante[] = [];
+            for (const chunk of chunks) {
+              const q = query(
+                collection(db, "estudiantes"),
+                where("activo", "==", true),
+                where("gradoId", "in", chunk),
+              );
+              const snap = await getDocs(q);
+              resultado.push(
+                ...snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
+              );
+            }
+            resultado.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+            return resultado;
+          },
+        );
+        if (isMounted) setEstudiantes(todos);
       } catch (error) {
-        console.error("Error cargando estudiantes:", error);
+        console.error("Error cargando estudiantes del reporte:", error);
+        if (isMounted)
+          mostrarToast(
+            "error",
+            "No se pudo cargar la nómina",
+            "Comprueba tu conexión y vuelve a entrar al reporte.",
+          );
       } finally {
         if (isMounted) setLoadingEstudiantes(false);
       }
     };
-    fetchEstudiantes();
+    void fetchEstudiantes();
     return () => {
       isMounted = false;
     };
-  }, [ready, gradosTutor, gradosDocente]);
+  }, [ready, gradosTutor, gradosDocente, accesoCache, anioCache, mostrarToast]);
 
-  // ✅ Carga con caché (getDocs una vez por rango; sin onSnapshot para no gastar lecturas)
+  // Carga histórica con caché compartida entre montajes, deduplicación de promesas
+  // y clave aislada por cuenta, permisos, año, vista, grado, fechas y tipo de reporte.
   useEffect(() => {
     const gradoEfectivo =
       vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
@@ -497,68 +512,28 @@ export default function ReporteAsistencias() {
     }
 
     const fetchAsistencias = async () => {
-      if (vistaEfectiva === "docente") {
-        if (!userUid || fechasAFiltrar.length === 0) {
-          if (isMounted) setAsistencias([]);
-          return;
-        }
-        const cacheKey = `${tipoReporte}|docente|${userUid}|${fechasAFiltrar.join(",")}`;
-        if (cacheAsistencias.current.has(cacheKey)) {
-          if (isMounted)
-            setAsistencias(cacheAsistencias.current.get(cacheKey)!);
-          return;
-        }
-        const normalizarDocs = (
-          docs: { id: string; data: () => Record<string, unknown> }[],
-        ): AsistenciaData[] =>
-          docs.map((d) => {
-            const raw = d.data();
-            const estadoNormalizado = normalizarEstado(
-              raw.estado as string | undefined,
-              raw.v2 as boolean | undefined,
-            );
-            return {
-              ...(raw as Record<string, unknown>),
-              id: d.id,
-              estado: estadoNormalizado || (raw.estado as string),
-            } as AsistenciaData;
-          });
-        const todas: AsistenciaData[] = [];
-        if (fechasAFiltrar.length <= 30) {
-          const q = query(
-            collection(db, "asistencias"),
-            where("registradoPor", "==", userUid),
-            where("fecha", "in", fechasAFiltrar),
-          );
-          const snap = await getDocs(q);
-          todas.push(...normalizarDocs(snap.docs));
-        } else {
-          for (let i = 0; i < fechasAFiltrar.length; i += 30) {
-            const chunk = fechasAFiltrar.slice(i, i + 30);
-            const q = query(
-              collection(db, "asistencias"),
-              where("registradoPor", "==", userUid),
-              where("fecha", "in", chunk),
-            );
-            const snap = await getDocs(q);
-            todas.push(...normalizarDocs(snap.docs));
-          }
-        }
-        if (isMounted) {
-          cacheAsistencias.current.set(cacheKey, todas);
-          setAsistencias(todas);
-        }
-        return;
-      }
-      if (!gradoEfectivo || fechasAFiltrar.length === 0) {
+      if (!accesoCache || !anioCache || fechasAFiltrar.length === 0) {
         if (isMounted) setAsistencias([]);
         return;
       }
-      const cacheKey = `${tipoReporte}|${gradoEfectivo}|${fechasAFiltrar.join(",")}`;
-      if (cacheAsistencias.current.has(cacheKey)) {
-        if (isMounted) setAsistencias(cacheAsistencias.current.get(cacheKey)!);
+      if (vistaEfectiva === "docente" && !userUid) {
+        if (isMounted) setAsistencias([]);
         return;
       }
+      if (vistaEfectiva === "tutor" && !gradoEfectivo) {
+        if (isMounted) setAsistencias([]);
+        return;
+      }
+
+      const cacheKey = claveCacheReporteAsistencias({
+        acceso: accesoCache,
+        anio: anioCache,
+        vista: vistaEfectiva,
+        uid: userUid || "",
+        tipo: tipoReporte,
+        grado: vistaEfectiva === "tutor" ? gradoEfectivo : "todos-del-docente",
+        fechas: fechasAFiltrar,
+      });
       const normalizarDocs = (
         docs: { id: string; data: () => Record<string, unknown> }[],
       ): AsistenciaData[] =>
@@ -574,33 +549,36 @@ export default function ReporteAsistencias() {
             estado: estadoNormalizado || (raw.estado as string),
           } as AsistenciaData;
         });
-      const todas: AsistenciaData[] = [];
-      if (fechasAFiltrar.length <= 30) {
-        const q = query(
-          collection(db, "asistencias"),
-          where("gradoId", "==", gradoEfectivo),
-          where("fecha", "in", fechasAFiltrar),
+
+      try {
+        const todas = await cargarCacheReporteAsistencias<AsistenciaData>(
+          cacheKey,
+          async () => {
+            const resultado: AsistenciaData[] = [];
+            for (let i = 0; i < fechasAFiltrar.length; i += 30) {
+              const chunk = fechasAFiltrar.slice(i, i + 30);
+              const filtros = vistaEfectiva === "docente"
+                ? [where("registradoPor", "==", userUid), where("fecha", "in", chunk)]
+                : [where("gradoId", "==", gradoEfectivo), where("fecha", "in", chunk)];
+              const q = query(collection(db, "asistencias"), ...filtros);
+              const snap = await getDocs(q);
+              resultado.push(...normalizarDocs(snap.docs));
+            }
+            return resultado;
+          },
         );
-        const snap = await getDocs(q);
-        todas.push(...normalizarDocs(snap.docs));
-      } else {
-        for (let i = 0; i < fechasAFiltrar.length; i += 30) {
-          const chunk = fechasAFiltrar.slice(i, i + 30);
-          const q = query(
-            collection(db, "asistencias"),
-            where("gradoId", "==", gradoEfectivo),
-            where("fecha", "in", chunk),
+        if (isMounted) setAsistencias(todas);
+      } catch (error) {
+        console.error("Error cargando reporte de asistencias:", error);
+        if (isMounted)
+          mostrarToast(
+            "error",
+            "No se pudo cargar la asistencia",
+            "Comprueba tu conexión o permisos y pulsa Refrescar para reintentar.",
           );
-          const snap = await getDocs(q);
-          todas.push(...normalizarDocs(snap.docs));
-        }
-      }
-      if (isMounted) {
-        cacheAsistencias.current.set(cacheKey, todas);
-        setAsistencias(todas);
       }
     };
-    fetchAsistencias();
+    void fetchAsistencias();
     return () => {
       isMounted = false;
     };
@@ -615,6 +593,10 @@ export default function ReporteAsistencias() {
     gradoTutorEfectivo,
     gradoDocenteEfectivo,
     userUid,
+    accesoCache,
+    anioCache,
+    revisionRefresco,
+    mostrarToast,
   ]);
 
   const cambiarSemana = (offset: number) => {
@@ -657,19 +639,24 @@ export default function ReporteAsistencias() {
           periodo.fechaFin,
         ).map(formatFechaISO);
     }
-    if (fechasAFiltrar.length === 0) return;
-    if (vistaEfectiva === "tutor") {
-      if (!gradoTutorEfectivo) return;
-      cacheAsistencias.current.delete(
-        `${tipoReporte}|${gradoTutorEfectivo}|${fechasAFiltrar.join(",")}`,
-      );
-    } else {
-      if (!userUid) return;
-      cacheAsistencias.current.delete(
-        `${tipoReporte}|docente|${userUid}|${fechasAFiltrar.join(",")}`,
-      );
-    }
+    if (fechasAFiltrar.length === 0 || !accesoCache || !anioCache) return;
+    const gradoEfectivo = vistaEfectiva === "tutor"
+      ? gradoTutorEfectivo
+      : gradoDocenteEfectivo;
+    if (vistaEfectiva === "tutor" && !gradoEfectivo) return;
+    if (vistaEfectiva === "docente" && !userUid) return;
+    const cacheKey = claveCacheReporteAsistencias({
+      acceso: accesoCache,
+      anio: anioCache,
+      vista: vistaEfectiva,
+      uid: userUid || "",
+      tipo: tipoReporte,
+      grado: vistaEfectiva === "tutor" ? gradoEfectivo : "todos-del-docente",
+      fechas: fechasAFiltrar,
+    });
+    invalidarCacheReporteAsistencias(cacheKey);
     setAsistencias([]);
+    setRevisionRefresco((v) => v + 1);
     mostrarToast(
       "info",
       "Refrescando datos",
@@ -681,12 +668,7 @@ export default function ReporteAsistencias() {
   // ✅ Parche optimista local: actualiza estado + caché SIN consultar Firebase
   const parchearAsistenciasLocales = useCallback(
     (cambios: Record<string, Partial<AsistenciaData>>) => {
-      cacheAsistencias.current.forEach((docs, key) => {
-        cacheAsistencias.current.set(
-          key,
-          docs.map((d) => (cambios[d.id] ? { ...d, ...cambios[d.id] } : d)),
-        );
-      });
+      parchearCacheReporteAsistencias<AsistenciaData>(cambios);
       setAsistencias((prev) =>
         prev.map((a) => (cambios[a.id] ? { ...a, ...cambios[a.id] } : a)),
       );
@@ -1828,7 +1810,6 @@ export default function ReporteAsistencias() {
     ? siguienteNumeroActa(estudianteActaId)
     : 1;
   const fugasRegistradas = registrosFugas.filter((f) => f.representanteAsistio);
-
   return (
     <Layout>
       {/* ============ ENCABEZADO + TOOLBAR COMPACTA ============ */}

@@ -2,7 +2,8 @@ import {
   useState,
   useEffect,
   useCallback,
-  startTransition,
+  useSyncExternalStore,
+  useRef,
   useMemo,
 } from "react";
 import { useAuth } from "../context/AuthContext";
@@ -19,7 +20,21 @@ import {
 } from "firebase/firestore";
 import type { Query } from "firebase/firestore";
 import { db } from "../lib/firebase";
-import type { Grado, AnioLectivo } from "../types";
+import { useData } from "../context/DataContext";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+} from "../utils/estudiantesCache";
+import {
+  useHorarioPanel,
+  observarPanel,
+  leerRevisionNotasPanel,
+  leerUnaVezPanel,
+  contextoPanelVigente,
+  prepararPanel,
+} from "../utils/panelCache";
 import Layout from "../components/Layout";
 import {
   FaGraduationCap,
@@ -94,9 +109,24 @@ const MODULE_ACCENTS = [
 export default function Dashboard() {
   const { user, userData } = useAuth();
   const navigate = useNavigate();
-  const [grados, setGrados] = useState<Grado[]>([]);
-  const [anioActivoId, setAnioActivoId] = useState<string | null>(null);
-  const [stats, setStats] = useState({
+  const {
+    grados: todosGrados,
+    anioActivo,
+    aniosLectivos,
+    ambitos,
+    ready,
+  } = useData();
+  const anioActivoId = anioActivo?.id || "";
+  const acceso = claveAccesoEstudiantes(user?.uid, userData);
+  const asignadosKey = JSON.stringify(
+    [...new Set(userData?.gradosAsignados || [])].sort(),
+  );
+  const [conteosEstudiantes, setConteosEstudiantes] = useState<
+    Record<string, number>
+  >({});
+  const [errorStats, setErrorStats] = useState("");
+  const solicitudStats = useRef(0);
+  const [statsBase, setStats] = useState({
     aniosActivos: 0,
     gradosActivos: 0,
     estudiantesActivos: 0,
@@ -120,8 +150,68 @@ export default function Dashboard() {
       return false;
     }
   });
-  const [horasHoy, setHorasHoy] = useState(0);
-  const [materiasCount, setMateriasCount] = useState(0);
+  const grados = useMemo(
+    () =>
+      todosGrados.filter(
+        (g) =>
+          g.anioLectivoId === anioActivoId &&
+          (activeRole !== "docente" ||
+            (JSON.parse(asignadosKey) as string[]).includes(g.id)),
+      ),
+    [todosGrados, anioActivoId, activeRole, asignadosKey],
+  );
+  const propias = useHorarioPanel(
+    acceso,
+    anioActivoId,
+    "propias",
+    activeRole === "docente" ? user?.uid || "" : "",
+  );
+  const [dia, setDia] = useState(() => new Date().getDay());
+  useEffect(() => {
+    const timer = window.setInterval(() => setDia(new Date().getDay()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const horasHoy = propias.items.reduce(
+    (total, a) =>
+      total +
+      (a.horario || [])
+        .filter((b) => b.dia === dia)
+        .reduce((n, b) => n + b.horas.length, 0),
+    0,
+  );
+  const materiasCount = propias.items.length;
+  const totalEstudiantes = useSyncExternalStore(
+    observarEstudiantesCache,
+    useCallback(() => {
+      if (activeRole !== "docente") {
+        const cache = leerEstudiantesCache(
+          claveConsultaEstudiantes(acceso, anioActivoId, null),
+        );
+        return cache.estado === "listo"
+          ? cache.items.filter((e) => e.activo).length
+          : statsBase.estudiantesActivos;
+      }
+      return grados.reduce((total, g) => {
+        const cache = leerEstudiantesCache(
+          claveConsultaEstudiantes(acceso, anioActivoId, g.id),
+        );
+        return (
+          total +
+          (cache.estado === "listo"
+            ? cache.items.filter((e) => e.activo).length
+            : conteosEstudiantes[g.id] || 0)
+        );
+      }, 0);
+    }, [
+      acceso,
+      anioActivoId,
+      activeRole,
+      grados,
+      conteosEstudiantes,
+      statsBase.estudiantesActivos,
+    ]),
+  );
+  const stats = { ...statsBase, estudiantesActivos: totalEstudiantes };
   const [mantenimiento, setMantenimiento] = useState(false);
   const [mantenimientoListo, setMantenimientoListo] = useState(false);
   const [guardandoMantenimiento, setGuardandoMantenimiento] = useState(false);
@@ -129,18 +219,30 @@ export default function Dashboard() {
   const isSuperAdmin = userData?.role === "super_admin";
   useEffect(() => {
     if (!isSuperAdmin || activeRole !== "super_admin") return;
-    return onSnapshot(doc(db, "configuracion", "sistema"), (snapshot) => {
-      setMantenimiento(snapshot.data()?.mantenimiento === true);
-      setMantenimientoListo(true);
-      setErrorMantenimiento("");
-    }, (error) => {
-      console.error("Error leyendo mantenimiento:", error);
-      setMantenimientoListo(false);
-      setErrorMantenimiento("No se pudo consultar el estado de mantenimiento.");
-    });
+    return onSnapshot(
+      doc(db, "configuracion", "sistema"),
+      (snapshot) => {
+        setMantenimiento(snapshot.data()?.mantenimiento === true);
+        setMantenimientoListo(true);
+        setErrorMantenimiento("");
+      },
+      (error) => {
+        console.error("Error leyendo mantenimiento:", error);
+        setMantenimientoListo(false);
+        setErrorMantenimiento(
+          "No se pudo consultar el estado de mantenimiento.",
+        );
+      },
+    );
   }, [isSuperAdmin, activeRole]);
   const cambiarMantenimiento = async () => {
-    if (!isSuperAdmin || activeRole !== "super_admin" || !mantenimientoListo || guardandoMantenimiento) return;
+    if (
+      !isSuperAdmin ||
+      activeRole !== "super_admin" ||
+      !mantenimientoListo ||
+      guardandoMantenimiento
+    )
+      return;
     setGuardandoMantenimiento(true);
     setErrorMantenimiento("");
     const nuevoEstado = !mantenimiento;
@@ -148,15 +250,23 @@ export default function Dashboard() {
       await runTransaction(db, async (transaction) => {
         const referencia = doc(db, "configuracion", "sistema");
         const snapshot = await transaction.get(referencia);
-        transaction.set(referencia, {
-          mantenimiento: nuevoEstado,
-          ...(!snapshot.exists() ? { tituloMantenimiento: "", mensajeMantenimiento: "" } : {}),
-        }, { merge: true });
+        transaction.set(
+          referencia,
+          {
+            mantenimiento: nuevoEstado,
+            ...(!snapshot.exists()
+              ? { tituloMantenimiento: "", mensajeMantenimiento: "" }
+              : {}),
+          },
+          { merge: true },
+        );
       });
       setMantenimiento(nuevoEstado);
     } catch (error) {
       console.error("Error cambiando mantenimiento:", error);
-      setErrorMantenimiento("No se pudo cambiar el mantenimiento. Intenta nuevamente.");
+      setErrorMantenimiento(
+        "No se pudo cambiar el mantenimiento. Intenta nuevamente.",
+      );
     } finally {
       setGuardandoMantenimiento(false);
     }
@@ -195,70 +305,32 @@ export default function Dashboard() {
     setShowRoleDialog(false);
   };
   useEffect(() => {
-    const cargarConfiguracion = async () => {
+    // El aviso institucional solamente se muestra al administrador.
+    if (!ready || !acceso || !anioActivoId || activeRole !== "super_admin")
+      return;
+    let vigente = true;
+    const cargar = async () => {
       try {
-        const configSnap = await getDocs(
+        // La vista administrativa conserva su lectura al entrar para reflejar
+        // cambios de Configuración Institucional, todavía fuera de esta etapa.
+        const snap = await getDocs(
           collection(db, "configuracionInstitucional"),
         );
-        if (!configSnap.empty) {
-          const data = configSnap.docs[0].data() as InstitutionData;
-          setInstitutionData(data);
-        }
+        const data = snap.empty
+          ? null
+          : (snap.docs[0].data() as InstitutionData);
+        if (vigente) setInstitutionData(data);
       } catch (error) {
         console.error("Error cargando configuración institucional:", error);
       } finally {
-        setLoadingInstitution(false);
+        if (vigente) setLoadingInstitution(false);
       }
     };
-    cargarConfiguracion();
-  }, []);
-  useEffect(() => {
-    if (!activeRole) return;
-    const cargarDatos = async () => {
-      try {
-        const qAnios = query(
-          collection(db, "aniosLectivos"),
-          where("activo", "==", true),
-        );
-        const snapAnios = await getDocs(qAnios);
-        const aniosData = snapAnios.docs.map(
-          (doc) => ({ id: doc.id, ...doc.data() }) as AnioLectivo,
-        );
-        if (aniosData.length > 0) {
-          const anioActivo = aniosData[0];
-          setAnioActivoId(anioActivo.id);
-          let qGrados: Query;
-          if (
-            activeRole === "docente" &&
-            userData?.gradosAsignados &&
-            userData.gradosAsignados.length > 0
-          ) {
-            qGrados = query(
-              collection(db, "grados"),
-              where("anioLectivoId", "==", anioActivo.id),
-              where("__name__", "in", userData.gradosAsignados),
-              where("activo", "==", true),
-            );
-          } else {
-            qGrados = query(
-              collection(db, "grados"),
-              where("anioLectivoId", "==", anioActivo.id),
-              where("activo", "==", true),
-            );
-          }
-          const snapGrados = await getDocs(qGrados);
-          setGrados(
-            snapGrados.docs.map(
-              (doc) => ({ id: doc.id, ...doc.data() }) as Grado,
-            ),
-          );
-        }
-      } catch (error) {
-        console.error("Error cargando datos para Dashboard:", error);
-      }
+    void cargar();
+    return () => {
+      vigente = false;
     };
-    cargarDatos();
-  }, [activeRole, userData?.gradosAsignados]);
+  }, [acceso, anioActivoId, activeRole, ready]);
   const tutorDeAnioActivo = useMemo(() => {
     if (!userData?.tutorDe) return [];
     return grados
@@ -268,134 +340,153 @@ export default function Dashboard() {
   const nombreUsuario = userData?.nombreDocumento
     ? userData.nombreDocumento
     : user?.displayName || "Usuario";
-  const cargarStats = useCallback(async () => {
-    if (!activeRole) return;
-    setStatsLoading(true);
-    try {
-      const gradosAsignados: string[] = userData?.gradosAsignados ?? [];
-      const usarFiltroDocente =
-        activeRole === "docente" && gradosAsignados.length > 0;
-      const contar = (q: Query) =>
-        getCountFromServer(q).then((s) => s.data().count);
-      const [
-        aniosCount,
-        gradosCount,
-        estudiantesCount,
-        ambitosCount,
-        calificacionesCount,
-        solicitudesCount,
-        notasEnRiesgo,
-      ] = await Promise.all([
-        contar(
-          query(collection(db, "aniosLectivos"), where("activo", "==", true)),
-        ),
-        usarFiltroDocente
-          ? contar(
-              query(
-                collection(db, "grados"),
-                where("activo", "==", true),
-                where("__name__", "in", gradosAsignados),
+  const revisionNotas = useSyncExternalStore(
+    observarPanel,
+    leerRevisionNotasPanel,
+  );
+  const cargarStats = useCallback(
+    async (forzar = false) => {
+      if (!activeRole || !ready || !prepararPanel(acceso, anioActivoId)) return;
+      const version = ++solicitudStats.current;
+      const vigente = () =>
+        version === solicitudStats.current &&
+        contextoPanelVigente(acceso, anioActivoId);
+      setStatsLoading(true);
+      setErrorStats("");
+      try {
+        const asignados = JSON.parse(asignadosKey) as string[];
+        const docente = activeRole === "docente";
+        const contar = (clave: string, q: Query) =>
+          leerUnaVezPanel(
+            acceso,
+            anioActivoId,
+            `${activeRole}:${clave}`,
+            () => getCountFromServer(q).then((s) => s.data().count),
+            forzar,
+          );
+        const cargarEstudiantes = async () => {
+          if (!docente) {
+            const cache = leerEstudiantesCache(
+              claveConsultaEstudiantes(acceso, anioActivoId, null),
+            );
+            const total =
+              cache.estado === "listo"
+                ? cache.items.filter((e) => e.activo).length
+                : await contar(
+                    "estudiantes",
+                    query(
+                      collection(db, "estudiantes"),
+                      where("activo", "==", true),
+                    ),
+                  );
+            return { total, porGrado: {} as Record<string, number> };
+          }
+          const pares = await Promise.all(
+            grados.map(async (g) => {
+              const cache = leerEstudiantesCache(
+                claveConsultaEstudiantes(acceso, anioActivoId, g.id),
+              );
+              const total =
+                cache.estado === "listo"
+                  ? cache.items.filter((e) => e.activo).length
+                  : await contar(
+                      `estudiantes:${g.id}`,
+                      query(
+                        collection(db, "estudiantes"),
+                        where("activo", "==", true),
+                        where("gradoId", "==", g.id),
+                      ),
+                    );
+              return [g.id, total] as const;
+            }),
+          );
+          return {
+            total: pares.reduce((n, [, total]) => n + total, 0),
+            porGrado: Object.fromEntries(pares),
+          };
+        };
+        // Conserva el alcance original de calificaciones/riesgo. Su optimización por periodo
+        // se aborda en la etapa de Calificaciones; no se descargan documentos para contarlos.
+        const [
+          estudiantes,
+          calificaciones,
+          solicitudesPendientes,
+          notasEnRiesgo,
+        ] = await Promise.all([
+          cargarEstudiantes(),
+          docente && !asignados.length
+            ? Promise.resolve(0)
+            : contar(
+                "calificaciones",
+                docente
+                  ? query(
+                      collection(db, "calificaciones"),
+                      where("gradoId", "in", asignados),
+                    )
+                  : collection(db, "calificaciones"),
               ),
-            )
-          : contar(
-              query(collection(db, "grados"), where("activo", "==", true)),
-            ),
-        usarFiltroDocente
-          ? contar(
-              query(
-                collection(db, "estudiantes"),
-                where("activo", "==", true),
-                where("gradoId", "in", gradosAsignados),
+          docente
+            ? Promise.resolve(0)
+            : contar(
+                "solicitudes",
+                query(
+                  collection(db, "solicitudesMatriculas"),
+                  where("estado", "==", "pendiente"),
+                ),
               ),
-            )
-          : contar(
-              query(collection(db, "estudiantes"), where("activo", "==", true)),
-            ),
-        usarFiltroDocente
-          ? contar(
-              query(
-                collection(db, "ambitos"),
-                where("activo", "==", true),
-                where("gradoId", "in", gradosAsignados),
-              ),
-            )
-          : contar(
-              query(collection(db, "ambitos"), where("activo", "==", true)),
-            ),
-        usarFiltroDocente
-          ? contar(
-              query(
-                collection(db, "calificaciones"),
-                where("gradoId", "in", gradosAsignados),
-              ),
-            )
-          : contar(collection(db, "calificaciones")),
-        contar(
-          query(
-            collection(db, "solicitudesMatriculas"),
-            where("estado", "==", "pendiente"),
+          contar(
+            "riesgo",
+            query(collection(db, "calificaciones"), where("nota", "<", 7)),
           ),
-        ),
-        contar(query(collection(db, "calificaciones"), where("nota", "<", 7))),
-      ]);
-      startTransition(() => {
+        ]);
+        if (!vigente()) return;
+        setConteosEstudiantes(estudiantes.porGrado);
         setStats({
-          aniosActivos: aniosCount,
-          gradosActivos: gradosCount,
-          estudiantesActivos: estudiantesCount,
-          ambitos: ambitosCount,
-          calificaciones: calificacionesCount,
-          solicitudesPendientes: solicitudesCount,
+          aniosActivos: aniosLectivos.length,
+          gradosActivos: docente ? grados.length : todosGrados.length,
+          ambitos: ambitos.filter(
+            (a) => !docente || asignados.includes(a.gradoId),
+          ).length,
+          estudiantesActivos: estudiantes.total,
+          calificaciones,
+          solicitudesPendientes,
           notasEnRiesgo,
         });
-      });
-    } catch (error) {
-      console.error("Error cargando estadísticas:", error);
-    } finally {
-      setStatsLoading(false);
-    }
-  }, [userData, activeRole]);
-  // ✅ Extraer a variable primitiva para estabilizar la referencia del useCallback.
-  // Esto satisface tanto a ESLint (exhaustive-deps) como al React Compiler
-  // (preserve-manual-memoization) sin sacrificar rendimiento.
-  const userUid = user?.uid;
-  const cargarHorarios = useCallback(async () => {
-    if (!userUid || !anioActivoId || activeRole !== "docente") {
-      setHorasHoy(0);
-      setMateriasCount(0);
-      return;
-    }
-    try {
-      const q = query(
-        collection(db, "asignaturasDocente"),
-        where("docenteId", "==", userUid),
-        where("anioLectivoId", "==", anioActivoId),
-        where("activo", "==", true),
-      );
-      const snap = await getDocs(q);
-      const dia = new Date().getDay(); // 0=Dom ... 6=Sáb
-      let horas = 0;
-      snap.docs.forEach((d) => {
-        const data = d.data() as {
-          horario?: { dia: number; horas: number[] }[];
-        };
-        (data.horario || []).forEach((b) => {
-          if (b.dia === dia) horas += b.horas.length;
-        });
-      });
-      setHorasHoy(horas);
-      setMateriasCount(snap.docs.length);
-    } catch (error) {
-      console.error("Error cargando horarios:", error);
-    }
-  }, [userUid, anioActivoId, activeRole]);
+      } catch (error) {
+        if (vigente())
+          setErrorStats(
+            "No se pudieron actualizar todos los indicadores. Pulsa Actualizar para reintentar.",
+          );
+        console.error("Error cargando estadísticas:", error);
+      } finally {
+        if (vigente()) setStatsLoading(false);
+      }
+    },
+    [
+      activeRole,
+      ready,
+      acceso,
+      anioActivoId,
+      asignadosKey,
+      grados,
+      aniosLectivos,
+      todosGrados,
+      ambitos,
+    ],
+  );
+  const cancelarStats = useCallback(() => {
+    solicitudStats.current++;
+  }, []);
   useEffect(() => {
-    const ejecutar = async () => {
-      await cargarStats();
-      await cargarHorarios();
+    let cancelado = false;
+    void Promise.resolve().then(() => {
+      if (!cancelado) void cargarStats();
+    });
+    return () => {
+      cancelado = true;
+      cancelarStats();
     };
-    ejecutar();
-  }, [cargarStats, cargarHorarios]);
+  }, [cargarStats, cancelarStats, revisionNotas]);
   const modules = [
     {
       path: "/configuracion-institucional",
@@ -629,6 +720,15 @@ export default function Dashboard() {
   if (activeRole === null) {
     return (
       <Layout>
+        {(errorStats || propias.error) && (
+          <p
+            role="alert"
+            className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-800"
+          >
+            {errorStats ||
+              "No se pudo consultar el horario. Pulsa Actualizar para reintentar."}
+          </p>
+        )}
         <div className="flex items-center justify-center py-10">
           <div className="text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#244563] border-t-transparent mx-auto mb-2"></div>
@@ -815,28 +915,43 @@ export default function Dashboard() {
               aria-pressed={mantenimiento}
               className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#244563] transition-colors hover:bg-[#EAF0F6] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
             >
-              {guardandoMantenimiento ? <FaSync className="animate-spin text-[11px]" /> : <FaCogs className="text-[11px]" />}
-              {guardandoMantenimiento ? "Guardando..." : !mantenimientoListo ? "Consultando mantenimiento..." : mantenimiento ? "Suspender mantenimiento" : "Activar mantenimiento"}
+              {guardandoMantenimiento ? (
+                <FaSync className="animate-spin text-[11px]" />
+              ) : (
+                <FaCogs className="text-[11px]" />
+              )}
+              {guardandoMantenimiento
+                ? "Guardando..."
+                : !mantenimientoListo
+                  ? "Consultando mantenimiento..."
+                  : mantenimiento
+                    ? "Suspender mantenimiento"
+                    : "Activar mantenimiento"}
             </button>
           )}
-        <button
-          onClick={() => {
-            cargarStats();
-            cargarHorarios();
-          }}
-          disabled={statsLoading}
-          className="inline-flex items-center gap-2 px-3 py-2 bg-[#244563] hover:bg-[#1B354D] border border-[#244563] rounded-md text-[11px] font-semibold text-white transition-colors disabled:opacity-50 shrink-0 h-8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-          title="Actualizar estadísticas"
-        >
-          <FaSync
-            className={`text-[11px] ${statsLoading ? "animate-spin" : ""}`}
-          />
-          {statsLoading ? "Actualizando..." : "Actualizar"}
-        </button>
+          <button
+            onClick={() => {
+              void cargarStats(true);
+              propias.reintentar();
+            }}
+            disabled={statsLoading}
+            className="inline-flex items-center gap-2 px-3 py-2 bg-[#244563] hover:bg-[#1B354D] border border-[#244563] rounded-md text-[11px] font-semibold text-white transition-colors disabled:opacity-50 shrink-0 h-8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+            title="Actualizar estadísticas"
+          >
+            <FaSync
+              className={`text-[11px] ${statsLoading ? "animate-spin" : ""}`}
+            />
+            {statsLoading ? "Actualizando..." : "Actualizar"}
+          </button>
         </div>
       </div>
       {isSuperAdmin && activeRole === "super_admin" && errorMantenimiento && (
-        <p role="alert" className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-[#AD3038]">{errorMantenimiento}</p>
+        <p
+          role="alert"
+          className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-[#AD3038]"
+        >
+          {errorMantenimiento}
+        </p>
       )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-2 mb-3">
         {kpis.map((kpi) => {

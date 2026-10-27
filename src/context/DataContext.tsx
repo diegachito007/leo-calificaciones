@@ -10,6 +10,8 @@ import {
 import type { ReactNode } from "react";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { db } from "../lib/firebase";
+import { actualizarAnioReporteNotas } from "../utils/reporteNotasCache";
+import { actualizarAnioCalificaciones } from "../utils/calificacionesCache";
 import type {
   Grado,
   Ambito,
@@ -112,9 +114,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [periodos, setPeriodos] = useState<PeriodoEvaluacion[]>(
     initial.periodos,
   );
-  const [nombresDocentes, setNombresDocentes] = useState<Record<string, string>>(
-    initial.nombresDocentes,
-  );
+  const [nombresDocentes, setNombresDocentes] = useState<
+    Record<string, string>
+  >(initial.nombresDocentes);
   const [ready, setReady] = useState(initial.ready);
 
   const cargarTodo = useCallback(async (force = false) => {
@@ -240,6 +242,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [cargarTodo]);
 
   const anioActivo = aniosLectivos.find((a) => a.activo) || null;
+  useEffect(() => {
+    actualizarAnioCalificaciones(anioActivo?.id || "");
+    actualizarAnioReporteNotas(anioActivo?.id || "");
+  }, [anioActivo?.id]);
 
   const periodoActual = useMemo(() => {
     const hoy = new Date();
@@ -290,9 +296,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return (
-    <DataContext.Provider value={value}>{children}</DataContext.Provider>
-  );
+  return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }
 
 export function useData() {

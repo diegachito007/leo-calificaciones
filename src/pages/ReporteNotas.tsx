@@ -1,14 +1,12 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
+import { updateDoc, doc, serverTimestamp } from "firebase/firestore";
+import { claveAccesoEstudiantes } from "../utils/estudiantesCache";
+import { useHorarioPanel, invalidarNotasPanel } from "../utils/panelCache";
 import {
-  collection,
-  query,
-  where,
-  getDocs,
-  updateDoc,
-  doc,
-  serverTimestamp,
-  onSnapshot,
-} from "firebase/firestore";
+  useConsultasReporte,
+  capturarContextoReporteNotas,
+  type ConsultaReporte,
+} from "../utils/reporteNotasCache";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
@@ -21,7 +19,10 @@ import {
 import type { Estudiante, Grado } from "../types";
 import Layout from "../components/Layout";
 import NotificacionNotas from "../components/NotificacionNotas";
-import { contextoNotificacion, type InformeNotificacion } from "../utils/notificacionNotas";
+import {
+  contextoNotificacion,
+  type InformeNotificacion,
+} from "../utils/notificacionNotas";
 import * as XLSX from "xlsx-js-style";
 import { useNavigate } from "react-router-dom";
 import {
@@ -91,14 +92,6 @@ interface CalificacionData {
     historial?: EntradaRefuerzo[];
   } | null;
   docenteId?: string;
-}
-interface AsignaturaDocente {
-  id: string;
-  docenteId: string;
-  gradoId: string;
-  destrezaId: string;
-  anioLectivoId: string;
-  activo: boolean;
 }
 interface RegistroRiesgo {
   calificacionId: string;
@@ -186,18 +179,51 @@ const aplicaActividad = (
 
 export default function ReporteNotas() {
   const { user, userData } = useAuth();
+  const { anioActivo, periodoActual } = useData();
+  const contexto = JSON.stringify([
+    claveAccesoEstudiantes(user?.uid, userData),
+    anioActivo?.id,
+    periodoActual?.id,
+  ]);
+  return <ReporteNotasContenido key={contexto} />;
+}
+
+function ReporteNotasContenido() {
+  const { user, userData } = useAuth();
   const { grados, ambitos, destrezas, anioActivo, periodoActual, ready } =
     useData();
   const navigate = useNavigate();
-  const [informeNotificacion, setInformeNotificacion] = useState<InformeNotificacion | null>(null);
-  const [contadoresNotificacion, setContadoresNotificacion] = useState<Record<string, number>>({});
-  const [asignaturasDocente, setAsignaturasDocente] = useState<
-    AsignaturaDocente[]
-  >([]);
-  const [estudiantes, setEstudiantes] = useState<Estudiante[]>([]);
-  const [actividades, setActividades] = useState<ActividadData[]>([]);
-  const [calificaciones, setCalificaciones] = useState<CalificacionData[]>([]);
-  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const [informeNotificacion, setInformeNotificacion] =
+    useState<InformeNotificacion | null>(null);
+  const acceso = claveAccesoEstudiantes(user?.uid, userData);
+  const anio = anioActivo?.id || "";
+  const esAdmin = userData?.role === "super_admin";
+  const horario = useHorarioPanel(
+    acceso,
+    anio,
+    "propias",
+    esAdmin ? "" : user?.uid || "",
+  );
+  const asignaturasDocente = horario.items;
+  const notificaciones = useConsultasReporte<{ id: string; enviadas?: number }>(
+    acceso,
+    anio,
+    user?.uid
+      ? [
+          {
+            coleccion: "notificacionesNotas",
+            filtros: [["docenteId", "==", user.uid]],
+          },
+        ]
+      : [],
+  );
+  const contadoresNotificacion = useMemo(
+    () =>
+      Object.fromEntries(
+        notificaciones.items.map((d) => [d.id, d.enviadas || 0]),
+      ),
+    [notificaciones.items],
+  );
   const [modoVista, setModoVista] = useState<ModoVista>("tutor");
   const [gradoTutorSel, setGradoTutorSel] = useState<string>("");
   const [gradoDocenteSel, setGradoDocenteSel] = useState<string>("");
@@ -232,13 +258,6 @@ export default function ReporteNotas() {
     setAviso({ type, message });
     setTimeout(() => setAviso(null), 6000);
   };
-  useEffect(() => {
-    if (!user?.uid) return;
-    return onSnapshot(query(collection(db, "notificacionesNotas"), where("docenteId", "==", user.uid)), (snap) => {
-      setContadoresNotificacion(Object.fromEntries(snap.docs.map(d => [d.id, d.data().enviadas || 0])));
-    }, () => setAviso({type:"warning", message:"No se pudo consultar el contador de notificaciones. Revisa los permisos de Firestore y la conexión."}));
-  }, [user?.uid]);
-  const esAdmin = userData?.role === "super_admin";
   const esTutor = (userData?.tutorDe || []).length > 0;
   const tieneMaterias = asignaturasDocente.length > 0;
   const modoEfectivo = useMemo<ModoVista>(() => {
@@ -303,211 +322,107 @@ export default function ReporteNotas() {
   }, [esInicialDocente, destrezas, misDestrezasDelGrado]);
 
   const shouldLoadData = ready && gradosDisponibles.length > 0;
-  const loadKey = useMemo(
-    () =>
-      JSON.stringify({
-        admin: esAdmin,
-        grados: gradosDisponibles.map((g) => g.id),
-        materias: asignaturasDocente.map((a) => a.destrezaId),
-        periodo: periodoActual?.id || "",
-      }),
-    [esAdmin, gradosDisponibles, asignaturasDocente, periodoActual?.id],
-  );
-  const loading = shouldLoadData && loadedKey !== loadKey;
-  useEffect(() => {
-    if (!user?.uid || esAdmin || !anioActivo?.id) return;
-    const q = query(
-      collection(db, "asignaturasDocente"),
-      where("docenteId", "==", user.uid),
-      where("anioLectivoId", "==", anioActivo.id),
-      where("activo", "==", true),
-    );
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        setAsignaturasDocente(
-          snapshot.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as AsignaturaDocente,
-          ),
-        );
-      },
-      (error) => {
-        console.error("Error escuchando asignaturas:", error);
-      },
-    );
-    return () => unsubscribe();
-  }, [user?.uid, anioActivo?.id, esAdmin]);
-  useEffect(() => {
-    if (!shouldLoadData) return;
-    const gradoIds = gradosDisponibles.map((g) => g.id);
-    if (gradoIds.length === 0) return;
-    const unsubscribers: (() => void)[] = [];
-    const estudiantesMap = new Map<string, Estudiante>();
+  const gradoIds = gradosDisponibles.map((g) => g.id).sort();
+  const consultasEstudiantes: ConsultaReporte[] = [];
+  const consultasActividades: ConsultaReporte[] = [];
+  if (shouldLoadData) {
     for (let i = 0; i < gradoIds.length; i += 10) {
-      const lote = gradoIds.slice(i, i + 10);
-      const q = query(
-        collection(db, "estudiantes"),
-        where("activo", "==", true),
-        where("gradoId", "in", lote),
-      );
-      const unsubscribe = onSnapshot(
-        q,
-        (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            if (change.type === "removed") {
-              estudiantesMap.delete(change.doc.id);
-            } else {
-              estudiantesMap.set(change.doc.id, {
-                id: change.doc.id,
-                ...change.doc.data(),
-              } as Estudiante);
-            }
-          });
-          const todos = Array.from(estudiantesMap.values()).sort((a, b) =>
-            a.apellidos.localeCompare(b.apellidos),
-          );
-          setEstudiantes(todos);
-        },
-        (error) => {
-          console.error("Error escuchando estudiantes:", error);
-        },
-      );
-      unsubscribers.push(unsubscribe);
+      consultasEstudiantes.push({
+        coleccion: "estudiantes",
+        filtros: [
+          ["activo", "==", true],
+          ["gradoId", "in", gradoIds.slice(i, i + 10)],
+        ],
+      });
     }
-    return () => {
-      unsubscribers.forEach((u) => u());
-    };
-  }, [shouldLoadData, gradosDisponibles]);
-  const estudiantesFiltrados = useMemo(() => {
-    const gradoIds = new Set(gradosDisponibles.map((g) => g.id));
-    return estudiantes.filter((e) => gradoIds.has(e.gradoId));
-  }, [estudiantes, gradosDisponibles]);
-  useEffect(() => {
-    if (!shouldLoadData || loadedKey === loadKey) return;
-    const cargarReporte = async () => {
-      try {
-        const gradoIds = gradosDisponibles.map((g) => g.id);
-        const tutorIds = new Set(userData?.tutorDe || []);
-        const gradosTutorIds = gradoIds.filter((id) => tutorIds.has(id));
-        const myDestrezaIds = Array.from(
-          new Set(asignaturasDocente.map((a) => a.destrezaId)),
-        );
-        const periodoIdActivo = periodoActual?.id;
-        const actividadesMap = new Map<string, ActividadData>();
-        const agregarActividad = (act: ActividadData) => {
-          if (!gradoIds.includes(act.gradoId)) return;
-          actividadesMap.set(act.id, act);
-        };
-        if (esAdmin) {
-          for (let i = 0; i < gradoIds.length; i += 10) {
-            const lote = gradoIds.slice(i, i + 10);
-            const q = periodoIdActivo
-              ? query(
-                  collection(db, "actividades"),
-                  where("gradoId", "in", lote),
-                  where("periodoId", "==", periodoIdActivo),
-                )
-              : query(
-                  collection(db, "actividades"),
-                  where("gradoId", "in", lote),
-                );
-            const snap = await getDocs(q);
-            snap.docs.forEach((d) =>
-              agregarActividad({ id: d.id, ...d.data() } as ActividadData),
-            );
-          }
-        } else {
-          for (let i = 0; i < gradosTutorIds.length; i += 10) {
-            const lote = gradosTutorIds.slice(i, i + 10);
-            const q = periodoIdActivo
-              ? query(
-                  collection(db, "actividades"),
-                  where("gradoId", "in", lote),
-                  where("periodoId", "==", periodoIdActivo),
-                )
-              : query(
-                  collection(db, "actividades"),
-                  where("gradoId", "in", lote),
-                );
-            const snap = await getDocs(q);
-            snap.docs.forEach((d) =>
-              agregarActividad({ id: d.id, ...d.data() } as ActividadData),
-            );
-          }
-          for (let i = 0; i < myDestrezaIds.length; i += 30) {
-            const lote = myDestrezaIds.slice(i, i + 30);
-            const q = periodoIdActivo
-              ? query(
-                  collection(db, "actividades"),
-                  where("destrezaId", "in", lote),
-                  where("periodoId", "==", periodoIdActivo),
-                )
-              : query(
-                  collection(db, "actividades"),
-                  where("destrezaId", "in", lote),
-                );
-            const snap = await getDocs(q);
-            snap.docs.forEach((d) =>
-              agregarActividad({ id: d.id, ...d.data() } as ActividadData),
-            );
-          }
-        }
-        const actividadesBatch = Array.from(actividadesMap.values());
-        setActividades(actividadesBatch);
-      } catch (error) {
-        console.error("Error cargando reporte:", error);
-      } finally {
-        setLoadedKey(loadKey);
+    const tutorIds = new Set(userData?.tutorDe || []);
+    const gradosConsulta = esAdmin
+      ? gradoIds
+      : gradoIds.filter((id) => tutorIds.has(id));
+    const agregarActividades = (
+      campo: string,
+      ids: string[],
+      tamano: number,
+    ) => {
+      for (let i = 0; i < ids.length; i += tamano) {
+        const filtros: ConsultaReporte["filtros"] = [
+          [campo, "in", ids.slice(i, i + tamano)],
+        ];
+        if (periodoActual?.id)
+          filtros.push(["periodoId", "==", periodoActual.id]);
+        consultasActividades.push({ coleccion: "actividades", filtros });
       }
     };
-    cargarReporte();
-  }, [
-    shouldLoadData,
-    loadKey,
-    loadedKey,
-    gradosDisponibles,
-    asignaturasDocente,
-    esAdmin,
-    userData,
-    periodoActual,
-  ]);
-  // ==================== CALIFICACIONES EN VIVO ====================
-  useEffect(() => {
-    if (!shouldLoadData || loadedKey !== loadKey) return;
-    const actividadIds = actividades.map((a) => a.id).filter(Boolean);
-    if (actividadIds.length === 0) return;
-    const calsMap = new Map<string, CalificacionData>();
-    const unsubscribers: (() => void)[] = [];
-    for (let i = 0; i < actividadIds.length; i += 30) {
-      const lote = actividadIds.slice(i, i + 30);
-      const unsubscribe = onSnapshot(
-        query(
-          collection(db, "calificaciones"),
-          where("actividadId", "in", lote),
-        ),
-        (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            if (change.type === "removed") {
-              calsMap.delete(change.doc.id);
-            } else {
-              calsMap.set(change.doc.id, {
-                id: change.doc.id,
-                ...change.doc.data(),
-              } as CalificacionData);
-            }
-          });
-          setCalificaciones(Array.from(calsMap.values()));
-        },
-        (error) => {
-          console.error("Error escuchando calificaciones:", error);
-        },
+    agregarActividades("gradoId", gradosConsulta, 10);
+    if (!esAdmin)
+      agregarActividades(
+        "destrezaId",
+        [...new Set(asignaturasDocente.map((a) => a.destrezaId))].sort(),
+        30,
       );
-      unsubscribers.push(unsubscribe);
+  }
+  const nomina = useConsultasReporte<Estudiante>(
+    acceso,
+    anio,
+    consultasEstudiantes,
+  );
+  const datosActividades = useConsultasReporte<ActividadData>(
+    acceso,
+    anio,
+    consultasActividades,
+  );
+  const estudiantesFiltrados = useMemo(() => {
+    const ids = new Set(gradosDisponibles.map((g) => g.id));
+    return nomina.items
+      .filter((e) => ids.has(e.gradoId))
+      .sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+  }, [nomina.items, gradosDisponibles]);
+  const actividades = useMemo(() => {
+    const ids = new Set(gradosDisponibles.map((g) => g.id));
+    return datosActividades.items.filter((a) => ids.has(a.gradoId));
+  }, [datosActividades.items, gradosDisponibles]);
+  const actividadIds = actividades
+    .map((a) => a.id)
+    .filter(Boolean)
+    .sort();
+  const consultasNotas: ConsultaReporte[] = [];
+  if (
+    shouldLoadData &&
+    !datosActividades.cargando &&
+    !datosActividades.errores.length
+  ) {
+    for (let i = 0; i < actividadIds.length; i += 30) {
+      consultasNotas.push({
+        coleccion: "calificaciones",
+        filtros: [["actividadId", "in", actividadIds.slice(i, i + 30)]],
+      });
     }
-    return () => {
-      unsubscribers.forEach((u) => u());
-    };
-  }, [shouldLoadData, loadKey, loadedKey, actividades]);
+  }
+  const datosNotas = useConsultasReporte<CalificacionData>(
+    acceso,
+    anio,
+    consultasNotas,
+  );
+  const calificaciones = datosNotas.items;
+  const loading =
+    (!esAdmin && !horario.listo && !horario.error) ||
+    nomina.cargando ||
+    datosActividades.cargando ||
+    datosNotas.cargando;
+  const erroresCarga = [
+    horario.error,
+    ...nomina.errores,
+    ...datosActividades.errores,
+    ...datosNotas.errores,
+    ...notificaciones.errores,
+  ].filter(Boolean);
+  const reintentarCarga = () => {
+    horario.reintentar();
+    nomina.reintentar();
+    datosActividades.reintentar();
+    datosNotas.reintentar();
+    notificaciones.reintentar();
+  };
   // ==================== FILTRO DE INSUMOS ====================
   const idsAgrupados = useMemo(() => {
     const s = new Set<string>();
@@ -567,7 +482,8 @@ export default function ReporteNotas() {
       if (nf >= 7) return;
       const estudiante = estudiantesMap.get(cal.estudianteId);
       const actividad = actividadesMap.get(cal.actividadId);
-      if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad)) return;
+      if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad))
+        return;
       if (estudiante.gradoId !== gradoTutorEfectivo) return;
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
@@ -711,7 +627,9 @@ export default function ReporteNotas() {
             (a) =>
               a.gradoId === gradoDocenteEfectivo &&
               (esInicial
-                ? (a.ambitoId || destrezas.find((d) => d.id === a.destrezaId)?.ambitoId || "") === u.id
+                ? (a.ambitoId ||
+                    destrezas.find((d) => d.id === a.destrezaId)?.ambitoId ||
+                    "") === u.id
                 : a.destrezaId === u.id),
           )
           .sort(
@@ -738,7 +656,11 @@ export default function ReporteNotas() {
     if (!estudianteDetalleId || !gradoDocenteEfectivo) return [];
     return actividadesVisibles
       .filter((a) => {
-        if (a.gradoId !== gradoDocenteEfectivo || !aplicaActividad(estudianteDetalle, a)) return false;
+        if (
+          a.gradoId !== gradoDocenteEfectivo ||
+          !aplicaActividad(estudianteDetalle, a)
+        )
+          return false;
         if (esInicialDocente) {
           const destreza = destrezas.find((d) => d.id === a.destrezaId);
           return misUnidadesDelGrado.has(
@@ -777,26 +699,58 @@ export default function ReporteNotas() {
     misDestrezasDelGrado,
     calMap,
   ]);
-  const prepararInformeNotificacion = (sec: UnidadSeccion, est: EstudianteConContacto): InformeNotificacion | null => {
+  const prepararInformeNotificacion = (
+    sec: UnidadSeccion,
+    est: EstudianteConContacto,
+  ): InformeNotificacion | null => {
     const celular = normalizarCelularRepresentante(est.celularRepresentante);
-    if (!celular || !user?.uid || !anioActivo?.id || !periodoActual?.id) return null;
-    const hoy = new Intl.DateTimeFormat("en-CA", {timeZone:"America/Guayaquil",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
-    const asignadas = sec.actividades.filter(a => aplicaActividad(est, a) && (!a.fecha || a.fecha.slice(0,10) <= hoy));
-    const calificadas = asignadas.flatMap(actividad => {
+    if (!celular || !user?.uid || !anioActivo?.id || !periodoActual?.id)
+      return null;
+    const hoy = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Guayaquil",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+    const asignadas = sec.actividades.filter(
+      (a) =>
+        aplicaActividad(est, a) && (!a.fecha || a.fecha.slice(0, 10) <= hoy),
+    );
+    const calificadas = asignadas.flatMap((actividad) => {
       const cal = calMap.get(`${est.id}|${actividad.id}`);
       if (!cal || cal.nota == null) return [];
       const nota = notaFinalDe(cal);
-      return Number.isFinite(nota) ? [{actividad, nota}] : [];
+      return Number.isFinite(nota) ? [{ actividad, nota }] : [];
     });
     return {
-      estudianteId: est.id, estudiante: `${est.apellidos} ${est.nombres}`,
-      representante: est.nombreRepresentante?.trim() || "", celular,
-      grado: `${gradoDocenteActual?.nombre || ""} ${gradoDocenteActual?.paralelo || ""}`.trim(),
-      gradoId: gradoDocenteEfectivo, materia: sec.nombre, materiaId: sec.id,
-      periodo: periodoActual.nombre, periodoId: periodoActual.id, anioId: anioActivo.id, docenteId: user.uid,
-      asignadas: asignadas.length, calificadas: calificadas.length,
-      promedio: calificadas.length ? round2(calificadas.reduce((s,n)=>s+n.nota,0)/calificadas.length) : null,
-      bajas: calificadas.filter(n=>n.nota<7).map(({actividad,nota})=>({fecha:actividad.fecha,tipo:actividad.tipo,actividad:actividad.detalle,nota})),
+      estudianteId: est.id,
+      estudiante: `${est.apellidos} ${est.nombres}`,
+      representante: est.nombreRepresentante?.trim() || "",
+      celular,
+      grado:
+        `${gradoDocenteActual?.nombre || ""} ${gradoDocenteActual?.paralelo || ""}`.trim(),
+      gradoId: gradoDocenteEfectivo,
+      materia: sec.nombre,
+      materiaId: sec.id,
+      periodo: periodoActual.nombre,
+      periodoId: periodoActual.id,
+      anioId: anioActivo.id,
+      docenteId: user.uid,
+      asignadas: asignadas.length,
+      calificadas: calificadas.length,
+      promedio: calificadas.length
+        ? round2(
+            calificadas.reduce((s, n) => s + n.nota, 0) / calificadas.length,
+          )
+        : null,
+      bajas: calificadas
+        .filter((n) => n.nota < 7)
+        .map(({ actividad, nota }) => ({
+          fecha: actividad.fecha,
+          tipo: actividad.tipo,
+          actividad: actividad.detalle,
+          nota,
+        })),
     };
   };
   // ==================== REFUERZO ====================
@@ -811,9 +765,19 @@ export default function ReporteNotas() {
     estrategiaActividad: string;
   }) => {
     if (!misDestrezasTodas.has(r.destrezaId)) return;
-    const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificaciones.find((c) => c.id === r.calificacionId)?.estudianteId);
-    const actividadRefuerzo = actividadesVisibles.find((a) => a.id === r.actividadId);
-    if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) return;
+    const estudianteRefuerzo = estudiantesFiltrados.find(
+      (e) =>
+        e.id ===
+        calificaciones.find((c) => c.id === r.calificacionId)?.estudianteId,
+    );
+    const actividadRefuerzo = actividadesVisibles.find(
+      (a) => a.id === r.actividadId,
+    );
+    if (
+      !actividadRefuerzo ||
+      !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)
+    )
+      return;
     const calificacionActual = calificaciones.find(
       (c) => c.id === r.calificacionId,
     );
@@ -844,15 +808,27 @@ export default function ReporteNotas() {
   const aplicarRefuerzo = async () => {
     if (!refuerzoRegistro) return;
     if (!refuerzoForm.detalle.trim()) return;
+    const contextoVigente = capturarContextoReporteNotas(acceso, anio);
+    if (!contextoVigente()) return;
     setIsGuardandoRefuerzo(true);
     try {
       const calificacionActual = calificaciones.find(
         (c) => c.id === refuerzoRegistro.calificacionId,
       );
-      const estudianteRefuerzo = estudiantesFiltrados.find((e) => e.id === calificacionActual?.estudianteId);
-      const actividadRefuerzo = actividadesVisibles.find((a) => a.id === refuerzoRegistro.actividadId);
-      if (!actividadRefuerzo || !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)) {
-        mostrarAviso("warning", "Esta actividad no corresponde al estudiante. No se aplicó el refuerzo.");
+      const estudianteRefuerzo = estudiantesFiltrados.find(
+        (e) => e.id === calificacionActual?.estudianteId,
+      );
+      const actividadRefuerzo = actividadesVisibles.find(
+        (a) => a.id === refuerzoRegistro.actividadId,
+      );
+      if (
+        !actividadRefuerzo ||
+        !aplicaActividad(estudianteRefuerzo, actividadRefuerzo)
+      ) {
+        mostrarAviso(
+          "warning",
+          "Esta actividad no corresponde al estudiante. No se aplicó el refuerzo.",
+        );
         setShowRefuerzoModal(false);
         setRefuerzoRegistro(null);
         return;
@@ -898,13 +874,8 @@ export default function ReporteNotas() {
           updatedAt: serverTimestamp(),
         },
       );
-      setCalificaciones((prev) =>
-        prev.map((c) =>
-          c.id === refuerzoRegistro.calificacionId
-            ? { ...c, refuerzo: refuerzoFinal }
-            : c,
-        ),
-      );
+      if (!contextoVigente()) return;
+      invalidarNotasPanel();
       setShowRefuerzoModal(false);
       setRefuerzoRegistro(null);
       mostrarAviso(
@@ -912,6 +883,7 @@ export default function ReporteNotas() {
         "Refuerzo aplicado: la nota final de la actividad quedó actualizada.",
       );
       const recalc = await recalcularInsumos([actividadAfectada]);
+      if (!contextoVigente()) return;
       if (recalc.actualizados > 0)
         mostrarAviso(
           "info",
@@ -946,16 +918,25 @@ export default function ReporteNotas() {
         ? estudiantesDelGradoDocente.filter((est) => est.id === estudianteId)
         : estudiantesDelGradoDocente;
       if (estudiantesExportar.length === 0) {
-        mostrarAviso("info", "No hay estudiantes para exportar en este contexto.");
+        mostrarAviso(
+          "info",
+          "No hay estudiantes para exportar en este contexto.",
+        );
         return;
       }
       const actividadesExportar = estudianteId
-        ? sec.actividades.filter((a) => aplicaActividad(estudiantesExportar[0], a))
+        ? sec.actividades.filter((a) =>
+            aplicaActividad(estudiantesExportar[0], a),
+          )
         : sec.actividades;
       // Both layouts share applicability, final-grade and average rules.
-      const notaExportar = (est: Estudiante, actividad: ActividadData): number | string => {
+      const notaExportar = (
+        est: Estudiante,
+        actividad: ActividadData,
+      ): number | string => {
         const cal = calMap.get(`${est.id}|${actividad.id}`);
-        if (!aplicaActividad(est, actividad) || !cal || cal.nota == null) return "—";
+        if (!aplicaActividad(est, actividad) || !cal || cal.nota == null)
+          return "—";
         return notaFinalDe(cal);
       };
       const promedioExportar = (est: Estudiante): number | string => {
@@ -976,49 +957,97 @@ export default function ReporteNotas() {
               notaExportar(estudiantesExportar[0], actividad),
             ]),
             [
-              actividadesExportar.length === 0 ? estudiantesExportar[0].apellidos : "",
-              actividadesExportar.length === 0 ? estudiantesExportar[0].nombres : "",
+              actividadesExportar.length === 0
+                ? estudiantesExportar[0].apellidos
+                : "",
+              actividadesExportar.length === 0
+                ? estudiantesExportar[0].nombres
+                : "",
               "Promedio",
               promedioExportar(estudiantesExportar[0]),
             ],
           ]
         : [
-            ["", "", "", ...actividadesExportar.map((a) => `${a.esConsolidado ? "[INSUMO] " : ""}${a.tipo}`), ""],
+            [
+              "",
+              "",
+              "",
+              ...actividadesExportar.map(
+                (a) => `${a.esConsolidado ? "[INSUMO] " : ""}${a.tipo}`,
+              ),
+              "",
+            ],
             ["", "", "", ...actividadesExportar.map((a) => a.detalle), ""],
-            ["N°", "Apellidos", "Nombres", ...actividadesExportar.map((a) => `(${a.fecha})`), "Promedio"],
+            [
+              "N°",
+              "Apellidos",
+              "Nombres",
+              ...actividadesExportar.map((a) => `(${a.fecha})`),
+              "Promedio",
+            ],
             ...estudiantesExportar.map((est, index) => [
               index + 1,
               est.apellidos,
               est.nombres,
-              ...actividadesExportar.map((actividad) => notaExportar(est, actividad)),
+              ...actividadesExportar.map((actividad) =>
+                notaExportar(est, actividad),
+              ),
               promedioExportar(est),
             ]),
           ];
       const ws = XLSX.utils.aoa_to_sheet(data);
       ws["!cols"] = estudianteId
         ? [{ wch: 26 }, { wch: 26 }, { wch: 48 }, { wch: 12 }]
-        : [{ wch: 5 }, { wch: 26 }, { wch: 26 },
-            ...actividadesExportar.map(() => ({ wch: 20 })), { wch: 12 }];
+        : [
+            { wch: 5 },
+            { wch: 26 },
+            { wch: 26 },
+            ...actividadesExportar.map(() => ({ wch: 20 })),
+            { wch: 12 },
+          ];
       ws["!rows"] = data.map((_, index) => ({
-        hpt: estudianteId ? (index === 0 ? 20 : 28) : (index === 1 ? 28 : 20),
+        hpt: estudianteId ? (index === 0 ? 20 : 28) : index === 1 ? 28 : 20,
       }));
       const ultimaColumna = data[0].length - 1;
-      data.forEach((fila, r) => fila.forEach((valor, c) => {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })];
-        if (!cell) return;
-        const encabezado = r < (estudianteId ? 1 : 3);
-        const promedio = estudianteId ? r === data.length - 1 : c === ultimaColumna;
-        const esNota = !encabezado && (estudianteId ? c === 3 : c >= 3);
-        const baja = esNota && typeof valor === "number" && valor < 7;
-        cell.s = {
-          font: { name: "Calibri", sz: 11, bold: encabezado || promedio,
-            color: { rgb: baja ? "9C0006" : "273444" } },
-          alignment: { vertical: "center", horizontal: esNota || encabezado ? "center" : "left", wrapText: true },
-          fill: { patternType: "solid", fgColor: { rgb: baja ? "FFC7CE" : encabezado ? "EAF0F6" : promedio ? "F2F5F8" : "FFFFFF" } },
-          border: { bottom: { style: "thin", color: { rgb: "D8DEE6" } } },
-        };
-        if (esNota && typeof valor === "number") cell.z = "0.##";
-      }));
+      data.forEach((fila, r) =>
+        fila.forEach((valor, c) => {
+          const cell = ws[XLSX.utils.encode_cell({ r, c })];
+          if (!cell) return;
+          const encabezado = r < (estudianteId ? 1 : 3);
+          const promedio = estudianteId
+            ? r === data.length - 1
+            : c === ultimaColumna;
+          const esNota = !encabezado && (estudianteId ? c === 3 : c >= 3);
+          const baja = esNota && typeof valor === "number" && valor < 7;
+          cell.s = {
+            font: {
+              name: "Calibri",
+              sz: 11,
+              bold: encabezado || promedio,
+              color: { rgb: baja ? "9C0006" : "273444" },
+            },
+            alignment: {
+              vertical: "center",
+              horizontal: esNota || encabezado ? "center" : "left",
+              wrapText: true,
+            },
+            fill: {
+              patternType: "solid",
+              fgColor: {
+                rgb: baja
+                  ? "FFC7CE"
+                  : encabezado
+                    ? "EAF0F6"
+                    : promedio
+                      ? "F2F5F8"
+                      : "FFFFFF",
+              },
+            },
+            border: { bottom: { style: "thin", color: { rgb: "D8DEE6" } } },
+          };
+          if (esNota && typeof valor === "number") cell.z = "0.##";
+        }),
+      );
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, sec.nombre.substring(0, 31));
       const now = new Date();
@@ -1028,13 +1057,19 @@ export default function ReporteNotas() {
       const paralelo = gradoDocenteActual?.paralelo.replace(/ /g, "_") || "";
       const materiaLimpia = sec.nombre.replace(/[^a-zA-Z0-9]/g, "_");
       const estudianteSufijo = estudianteId
-        ? `_${estudiantesExportar[0].apellidos}_${estudiantesExportar[0].nombres}_${estudianteId}`.replace(/[^a-zA-Z0-9_-]/g, "_")
+        ? `_${estudiantesExportar[0].apellidos}_${estudiantesExportar[0].nombres}_${estudianteId}`.replace(
+            /[^a-zA-Z0-9_-]/g,
+            "_",
+          )
         : "";
       const nombreArchivo = `${nombreGrado}_${paralelo}_${materiaLimpia}${estudianteSufijo}_${fechaStr}.xlsx`;
       XLSX.writeFile(wb, nombreArchivo);
     } catch (error) {
       console.error("Error exportando Excel:", error);
-      mostrarAviso("error", "No se pudo descargar el informe Excel. Inténtalo nuevamente.");
+      mostrarAviso(
+        "error",
+        "No se pudo descargar el informe Excel. Inténtalo nuevamente.",
+      );
     }
   };
   // ==================== RENDER ====================
@@ -1054,6 +1089,22 @@ export default function ReporteNotas() {
   }
   return (
     <Layout>
+      {erroresCarga.length > 0 && (
+        <div
+          role="alert"
+          className="mb-3 rounded border border-amber-200 bg-amber-50 p-3 text-xs"
+        >
+          No se pudo actualizar una parte del reporte. Revisa la conexión y los
+          permisos antes de usar los resultados.
+          <button
+            type="button"
+            className="ml-2 underline"
+            onClick={reintentarCarga}
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
       <div className="mb-2 flex flex-wrap items-baseline gap-2">
         <h1 className="text-base font-semibold tracking-tight text-[#244563]">
           Reporte de notas
@@ -1418,8 +1469,17 @@ export default function ReporteNotas() {
                 <table className="w-full border-collapse text-[11px]">
                   <thead className="bg-[#ECEFF3] border-b border-[#D8DEE6]">
                     <tr>
-                      {["Estudiante", "Número de actividades", "Notas menores a 7", "Acciones"].map((titulo) => (
-                        <th key={titulo} scope="col" className="px-3 py-2 text-left text-[10px] font-semibold text-[#4B5563]">
+                      {[
+                        "Estudiante",
+                        "Número de actividades",
+                        "Notas menores a 7",
+                        "Acciones",
+                      ].map((titulo) => (
+                        <th
+                          key={titulo}
+                          scope="col"
+                          className="px-3 py-2 text-left text-[10px] font-semibold text-[#4B5563]"
+                        >
                           {titulo}
                         </th>
                       ))}
@@ -1427,7 +1487,9 @@ export default function ReporteNotas() {
                   </thead>
                   <tbody className="divide-y divide-[#E4E8EE]">
                     {estudiantesDelGradoDocente.map((est) => {
-                      const asignadas = sec.actividades.filter((a) => aplicaActividad(est, a));
+                      const asignadas = sec.actividades.filter((a) =>
+                        aplicaActividad(est, a),
+                      );
                       const notasBajas = asignadas.flatMap((actividad) => {
                         const cal = calMap.get(`${est.id}|${actividad.id}`);
                         if (!cal || cal.nota == null) return [];
@@ -1435,7 +1497,10 @@ export default function ReporteNotas() {
                         return nota < 7 ? [{ actividad, nota }] : [];
                       });
                       return (
-                        <tr key={est.id} className="transition-colors hover:bg-[#ECEFF3]">
+                        <tr
+                          key={est.id}
+                          className="transition-colors hover:bg-[#ECEFF3]"
+                        >
                           <td className="px-3 py-2 font-medium text-[#374151]">
                             {est.apellidos} {est.nombres}
                           </td>
@@ -1444,50 +1509,83 @@ export default function ReporteNotas() {
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap gap-1">
-                              {notasBajas.length > 0 ? notasBajas.map(({ actividad, nota }) => (
-                                <span key={actividad.id}
-                                  className="rounded bg-red-50 px-1.5 py-0.5 font-semibold text-[#AD3038]"
-                                  title={`${actividad.tipo}: ${actividad.detalle} (${actividad.fecha})`}
-                                  aria-label={`${actividad.detalle}: ${round2(nota)}`}>
-                                  {round2(nota)}
+                              {notasBajas.length > 0 ? (
+                                notasBajas.map(({ actividad, nota }) => (
+                                  <span
+                                    key={actividad.id}
+                                    className="rounded bg-red-50 px-1.5 py-0.5 font-semibold text-[#AD3038]"
+                                    title={`${actividad.tipo}: ${actividad.detalle} (${actividad.fecha})`}
+                                    aria-label={`${actividad.detalle}: ${round2(nota)}`}
+                                  >
+                                    {round2(nota)}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-[#64748B]">
+                                  Sin notas menores a 7
                                 </span>
-                              )) : <span className="text-[#64748B]">Sin notas menores a 7</span>}
+                              )}
                             </div>
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-1 whitespace-nowrap">
-                            <button type="button"
-                              onClick={() => setEstudianteDetalleId(est.id)}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                              title={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
-                              aria-label={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}>
-                              <FaEye aria-hidden="true" />
-                            </button>
-                            <button type="button"
-                              onClick={() => exportarSeccionExcel(sec, est.id)}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                              title={`Descargar Excel de ${est.apellidos} ${est.nombres}`}
-                              aria-label={`Descargar Excel de ${est.apellidos} ${est.nombres}`}>
-                              <FaFileExcel aria-hidden="true" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const informe = prepararInformeNotificacion(sec, est);
-                                if (!informe) {
-                                  mostrarAviso("warning", "Registra un celular válido del representante en el módulo Estudiantes. Para Ecuador usa 09XXXXXXXX; para otro país incluye + y el código de país.");
-                                  return;
+                              <button
+                                type="button"
+                                onClick={() => setEstudianteDetalleId(est.id)}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                title={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
+                                aria-label={`Ver detalle de notas de ${est.apellidos} ${est.nombres}`}
+                              >
+                                <FaEye aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  exportarSeccionExcel(sec, est.id)
                                 }
-                                setInformeNotificacion(informe);
-                              }}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded text-green-700 hover:bg-green-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700/40"
-                              title={`Compartir mini informe con el representante de ${est.apellidos} ${est.nombres}`}
-                              aria-label={`Compartir mini informe con el representante de ${est.apellidos} ${est.nombres}`}>
-                              <FaWhatsapp aria-hidden="true" />
-                            </button>
-                            <span className="text-[10px] tabular-nums text-[#64748B]" title="Notificaciones confirmadas de este docente, estudiante, materia y período">
-                              {contadoresNotificacion[contextoNotificacion({docenteId:user?.uid || "", anioId:anioActivo?.id || "", periodoId:periodoActual?.id || "", gradoId:gradoDocenteEfectivo, materiaId:sec.id, estudianteId:est.id})] || 0}
-                            </span>
+                                className="inline-flex h-8 w-8 items-center justify-center rounded text-[#244563] hover:bg-[#EAF0F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                title={`Descargar Excel de ${est.apellidos} ${est.nombres}`}
+                                aria-label={`Descargar Excel de ${est.apellidos} ${est.nombres}`}
+                              >
+                                <FaFileExcel aria-hidden="true" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const informe = prepararInformeNotificacion(
+                                    sec,
+                                    est,
+                                  );
+                                  if (!informe) {
+                                    mostrarAviso(
+                                      "warning",
+                                      "Registra un celular válido del representante en el módulo Estudiantes. Para Ecuador usa 09XXXXXXXX; para otro país incluye + y el código de país.",
+                                    );
+                                    return;
+                                  }
+                                  setInformeNotificacion(informe);
+                                }}
+                                className="inline-flex h-8 w-8 items-center justify-center rounded text-green-700 hover:bg-green-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700/40"
+                                title={`Compartir mini informe con el representante de ${est.apellidos} ${est.nombres}`}
+                                aria-label={`Compartir mini informe con el representante de ${est.apellidos} ${est.nombres}`}
+                              >
+                                <FaWhatsapp aria-hidden="true" />
+                              </button>
+                              <span
+                                className="text-[10px] tabular-nums text-[#64748B]"
+                                title="Notificaciones confirmadas de este docente, estudiante, materia y período"
+                              >
+                                {contadoresNotificacion[
+                                  contextoNotificacion({
+                                    docenteId: user?.uid || "",
+                                    anioId: anioActivo?.id || "",
+                                    periodoId: periodoActual?.id || "",
+                                    gradoId: gradoDocenteEfectivo,
+                                    materiaId: sec.id,
+                                    estudianteId: est.id,
+                                  })
+                                ] || 0}
+                              </span>
                             </div>
                           </td>
                         </tr>
@@ -1501,7 +1599,12 @@ export default function ReporteNotas() {
         </div>
       )}
 
-      {informeNotificacion && <NotificacionNotas informe={informeNotificacion} cerrar={() => setInformeNotificacion(null)} />}
+      {informeNotificacion && (
+        <NotificacionNotas
+          informe={informeNotificacion}
+          cerrar={() => setInformeNotificacion(null)}
+        />
+      )}
       {/* Modal de detalle del estudiante */}
       {estudianteDetalle && (
         <div

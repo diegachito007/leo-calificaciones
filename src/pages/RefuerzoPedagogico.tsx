@@ -18,6 +18,10 @@ import {
 } from "firebase/firestore";
 import { cacheInvalidate } from "../utils/sessionCache";
 import {
+  cargarRefuerzoConCache,
+  invalidarCachePreviewRefuerzo,
+} from "../utils/refuerzoPedagogicoCache";
+import {
   construirRefuerzoConHistorial,
   recalcularInsumos,
   type RefuerzoConHistorial,
@@ -28,6 +32,7 @@ import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { Estudiante } from "../types";
 import Layout from "../components/Layout";
+import DiagnosticoRefuerzoPedagogico from "../components/DiagnosticoRefuerzoPedagogico";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import {
@@ -418,6 +423,16 @@ export default function RefuerzoPedagogico() {
   const nombreVicerrector = configInst?.nombreVicerrector || "";
 
   const userUid = user?.uid;
+  const contextoCacheRefuerzo = JSON.stringify([
+    userUid || "",
+    anioActivo?.id || "",
+    userData?.role || "",
+    userData?.status || "",
+    userData?.gradosAsignados || [],
+  ]);
+  const mostrarDiagnosticoRefuerzo =
+    import.meta.env.DEV &&
+    new URLSearchParams(window.location.search).get("diagnosticoRefuerzoPedagogico") === "1";
 
   useEffect(() => {
     const nuevo = searchParams.get("nuevo");
@@ -532,14 +547,19 @@ export default function RefuerzoPedagogico() {
     if (!form.gradoId || !form.destrezaId) return;
     setIsPreviewing(true);
     try {
-      const actsSnap = await getDocs(
-        query(
-          collection(db, "actividades"),
-          where("destrezaId", "==", form.destrezaId),
-        ),
-      );
-      const allActs = actsSnap.docs.map(
-        (d) => ({ id: d.id, ...d.data() }) as ActividadSnap,
+      const allActs = await cargarRefuerzoConCache<ActividadSnap[]>(
+        `preview:actividades:${contextoCacheRefuerzo}:${form.destrezaId}`,
+        async () => {
+          const actsSnap = await getDocs(
+            query(
+              collection(db, "actividades"),
+              where("destrezaId", "==", form.destrezaId),
+            ),
+          );
+          return actsSnap.docs.map(
+            (d) => ({ id: d.id, ...d.data() }) as ActividadSnap,
+          );
+        },
       );
       const idsAgrupados = new Set<string>();
       allActs.forEach((a) => {
@@ -549,27 +569,40 @@ export default function RefuerzoPedagogico() {
       });
       const acts = allActs.filter((a) => !idsAgrupados.has(a.id));
       const actIds = acts.map((a) => a.id);
-      const estsSnap = await getDocs(
-        query(
-          collection(db, "estudiantes"),
-          where("gradoId", "==", form.gradoId),
-          where("activo", "==", true),
-        ),
-      );
-      const ests = estsSnap.docs.map(
-        (d) => ({ id: d.id, ...d.data() }) as Estudiante,
+      const ests = await cargarRefuerzoConCache<Estudiante[]>(
+        `preview:estudiantes:${contextoCacheRefuerzo}:${form.gradoId}`,
+        async () => {
+          const estsSnap = await getDocs(
+            query(
+              collection(db, "estudiantes"),
+              where("gradoId", "==", form.gradoId),
+              where("activo", "==", true),
+            ),
+          );
+          return estsSnap.docs.map(
+            (d) => ({ id: d.id, ...d.data() }) as Estudiante,
+          );
+        },
       );
       const bajos: Record<string, NotaBaja[]> = {};
       for (let i = 0; i < actIds.length; i += 30) {
         const lote = actIds.slice(i, i + 30);
-        const calsSnap = await getDocs(
-          query(
-            collection(db, "calificaciones"),
-            where("actividadId", "in", lote),
-          ),
+        const claveLote = [...lote].sort().join(",");
+        const calificaciones = await cargarRefuerzoConCache<CalificacionSnap[]>(
+          `preview:calificaciones:${contextoCacheRefuerzo}:${form.gradoId}:${form.destrezaId}:${claveLote}`,
+          async () => {
+            const calsSnap = await getDocs(
+              query(
+                collection(db, "calificaciones"),
+                where("actividadId", "in", lote),
+              ),
+            );
+            return calsSnap.docs.map(
+              (d) => ({ id: d.id, ...d.data() }) as CalificacionSnap,
+            );
+          },
         );
-        calsSnap.docs.forEach((d) => {
-          const c = d.data() as CalificacionSnap;
+        calificaciones.forEach((c) => {
           const act = acts.find((a) => a.id === c.actividadId);
           if (!act) return;
           const notaFinal = c.refuerzo
@@ -586,7 +619,7 @@ export default function RefuerzoPedagogico() {
           bajos[est.id].push({
             actividadId: act.id,
             // El ID del documento no viene dentro de d.data(); se obtiene de d.id.
-            calificacionId: d.id,
+            calificacionId: c.id,
             nota: notaFinal,
             fecha: act.fecha,
             detalle: act.detalle,
@@ -609,7 +642,7 @@ export default function RefuerzoPedagogico() {
     } finally {
       setIsPreviewing(false);
     }
-  }, [form.gradoId, form.destrezaId, mostrarToast]);
+  }, [form.gradoId, form.destrezaId, mostrarToast, contextoCacheRefuerzo]);
 
   useEffect(() => {
     if (
@@ -926,6 +959,7 @@ export default function RefuerzoPedagogico() {
       );
       batch.delete(doc(db, "refuerzos", id));
       await batch.commit();
+      invalidarCachePreviewRefuerzo();
 
       // Al revertir los refuerzos, los insumos que agrupan esas actividades
       // recuperan el promedio con las notas originales.
@@ -1158,6 +1192,7 @@ export default function RefuerzoPedagogico() {
       }
 
       await batch.commit();
+      invalidarCachePreviewRefuerzo();
 
       // ✅ 3. Invalidar cachés para que la vista de Calificaciones vea los cambios al instante
       cacheInvalidate(`actividades_${procesoActivo.destrezaId}`);
@@ -4672,6 +4707,7 @@ export default function RefuerzoPedagogico() {
 
   return (
     <Layout>
+      {mostrarDiagnosticoRefuerzo && <DiagnosticoRefuerzoPedagogico />}
       <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-3">
           {procesoActivo && (
