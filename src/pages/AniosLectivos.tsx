@@ -26,7 +26,9 @@ import {
   FaTimesCircle,
   FaExclamationTriangle,
   FaQuestionCircle,
+  FaArrowLeft,
 } from "react-icons/fa";
+
 interface PeriodoCalculado {
   nombre: string;
   fechaInicio: string;
@@ -50,22 +52,24 @@ interface ConfirmModalState {
   onConfirm: () => void;
   onCancel: () => void;
 }
+
 export default function AniosLectivos() {
   const { user } = useAuth();
   const { aniosLectivos, ready } = useData();
+  
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  
   const [formData, setFormData] = useState({
     fechaInicio: "",
     fechaFin: "",
     tipoEvaluacion: "trimestral" as "trimestral" | "quimestral",
     activo: false,
   });
-  const [periodosEditables, setPeriodosEditables] = useState<
-    PeriodoCalculado[]
-  >([]);
+  
+  const [periodosEditables, setPeriodosEditables] = useState<PeriodoCalculado[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
@@ -74,10 +78,12 @@ export default function AniosLectivos() {
     onConfirm: () => {},
     onCancel: () => {},
   });
+
   const anios = [...aniosLectivos].sort((a, b) => {
     if (!a.nombre || !b.nombre) return 0;
     return b.nombre.localeCompare(a.nombre);
   });
+
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -89,9 +95,11 @@ export default function AniosLectivos() {
     },
     [],
   );
+
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
   const confirmar = useCallback(
     (
       title: string,
@@ -110,7 +118,7 @@ export default function AniosLectivos() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-red-600 hover:bg-red-700",
+          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -125,16 +133,16 @@ export default function AniosLectivos() {
     },
     [],
   );
+
   const calcularNombre = (fechaInicio: string, fechaFin: string): string => {
     if (!fechaInicio || !fechaFin) return "";
     const yearInicio = new Date(fechaInicio).getFullYear();
     const yearFin = new Date(fechaFin).getFullYear();
     return `${yearInicio}-${yearFin}`;
   };
-  const nombreGenerado = calcularNombre(
-    formData.fechaInicio,
-    formData.fechaFin,
-  );
+  
+  const nombreGenerado = calcularNombre(formData.fechaInicio, formData.fechaFin);
+
   const calcularPeriodos = (
     fechaInicio: string,
     fechaFin: string,
@@ -149,6 +157,7 @@ export default function AniosLectivos() {
     const numPeriodos = tipo === "trimestral" ? 3 : 2;
     const diasPorPeriodo = Math.floor(totalDias / numPeriodos);
     const periodos: PeriodoCalculado[] = [];
+
     for (let i = 0; i < numPeriodos; i++) {
       const periodoInicio = new Date(
         inicio.getTime() + i * diasPorPeriodo * 24 * 60 * 60 * 1000,
@@ -163,15 +172,24 @@ export default function AniosLectivos() {
             );
       const nombre =
         tipo === "trimestral" ? `Trimestre ${i + 1}` : `Quimestre ${i + 1}`;
+      
+      // Ajustamos para evitar desfase de zona horaria al usar toISOString
+      const ajustarZona = (d: Date) => {
+        const offset = d.getTimezoneOffset();
+        const adjusted = new Date(d.getTime() - offset * 60 * 1000);
+        return adjusted.toISOString().split("T")[0];
+      };
+
       periodos.push({
         nombre,
-        fechaInicio: periodoInicio.toISOString().split("T")[0],
-        fechaFin: periodoFin.toISOString().split("T")[0],
+        fechaInicio: ajustarZona(periodoInicio),
+        fechaFin: ajustarZona(periodoFin),
         orden: i + 1,
       });
     }
     return periodos;
   };
+
   const actualizarPeriodo = (
     index: number,
     campo: "fechaInicio" | "fechaFin",
@@ -183,6 +201,7 @@ export default function AniosLectivos() {
       return nuevos;
     });
   };
+
   async function cargarPeriodosExistentes(anioId: string) {
     try {
       const q = query(
@@ -191,14 +210,9 @@ export default function AniosLectivos() {
       );
       const snap = await getDocs(q);
       const data = snap.docs
-        .map(
-          (doc) =>
-            ({
-              id: doc.id,
-              ...doc.data(),
-            }) as PeriodoEvaluacion,
-        )
+        .map((doc) => ({ id: doc.id, ...doc.data() }) as PeriodoEvaluacion)
         .sort((a, b) => (a.orden || 0) - (b.orden || 0));
+      
       if (data.length > 0) {
         setPeriodosEditables(
           data.map((p) => ({
@@ -213,78 +227,53 @@ export default function AniosLectivos() {
       console.error("Error cargando períodos:", error);
     }
   }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.fechaInicio || !formData.fechaFin) {
-      mostrarToast(
-        "warning",
-        "Fechas obligatorias",
-        "Las fechas de inicio y fin son obligatorias.",
-      );
+      mostrarToast("warning", "Fechas obligatorias", "Las fechas de inicio y fin son obligatorias.");
       return;
     }
     if (new Date(formData.fechaFin) <= new Date(formData.fechaInicio)) {
-      mostrarToast(
-        "warning",
-        "Rango inválido",
-        "La fecha de fin debe ser posterior a la fecha de inicio.",
-      );
+      mostrarToast("warning", "Rango inválido", "La fecha de fin debe ser posterior a la fecha de inicio.");
       return;
     }
     if (periodosEditables.length === 0) {
-      mostrarToast(
-        "warning",
-        "Sin períodos",
-        "No se han generado los períodos de evaluación.",
-      );
+      mostrarToast("warning", "Sin períodos", "No se han generado los períodos de evaluación.");
       return;
     }
+    
     for (const periodo of periodosEditables) {
       if (!periodo.fechaInicio || !periodo.fechaFin) {
-        mostrarToast(
-          "warning",
-          "Fechas incompletas",
-          `Las fechas del ${periodo.nombre} son obligatorias.`,
-        );
+        mostrarToast("warning", "Fechas incompletas", `Las fechas del ${periodo.nombre} son obligatorias.`);
         return;
       }
       if (new Date(periodo.fechaFin) <= new Date(periodo.fechaInicio)) {
-        mostrarToast(
-          "warning",
-          "Rango inválido",
-          `La fecha de fin del ${periodo.nombre} debe ser posterior a la fecha de inicio.`,
-        );
+        mostrarToast("warning", "Rango inválido", `La fecha de fin del ${periodo.nombre} debe ser posterior a la fecha de inicio.`);
         return;
       }
       if (
         new Date(periodo.fechaInicio) < new Date(formData.fechaInicio) ||
         new Date(periodo.fechaFin) > new Date(formData.fechaFin)
       ) {
-        mostrarToast(
-          "warning",
-          "Rango fuera de límites",
-          `Las fechas del ${periodo.nombre} deben estar dentro del rango del año lectivo.`,
-        );
+        mostrarToast("warning", "Rango fuera de límites", `Las fechas del ${periodo.nombre} deben estar dentro del rango del año lectivo.`);
         return;
       }
     }
-    const nombre = calcularNombre(formData.fechaInicio, formData.fechaFin);
+
     const hayPeriodoActivo = anios.some((a) => a.activo && a.id !== editingId);
     if (hayPeriodoActivo && !editingId) {
       setShowConfirmModal(true);
       return;
     }
-    await guardarAnioLectivo(nombre);
+    await guardarAnioLectivo(nombreGenerado);
   };
+
   const confirmarCreacion = async () => {
     setShowConfirmModal(false);
-    const nombre = calcularNombre(formData.fechaInicio, formData.fechaFin);
-    await guardarAnioLectivo(nombre, true);
+    await guardarAnioLectivo(nombreGenerado, true);
   };
-  const cancelarCreacion = () => {
-    setShowConfirmModal(false);
-  };
-  // ✅ OPTIMIZADO: writeBatch para atomicidad en todas las operaciones
+
   async function guardarAnioLectivo(nombre: string, forzarActivo = false) {
     setIsSaving(true);
     try {
@@ -294,16 +283,16 @@ export default function AniosLectivos() {
       } else {
         estadoActivo = forzarActivo || !anios.some((a) => a.activo);
       }
+      
       const batch = writeBatch(db);
-      // Desactivar años activos si este será activo
+      
       if (estadoActivo) {
-        const aniosActivos = anios.filter(
-          (a) => a.activo && a.id !== editingId,
-        );
+        const aniosActivos = anios.filter((a) => a.activo && a.id !== editingId);
         aniosActivos.forEach((anio) => {
           batch.update(doc(db, "aniosLectivos", anio.id), { activo: false });
         });
       }
+
       let anioId: string;
       if (editingId) {
         anioId = editingId;
@@ -315,12 +304,9 @@ export default function AniosLectivos() {
           activo: estadoActivo,
           updatedAt: serverTimestamp(),
         });
-        // Eliminar períodos anteriores
+        
         const periodosAnteriores = await getDocs(
-          query(
-            collection(db, "periodosEvaluacion"),
-            where("anioLectivoId", "==", editingId),
-          ),
+          query(collection(db, "periodosEvaluacion"), where("anioLectivoId", "==", editingId)),
         );
         periodosAnteriores.docs.forEach((p) => {
           batch.delete(doc(db, "periodosEvaluacion", p.id));
@@ -338,15 +324,12 @@ export default function AniosLectivos() {
         });
         anioId = nuevoRef.id;
       }
-      // Crear nuevos períodos
+
       periodosEditables.forEach((periodo) => {
         const nuevoRef = doc(collection(db, "periodosEvaluacion"));
         batch.set(nuevoRef, {
           nombre: periodo.nombre,
-          tipo:
-            formData.tipoEvaluacion === "trimestral"
-              ? "trimestre"
-              : "quimestre",
+          tipo: formData.tipoEvaluacion === "trimestral" ? "trimestre" : "quimestre",
           anioLectivoId: anioId,
           fechaInicio: periodo.fechaInicio,
           fechaFin: periodo.fechaFin,
@@ -355,7 +338,9 @@ export default function AniosLectivos() {
           createdAt: serverTimestamp(),
         });
       });
+
       await batch.commit();
+      
       mostrarToast(
         "success",
         editingId ? "Período actualizado" : "Período creado",
@@ -365,15 +350,12 @@ export default function AniosLectivos() {
       resetForm();
     } catch (error) {
       console.error("Error guardando año lectivo:", error);
-      mostrarToast(
-        "error",
-        "Error al guardar",
-        "No se pudo guardar el año lectivo. Intenta nuevamente.",
-      );
+      mostrarToast("error", "Error al guardar", "No se pudo guardar el año lectivo. Intenta nuevamente.");
     } finally {
       setIsSaving(false);
     }
   }
+
   const handleEdit = (anio: AnioLectivo) => {
     setFormData({
       fechaInicio: anio.fechaInicio,
@@ -385,80 +367,54 @@ export default function AniosLectivos() {
     setShowForm(true);
     cargarPeriodosExistentes(anio.id);
   };
-  // ✅ OPTIMIZADO: writeBatch para eliminar año y períodos atómicamente
+
   async function handleDelete(id: string) {
     const anio = anios.find((a) => a.id === id);
     const confirmado = await confirmar(
       `Eliminar año lectivo ${anio?.nombre || ""}`,
       `¿Estás seguro de eliminar este año lectivo? Se eliminarán también todos los períodos de evaluación asociados. Esta acción no se puede deshacer.`,
-      {
-        confirmText: "Sí, eliminar",
-        cancelText: "Cancelar",
-        confirmColor: "bg-red-600 hover:bg-red-700",
-        icon: FaTrash,
-      },
+      { confirmText: "Sí, eliminar", cancelText: "Cancelar", confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]", icon: FaTrash },
     );
     if (!confirmado) return;
+    
     try {
       const batch = writeBatch(db);
-      // Eliminar períodos
       const periodos = await getDocs(
-        query(
-          collection(db, "periodosEvaluacion"),
-          where("anioLectivoId", "==", id),
-        ),
+        query(collection(db, "periodosEvaluacion"), where("anioLectivoId", "==", id)),
       );
       periodos.docs.forEach((p) => {
         batch.delete(doc(db, "periodosEvaluacion", p.id));
       });
-      // Eliminar año lectivo
       batch.delete(doc(db, "aniosLectivos", id));
       await batch.commit();
-      mostrarToast(
-        "success",
-        "Año lectivo eliminado",
-        `${anio?.nombre} y sus períodos fueron eliminados correctamente.`,
-      );
+      
+      mostrarToast("success", "Año lectivo eliminado", `${anio?.nombre} y sus períodos fueron eliminados correctamente.`);
     } catch (error) {
       console.error("Error eliminando:", error);
-      mostrarToast(
-        "error",
-        "Error al eliminar",
-        "No se pudo eliminar el año lectivo.",
-      );
+      mostrarToast("error", "Error al eliminar", "No se pudo eliminar el año lectivo.");
     }
   }
-  // ✅ OPTIMIZADO: writeBatch para activar período atómicamente
+
   async function handleActivar(id: string) {
     const anio = anios.find((a) => a.id === id);
     setIsSaving(true);
     try {
       const batch = writeBatch(db);
-      // Desactivar años activos actuales
-      anios
-        .filter((a) => a.activo)
-        .forEach((a) => {
-          batch.update(doc(db, "aniosLectivos", a.id), { activo: false });
-        });
-      // Activar el nuevo
+      anios.filter((a) => a.activo).forEach((a) => {
+        batch.update(doc(db, "aniosLectivos", a.id), { activo: false });
+      });
       batch.update(doc(db, "aniosLectivos", id), { activo: true });
       await batch.commit();
-      mostrarToast(
-        "success",
-        "Período activado",
-        `${anio?.nombre} ahora es el período académico vigente.`,
-      );
+      
+      mostrarToast("success", "Período activado", `${anio?.nombre} ahora es el período académico vigente.`);
     } catch (error) {
       console.error("Error activando:", error);
-      mostrarToast(
-        "error",
-        "Error al activar",
-        "No se pudo activar el período.",
-      );
+      mostrarToast("error", "Error al activar", "No se pudo activar el período.");
     } finally {
       setIsSaving(false);
     }
   }
+
   const resetForm = () => {
     setFormData({
       fechaInicio: "",
@@ -470,541 +426,412 @@ export default function AniosLectivos() {
     setShowForm(false);
     setPeriodosEditables([]);
   };
+
   const toastConfig = {
-    success: {
-      bg: "bg-green-50 border-green-400",
-      iconBg: "bg-green-500",
-      titleColor: "text-green-900",
-      msgColor: "text-green-700",
-      icon: FaCheckCircle,
-    },
-    error: {
-      bg: "bg-red-50 border-red-400",
-      iconBg: "bg-red-500",
-      titleColor: "text-red-900",
-      msgColor: "text-red-700",
-      icon: FaTimesCircle,
-    },
-    warning: {
-      bg: "bg-yellow-50 border-yellow-400",
-      iconBg: "bg-yellow-500",
-      titleColor: "text-yellow-900",
-      msgColor: "text-yellow-700",
-      icon: FaExclamationTriangle,
-    },
-    info: {
-      bg: "bg-blue-50 border-blue-400",
-      iconBg: "bg-blue-500",
-      titleColor: "text-blue-900",
-      msgColor: "text-blue-700",
-      icon: FaInfoCircle,
-    },
+    success: { bg: "border-l-[#6687A5]", iconBg: "bg-[#244563]", icon: FaCheckCircle },
+    error: { bg: "border-l-red-400", iconBg: "bg-[#C93F45]", icon: FaTimesCircle },
+    warning: { bg: "border-l-amber-400", iconBg: "bg-amber-500", icon: FaExclamationTriangle },
+    info: { bg: "border-l-[#244563]", iconBg: "bg-[#244563]", icon: FaInfoCircle },
   };
+
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
+
   if (!ready) {
     return (
       <Layout>
-        <div className="flex items-center justify-center py-12">
+        <div className="flex items-center justify-center py-20">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#174C35] border-t-transparent mx-auto mb-3"></div>
-            <p className="text-[#55645A] text-[11px] font-medium">
-              Cargando periodos...
-            </p>
+            <FaSpinner className="animate-spin text-2xl text-[#244563] mx-auto mb-3" />
+            <p className="text-[#4B5563] text-[11px] font-medium">Cargando periodos...</p>
           </div>
         </div>
       </Layout>
     );
   }
+
   return (
     <Layout>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h2 className="text-xs font-semibold text-[#28352E]">
-          Periodos académicos
-        </h2>
-        <button
-          type="button"
-          onClick={() => (showForm ? resetForm() : setShowForm(true))}
-          disabled={isSaving}
-          className="inline-flex h-8 items-center gap-2 rounded-md bg-[#174C35] px-3 text-[11px] font-medium text-white transition-colors hover:bg-[#103827] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {showForm ? (
-            <FaTimes className="text-[10px]" />
-          ) : (
-            <FaPlus className="text-[10px]" />
-          )}
-          {showForm ? "Cancelar" : "Nuevo periodo"}
-        </button>
-      </div>
-      {showForm && (
-        <div className="bg-[#FFFDF8] rounded-lg shadow-sm border border-[#DCD7CB] mb-3 overflow-hidden">
-          <div className="bg-[#F7F6F2] border-b border-[#DCD7CB] px-3 py-2">
-            <h3 className="text-[#48564D] font-semibold text-[11px]">
-              {editingId
-                ? "Editar Periodo Académico"
-                : "Nuevo Periodo Académico"}
-            </h3>
+      <div className="mx-auto w-full max-w-6xl space-y-4">
+        
+        {/* Cabecera */}
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => window.history.back()}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#273444]"
+              title="Volver"
+            >
+              <FaArrowLeft className="text-sm" />
+            </button>
+            <div>
+              <h1 className="text-base font-semibold tracking-tight text-[#244563]">
+                Periodos Académicos
+              </h1>
+              <p className="text-[11px] text-[#6B7280]">
+                Configura los años lectivos y sus períodos de evaluación.
+              </p>
+            </div>
           </div>
-          <form onSubmit={handleSubmit} className="p-3">
-            {nombreGenerado && (
-              <div className="bg-[#E8EFE9] border border-[#DCD7CB] rounded-lg px-4 py-3 mb-4">
-                <div className="flex items-center gap-2 text-[#55645A]">
-                  <FaInfoCircle className="text-[11px]" />
-                  <span className="text-[11px] font-medium">
-                    Periodo académico:
-                  </span>
-                  <span className="text-[11px] font-bold text-[#28352E]">
-                    {nombreGenerado}
-                  </span>
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="block text-[10px] font-semibold text-[#48564D] uppercase tracking-wide mb-1">
-                  Fecha de Inicio *
-                </label>
-                <input
-                  type="date"
-                  value={formData.fechaInicio}
-                  onChange={(e) => {
-                    const nuevaFecha = e.target.value;
-                    setFormData({ ...formData, fechaInicio: nuevaFecha });
-                    if (nuevaFecha && formData.fechaFin) {
-                      const nuevosPeriodos = calcularPeriodos(
-                        nuevaFecha,
-                        formData.fechaFin,
-                        formData.tipoEvaluacion,
-                      );
-                      setPeriodosEditables(nuevosPeriodos);
-                    }
-                  }}
-                  className="w-full h-8 border border-[#C9C1B1] bg-[#FFFDF8] rounded-md px-2.5 text-[11px] focus:ring-2 focus:ring-[#174C35]/30 focus:border-[#174C35] transition-all"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-[#48564D] uppercase tracking-wide mb-1">
-                  Fecha de Fin *
-                </label>
-                <input
-                  type="date"
-                  value={formData.fechaFin}
-                  onChange={(e) => {
-                    const nuevaFecha = e.target.value;
-                    setFormData({ ...formData, fechaFin: nuevaFecha });
-                    if (formData.fechaInicio && nuevaFecha) {
-                      const nuevosPeriodos = calcularPeriodos(
-                        formData.fechaInicio,
-                        nuevaFecha,
-                        formData.tipoEvaluacion,
-                      );
-                      setPeriodosEditables(nuevosPeriodos);
-                    }
-                  }}
-                  min={formData.fechaInicio}
-                  className="w-full h-8 border border-[#C9C1B1] bg-[#FFFDF8] rounded-md px-2.5 text-[11px] focus:ring-2 focus:ring-[#174C35]/30 focus:border-[#174C35] transition-all"
-                  required
-                />
-              </div>
-            </div>
-            <div className="mb-4">
-              <label className="block text-[10px] font-semibold text-[#48564D] uppercase tracking-wide mb-1">
-                Tipo de Evaluación *
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFormData({ ...formData, tipoEvaluacion: "trimestral" });
-                    if (formData.fechaInicio && formData.fechaFin) {
-                      const nuevosPeriodos = calcularPeriodos(
-                        formData.fechaInicio,
-                        formData.fechaFin,
-                        "trimestral",
-                      );
-                      setPeriodosEditables(nuevosPeriodos);
-                    }
-                  }}
-                  className={`p-2.5 border rounded-lg transition-all text-left ${
-                    formData.tipoEvaluacion === "trimestral"
-                      ? "border-[#174C35] bg-[#E8EFE9]"
-                      : "border-[#C9C1B1] hover:border-slate-400"
-                  }`}
-                >
-                  <div className="font-semibold text-[#1E2A24] text-[11px] mb-1">
-                    Trimestral
-                  </div>
-                  <div className="text-[10px] text-[#55645A]">
-                    3 períodos de evaluación
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFormData({ ...formData, tipoEvaluacion: "quimestral" });
-                    if (formData.fechaInicio && formData.fechaFin) {
-                      const nuevosPeriodos = calcularPeriodos(
-                        formData.fechaInicio,
-                        formData.fechaFin,
-                        "quimestral",
-                      );
-                      setPeriodosEditables(nuevosPeriodos);
-                    }
-                  }}
-                  className={`p-2.5 border rounded-lg transition-all text-left ${
-                    formData.tipoEvaluacion === "quimestral"
-                      ? "border-[#174C35] bg-[#E8EFE9]"
-                      : "border-[#C9C1B1] hover:border-slate-400"
-                  }`}
-                >
-                  <div className="font-semibold text-[#1E2A24] text-[11px] mb-1">
-                    Quimestral
-                  </div>
-                  <div className="text-[10px] text-[#55645A]">
-                    2 períodos de evaluación
-                  </div>
-                </button>
-              </div>
-            </div>
-            {periodosEditables.length > 0 && (
-              <div className="bg-[#F7F6F2] border border-[#DCD7CB] rounded-lg p-3 mb-4">
-                <div className="flex items-center gap-2 text-[#55645A] mb-3">
-                  <FaCalendarAlt className="text-[11px]" />
-                  <span className="text-[11px] font-semibold">
-                    Períodos de Evaluación (editables):
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  {periodosEditables.map((periodo, idx) => (
-                    <div
-                      key={idx}
-                      className="bg-[#FFFDF8] rounded-lg px-4 py-3 border border-[#DCD7CB]"
-                    >
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="bg-[#E8EFE9] text-[#174C35] rounded w-6 h-6 flex items-center justify-center text-[10px] font-bold">
-                          {periodo.orden}
-                        </div>
-                        <span className="text-[11px] font-semibold text-[#28352E]">
-                          {periodo.nombre}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-[10px] text-[#55645A] mb-1">
-                            Fecha Inicio
-                          </label>
-                          <input
-                            type="date"
-                            value={periodo.fechaInicio}
-                            onChange={(e) =>
-                              actualizarPeriodo(
-                                idx,
-                                "fechaInicio",
-                                e.target.value,
-                              )
-                            }
-                            min={formData.fechaInicio}
-                            max={periodo.fechaFin || formData.fechaFin}
-                            className="w-full h-8 border border-[#C9C1B1] bg-[#FFFDF8] rounded-md px-2 text-[11px] focus:ring-2 focus:ring-[#174C35]/30"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] text-[#55645A] mb-1">
-                            Fecha Fin
-                          </label>
-                          <input
-                            type="date"
-                            value={periodo.fechaFin}
-                            onChange={(e) =>
-                              actualizarPeriodo(idx, "fechaFin", e.target.value)
-                            }
-                            min={periodo.fechaInicio || formData.fechaInicio}
-                            max={formData.fechaFin}
-                            className="w-full h-8 border border-[#C9C1B1] bg-[#FFFDF8] rounded-md px-2 text-[11px] focus:ring-2 focus:ring-[#174C35]/30"
-                            required
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-[10px] text-[#174C35] mt-3 flex items-center gap-1">
-                  <FaInfoCircle className="text-[10px]" />
-                  Las fechas se calcularon automáticamente. Puedes ajustarlas
-                  según necesites.
-                </p>
-              </div>
-            )}
-            <div className="flex items-center gap-2 mb-4">
-              <input
-                type="checkbox"
-                id="activo"
-                checked={formData.activo}
-                onChange={(e) =>
-                  setFormData({ ...formData, activo: e.target.checked })
-                }
-                className="w-4 h-4 text-[#174C35] border-[#C9C1B1] rounded focus:ring-[#174C35]/30"
-              />
-              <label htmlFor="activo" className="text-[11px] text-[#48564D]">
-                {editingId
-                  ? formData.activo
-                    ? "Mantener como activo"
-                    : "Marcar como activo"
-                  : "Marcar como periodo activo"}
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 pt-3 border-t border-[#DCD7CB]">
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="inline-flex items-center gap-2 bg-[#174C35] hover:bg-[#103827] text-white h-8 px-2.5 rounded-lg transition-all text-[11px] font-medium disabled:opacity-70 disabled:cursor-not-allowed"
-              >
-                {isSaving ? (
-                  <>
-                    <FaSpinner className="text-[10px] animate-spin" />
-                    Guardando...
-                  </>
-                ) : (
-                  <>
-                    <FaCheck className="text-[10px]" />
-                    {editingId ? "Actualizar" : "Guardar"}
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                onClick={resetForm}
-                disabled={isSaving}
-                className="inline-flex items-center gap-2 bg-[#F1EFE9] hover:bg-[#E7E2D8] text-[#48564D] h-8 px-2.5 rounded-lg transition-all text-[11px] font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <FaTimes className="text-[10px]" />
-                Cancelar
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-      {anios.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-[#DCD7CB] bg-[#FFFDF8] px-4 py-8 text-center">
-          <FaCalendarAlt className="mx-auto mb-2 text-xl text-[#667269]" />
-          <p className="text-[11px] font-medium text-[#48564D]">
-            No hay periodos académicos
-          </p>
           <button
             type="button"
+            onClick={() => (showForm ? resetForm() : setShowForm(true))}
             disabled={isSaving}
-            onClick={() => setShowForm(true)}
-            className="mt-3 inline-flex h-8 items-center gap-2 rounded-md border border-[#C9C1B1] px-3 text-[11px] font-medium text-[#174C35] hover:bg-[#E8EFE9] disabled:opacity-50"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <FaPlus className="text-[10px]" /> Crear periodo
+            {showForm ? <FaTimes className="text-[10px]" /> : <FaPlus className="text-[10px]" />}
+            {showForm ? "Cancelar" : "Nuevo periodo"}
           </button>
         </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {anios.map((anio) => (
-            <article
-              key={anio.id}
-              className="min-w-0 overflow-hidden rounded-lg border border-[#DCD7CB] bg-[#FFFDF8] shadow-sm"
-            >
-              <div className="flex items-start justify-between gap-2 border-b border-[#E7E2D8] bg-[#F7F6F2] px-3 py-2.5">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#DCD7CB] bg-[#FFFDF8] text-[#174C35]">
-                    <FaCalendarAlt className="text-xs" />
+
+        {/* Formulario */}
+        {showForm && (
+          <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
+            <header className="border-b border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2.5">
+              <h3 className="text-xs font-semibold text-[#4B5563]">
+                {editingId ? "Editar Periodo Académico" : "Nuevo Periodo Académico"}
+              </h3>
+            </header>
+            <form onSubmit={handleSubmit} className="p-4 space-y-4">
+              
+              {nombreGenerado && (
+                <div className="rounded-md border border-[#C8D6E5] bg-[#EAF0F6] px-3 py-2 flex items-center gap-2 text-[11px]">
+                  <FaInfoCircle className="text-[#244563]" />
+                  <span className="font-medium text-[#1B354D]">Periodo académico:</span>
+                  <span className="font-bold text-[#273444]">{nombreGenerado}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1 block">
+                    Fecha de Inicio *
                   </span>
-                  <div className="min-w-0">
-                    <h3 className="wrap-break-word text-xs font-semibold text-[#1E2A24]">
-                      {anio.nombre}
-                    </h3>
-                    <p className="mt-0.5 text-[10px] text-[#667269]">
-                      {anio.tipoEvaluacion === "trimestral"
-                        ? "Trimestral"
-                        : "Quimestral"}
-                    </p>
-                  </div>
-                </div>
-                <span
-                  className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${anio.activo ? "bg-[#E8EFE9] text-[#174C35]" : "bg-[#F1EFE9] text-[#667269]"}`}
-                >
-                  {anio.activo && <FaCheck className="text-[8px]" />}
-                  {anio.activo ? "Activo" : "Inactivo"}
-                </span>
+                  <input
+                    type="date"
+                    value={formData.fechaInicio}
+                    onChange={(e) => {
+                      const nuevaFecha = e.target.value;
+                      setFormData({ ...formData, fechaInicio: nuevaFecha });
+                      if (nuevaFecha && formData.fechaFin) {
+                        setPeriodosEditables(calcularPeriodos(nuevaFecha, formData.fechaFin, formData.tipoEvaluacion));
+                      }
+                    }}
+                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563]"
+                    required
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1 block">
+                    Fecha de Fin *
+                  </span>
+                  <input
+                    type="date"
+                    value={formData.fechaFin}
+                    onChange={(e) => {
+                      const nuevaFecha = e.target.value;
+                      setFormData({ ...formData, fechaFin: nuevaFecha });
+                      if (formData.fechaInicio && nuevaFecha) {
+                        setPeriodosEditables(calcularPeriodos(formData.fechaInicio, nuevaFecha, formData.tipoEvaluacion));
+                      }
+                    }}
+                    min={formData.fechaInicio}
+                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563]"
+                    required
+                  />
+                </label>
               </div>
-              <dl className="grid grid-cols-2 gap-3 px-3 py-3">
-                <div>
-                  <dt className="mb-1 text-[10px] text-[#667269]">
-                    Fecha de inicio
-                  </dt>
-                  <dd className="text-[11px] font-medium text-[#28352E]">
-                    {new Date(
-                      `${anio.fechaInicio}T00:00:00`,
-                    ).toLocaleDateString("es-EC", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="mb-1 text-[10px] text-[#667269]">
-                    Fecha de fin
-                  </dt>
-                  <dd className="text-[11px] font-medium text-[#28352E]">
-                    {new Date(`${anio.fechaFin}T00:00:00`).toLocaleDateString(
-                      "es-EC",
-                      { day: "numeric", month: "short", year: "numeric" },
-                    )}
-                  </dd>
-                </div>
-              </dl>
-              <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-[#E7E2D8] px-3 py-2">
-                {!anio.activo && (
+
+              <div>
+                <span className="text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-2 block">
+                  Tipo de Evaluación *
+                </span>
+                <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
-                    onClick={() => handleActivar(anio.id)}
-                    disabled={isSaving}
-                    className="mr-auto inline-flex h-8 items-center gap-1.5 rounded-md border border-[#C9C1B1] px-2.5 text-[11px] font-medium text-[#174C35] hover:bg-[#E8EFE9] disabled:opacity-50"
+                    onClick={() => {
+                      setFormData({ ...formData, tipoEvaluacion: "trimestral" });
+                      if (formData.fechaInicio && formData.fechaFin) {
+                        setPeriodosEditables(calcularPeriodos(formData.fechaInicio, formData.fechaFin, "trimestral"));
+                      }
+                    }}
+                    className={`p-2.5 border rounded-lg transition-all text-left ${
+                      formData.tipoEvaluacion === "trimestral" ? "border-[#244563] bg-[#EAF0F6] ring-1 ring-[#244563]/30" : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"
+                    }`}
                   >
-                    <FaCheck className="text-[10px]" /> Activar
+                    <div className="font-semibold text-[#273444] text-[11px] mb-0.5">Trimestral</div>
+                    <div className="text-[10px] text-[#6B7280]">3 períodos de evaluación</div>
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleEdit(anio)}
-                  disabled={isSaving}
-                  title="Editar periodo"
-                  aria-label={`Editar periodo ${anio.nombre}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-md border border-[#DCD7CB] text-[#174C35] hover:bg-[#E8EFE9] disabled:opacity-50"
-                >
-                  <FaEdit className="text-[11px]" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDelete(anio.id)}
-                  disabled={isSaving}
-                  title="Eliminar periodo"
-                  aria-label={`Eliminar periodo ${anio.nombre}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-md border border-[#DCD7CB] text-[#667269] hover:border-red-200 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
-                >
-                  <FaTrash className="text-[11px]" />
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-      <div className="fixed top-3 right-4 z-100 space-y-2 pointer-events-none max-w-sm w-full">
-        {toasts.map((toast) => {
-          const config = toastConfig[toast.type];
-          const Icon = config.icon;
-          return (
-            <div
-              key={toast.id}
-              className={`pointer-events-auto bg-[#FFFDF8] border-l-4 ${config.bg} rounded-lg shadow-lg p-3 flex items-start gap-3 animate-in slide-in-from-right duration-300`}
-            >
-              <div
-                className={`${config.iconBg} w-8 h-8 rounded-full flex items-center justify-center shrink-0`}
-              >
-                <Icon className="text-white text-[11px]" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className={`font-semibold text-[11px] ${config.titleColor}`}>
-                  {toast.title}
-                </p>
-                {toast.message && (
-                  <p
-                    className={`text-[10px] ${config.msgColor} mt-0.5 whitespace-pre-line`}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormData({ ...formData, tipoEvaluacion: "quimestral" });
+                      if (formData.fechaInicio && formData.fechaFin) {
+                        setPeriodosEditables(calcularPeriodos(formData.fechaInicio, formData.fechaFin, "quimestral"));
+                      }
+                    }}
+                    className={`p-2.5 border rounded-lg transition-all text-left ${
+                      formData.tipoEvaluacion === "quimestral" ? "border-[#244563] bg-[#EAF0F6] ring-1 ring-[#244563]/30" : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"
+                    }`}
                   >
-                    {toast.message}
-                  </p>
-                )}
-              </div>
-              <button
-                onClick={() => cerrarToast(toast.id)}
-                className="text-gray-400 hover:text-[#55645A] shrink-0 transition-colors"
-              >
-                <FaTimes className="w-4 h-4" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      {confirmModal.isOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-60 p-3 animate-in fade-in duration-200">
-          <div className="bg-[#FFFDF8] rounded-lg shadow-lg max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="bg-[#F7F6F2] px-3 py-3 border-b border-[#DCD7CB]">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-full bg-slate-200 flex items-center justify-center shrink-0">
-                  <ConfirmIcon className="text-[#48564D] text-base" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-[11px] font-bold text-[#1E2A24] mb-1">
-                    {confirmModal.title}
-                  </h3>
-                  <p className="text-[11px] text-[#55645A] leading-relaxed whitespace-pre-line">
-                    {confirmModal.message}
-                  </p>
+                    <div className="font-semibold text-[#273444] text-[11px] mb-0.5">Quimestral</div>
+                    <div className="text-[10px] text-[#6B7280]">2 períodos de evaluación</div>
+                  </button>
                 </div>
               </div>
-            </div>
-            <div className="px-3 py-2.5 bg-[#F7F6F2] flex gap-3 justify-end">
-              <button
-                onClick={confirmModal.onCancel}
-                className="h-8 px-2.5 bg-[#FFFDF8] hover:bg-[#F1EFE9] text-[#48564D] border border-[#C9C1B1] rounded-lg text-[11px] font-semibold transition-all"
-              >
-                {confirmModal.cancelText || "Cancelar"}
-              </button>
-              <button
-                onClick={confirmModal.onConfirm}
-                className={`h-8 px-2.5 ${confirmModal.confirmColor || "bg-red-600 hover:bg-red-700"} text-white rounded-lg text-[11px] font-semibold transition-all flex items-center gap-2`}
-              >
-                <ConfirmIcon className="text-[10px]" />
-                {confirmModal.confirmText || "Confirmar"}
-              </button>
-            </div>
+
+              {periodosEditables.length > 0 && (
+                <div className="rounded-lg border border-[#D8DEE6] bg-[#F8FAFC] p-3">
+                  <h4 className="text-[11px] font-semibold text-[#273444] mb-3 flex items-center gap-1.5">
+                    <FaCalendarAlt className="text-[#244563]" /> Períodos de Evaluación (editables)
+                  </h4>
+                  <div className="space-y-2">
+                    {periodosEditables.map((periodo, idx) => (
+                      <div key={idx} className="rounded-md border border-[#E4E8EE] bg-[#FFFFFF] p-2.5 flex items-center gap-3">
+                        <div className="bg-[#EAF0F6] text-[#244563] rounded-full w-6 h-6 flex items-center justify-center text-[10px] font-bold shrink-0">
+                          {periodo.orden}
+                        </div>
+                        <div className="flex-1 grid grid-cols-2 gap-2">
+                          <label className="block">
+                            <span className="text-[9px] text-[#6B7280] uppercase mb-0.5 block">Inicio</span>
+                            <input
+                              type="date"
+                              value={periodo.fechaInicio}
+                              onChange={(e) => actualizarPeriodo(idx, "fechaInicio", e.target.value)}
+                              min={formData.fechaInicio}
+                              max={periodo.fechaFin || formData.fechaFin}
+                              className="w-full h-7 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563]"
+                              required
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="text-[9px] text-[#6B7280] uppercase mb-0.5 block">Fin</span>
+                            <input
+                              type="date"
+                              value={periodo.fechaFin}
+                              onChange={(e) => actualizarPeriodo(idx, "fechaFin", e.target.value)}
+                              min={periodo.fechaInicio || formData.fechaInicio}
+                              max={formData.fechaFin}
+                              className="w-full h-7 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563]"
+                              required
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="activo"
+                  checked={formData.activo}
+                  onChange={(e) => setFormData({ ...formData, activo: e.target.checked })}
+                  className="w-4 h-4 rounded border-[#BFC9D4] text-[#244563] focus:ring-[#244563]/30"
+                />
+                <label htmlFor="activo" className="text-[11px] text-[#4B5563]">
+                  {editingId ? (formData.activo ? "Mantener como activo" : "Marcar como activo") : "Marcar como periodo activo"}
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-[#E4E8EE]">
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  disabled={isSaving}
+                  className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3] disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#244563] px-4 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] disabled:opacity-50"
+                >
+                  {isSaving ? <FaSpinner className="animate-spin" /> : <FaCheck />}
+                  {editingId ? "Actualizar" : "Guardar"}
+                </button>
+              </div>
+            </form>
+          </section>
+        )}
+
+        {/* Lista de Años Lectivos */}
+        {anios.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-[#D8DEE6] bg-[#FFFFFF] px-4 py-10 text-center">
+            <FaCalendarAlt className="mx-auto text-3xl text-[#9CA3AF]" />
+            <p className="mt-2 text-xs font-semibold text-[#4B5563]">No hay periodos académicos</p>
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={() => setShowForm(true)}
+              className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] disabled:opacity-50"
+            >
+              <FaPlus className="text-[10px]" /> Crear periodo
+            </button>
           </div>
-        </div>
-      )}
-      {/* Modal para confirmar creación cuando hay un periodo activo */}
+        ) : (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {anios.map((anio) => (
+              <article
+                key={anio.id}
+                className="min-w-0 overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-2 border-b border-[#E4E8EE] bg-[#ECEFF3] px-3 py-2.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[#D8DEE6] bg-[#FFFFFF] text-[#244563]">
+                      <FaCalendarAlt className="text-xs" />
+                    </span>
+                    <div className="min-w-0">
+                      <h3 className="wrap-break-word text-xs font-semibold text-[#273444]">
+                        {anio.nombre}
+                      </h3>
+                      <p className="mt-0.5 text-[10px] text-[#6B7280]">
+                        {anio.tipoEvaluacion === "trimestral" ? "Trimestral" : "Quimestral"}
+                      </p>
+                    </div>
+                  </div>
+                  <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${anio.activo ? "bg-[#EAF0F6] text-[#1B354D] ring-1 ring-inset ring-[#C8D6E5]" : "bg-[#F3F4F6] text-[#6B7280]"}`}>
+                    {anio.activo && <FaCheck className="text-[8px]" />}
+                    {anio.activo ? "Activo" : "Inactivo"}
+                  </span>
+                </div>
+                <dl className="grid grid-cols-2 gap-3 px-3 py-3">
+                  <div>
+                    <dt className="mb-1 text-[10px] text-[#6B7280]">Fecha de inicio</dt>
+                    <dd className="text-[11px] font-medium text-[#273444]">
+                      {new Date(`${anio.fechaInicio}T00:00:00`).toLocaleDateString("es-EC", {
+                        day: "numeric", month: "short", year: "numeric",
+                      })}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="mb-1 text-[10px] text-[#6B7280]">Fecha de fin</dt>
+                    <dd className="text-[11px] font-medium text-[#273444]">
+                      {new Date(`${anio.fechaFin}T00:00:00`).toLocaleDateString("es-EC", {
+                        day: "numeric", month: "short", year: "numeric",
+                      })}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-[#E4E8EE] px-3 py-2">
+                  {!anio.activo && (
+                    <button
+                      type="button"
+                      onClick={() => handleActivar(anio.id)}
+                      disabled={isSaving}
+                      className="mr-auto inline-flex h-8 items-center gap-1.5 rounded-md border border-[#C8D6E5] bg-[#EAF0F6] px-2.5 text-[11px] font-semibold text-[#1B354D] hover:bg-[#E2EAF3] disabled:opacity-50"
+                    >
+                      <FaCheck className="text-[10px]" /> Activar
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleEdit(anio)}
+                    disabled={isSaving}
+                    title="Editar periodo"
+                    className="flex h-8 w-8 items-center justify-center rounded-md border border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563] hover:bg-[#F3F4F6] disabled:opacity-50"
+                  >
+                    <FaEdit className="text-[11px]" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(anio.id)}
+                    disabled={isSaving}
+                    title="Eliminar periodo"
+                    className="flex h-8 w-8 items-center justify-center rounded-md border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"
+                  >
+                    <FaTrash className="text-[11px]" />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* MODAL: Confirmación de Creación con Periodo Activo */}
       {showConfirmModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-70 p-3 animate-in fade-in duration-200">
-          <div className="bg-[#FFFDF8] rounded-lg shadow-lg max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="bg-[#F7F6F2] px-3 py-3 border-b border-yellow-200">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-full bg-yellow-100 flex items-center justify-center shrink-0">
-                  <FaExclamationTriangle className="text-yellow-600 text-base" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-[11px] font-bold text-[#1E2A24] mb-1">
-                    Crear Nuevo Periodo Académico
-                  </h3>
-                  <p className="text-[11px] text-[#55645A] leading-relaxed whitespace-pre-line">
-                    Ya existe un periodo académico activo. Si creas este nuevo
-                    periodo ({nombreGenerado}), se convertirá en el vigente y el
-                    periodo actual se inactivará automáticamente. Todo el
-                    sistema trabajará con el nuevo periodo. ¿Deseas continuar?
-                  </p>
-                </div>
+        <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-3 sm:p-4">
+          <div className="w-full max-w-sm overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+            <div className="flex items-start gap-3 px-4 py-3.5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600 ring-1 ring-inset ring-amber-200">
+                <FaExclamationTriangle className="text-sm" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-[#273444]">Crear Nuevo Periodo Académico</h3>
+                <p className="mt-1 text-[11px] leading-relaxed text-[#64748B]">
+                  Ya existe un periodo académico activo. Si creas este nuevo periodo ({nombreGenerado}), se convertirá en el vigente y el actual se inactivará automáticamente. ¿Deseas continuar?
+                </p>
               </div>
             </div>
-            <div className="px-3 py-2.5 bg-[#F7F6F2] flex gap-3 justify-end">
+            <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#F3F4F6] px-4 py-2.5 sm:flex-row sm:justify-end">
               <button
-                onClick={cancelarCreacion}
-                className="h-8 px-2.5 bg-[#FFFDF8] hover:bg-[#F1EFE9] text-[#48564D] border border-[#C9C1B1] rounded-lg text-[11px] font-semibold transition-all"
+                onClick={() => setShowConfirmModal(false)}
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3]"
               >
                 Cancelar
               </button>
               <button
                 onClick={confirmarCreacion}
-                className="h-8 px-2.5 bg-yellow-600 hover:bg-yellow-700 text-white rounded-lg text-[11px] font-semibold transition-all flex items-center gap-2"
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-amber-600 px-3 text-[11px] font-semibold text-white transition-colors hover:bg-amber-700"
               >
-                <FaCheck className="text-[10px]" />
-                Sí, crear nuevo periodo
+                <FaCheck className="text-[10px]" /> Sí, crear nuevo
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* MODAL: Confirmación Genérica */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-110 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-3 sm:p-4">
+          <div className="w-full max-w-sm overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+            <div className="flex items-start gap-3 px-4 py-3.5">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#ECEFF3] text-[#4B5563]">
+                <ConfirmIcon className="text-sm" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-[#273444]">{confirmModal.title}</h3>
+                <p className="mt-1 whitespace-pre-line text-[11px] leading-relaxed text-[#64748B]">{confirmModal.message}</p>
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#F3F4F6] px-4 py-2.5 sm:flex-row sm:justify-end">
+              <button
+                onClick={confirmModal.onCancel}
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3]"
+              >
+                {confirmModal.cancelText || "Cancelar"}
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[11px] font-semibold text-white transition-colors ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"}`}
+              >
+                <ConfirmIcon className="text-[10px]" /> {confirmModal.confirmText || "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toasts Flotantes */}
+      <div className="pointer-events-none fixed right-3 top-3 z-100 w-full max-w-xs space-y-2">
+        {toasts.map((toast) => {
+          const config = toastConfig[toast.type];
+          const Icon = config.icon;
+          return (
+            <div key={toast.id} className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}>
+              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}><Icon className="text-[10px]" /></span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold text-[#273444]">{toast.title}</p>
+                {toast.message && <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">{toast.message}</p>}
+              </div>
+              <button onClick={() => cerrarToast(toast.id)} className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]" title="Cerrar"><FaTimes className="h-3 w-3" /></button>
+            </div>
+          );
+        })}
+      </div>
     </Layout>
   );
 }

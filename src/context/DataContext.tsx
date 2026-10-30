@@ -8,7 +8,7 @@ import {
   useCallback,
 } from "react";
 import type { ReactNode } from "react";
-import { collection, query, where, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { actualizarAnioReporteNotas } from "../utils/reporteNotasCache";
 import { actualizarAnioCalificaciones } from "../utils/calificacionesCache";
@@ -43,143 +43,92 @@ const DataContext = createContext<DataContextValue | null>(null);
 const sortByOrden = <T extends { orden?: number }>(arr: T[]): T[] =>
   [...arr].sort((a, b) => (a.orden || 0) - (b.orden || 0));
 
-// ==================== CACHÉ SESSION STORAGE ====================
-const CACHE_KEY = "dayanix-datacontext-v1";
-const TTL_MS = 1000 * 60 * 60 * 4; // 4 horas
-
-interface CachePayload {
-  ts: number;
-  grados: Grado[];
-  ambitos: Ambito[];
-  destrezas: Destreza[];
-  aniosLectivos: AnioLectivo[];
-  periodos: PeriodoEvaluacion[];
-  nombresDocentes: Record<string, string>;
-}
-
-function readCache(): CachePayload | null {
-  try {
-    const raw = sessionStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw) as CachePayload;
-    if (Date.now() - data.ts > TTL_MS) return null;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-function writeCache(payload: Omit<CachePayload, "ts">) {
-  try {
-    sessionStorage.setItem(
-      CACHE_KEY,
-      JSON.stringify({ ts: Date.now(), ...payload }),
-    );
-  } catch {
-    // silencioso
-  }
-}
-
-function clearCache() {
-  try {
-    sessionStorage.removeItem(CACHE_KEY);
-  } catch {
-    // silencioso
-  }
-}
-
-function getInitialState() {
-  const cached = readCache();
-  return {
-    grados: cached?.grados ?? [],
-    ambitos: cached?.ambitos ?? [],
-    destrezas: cached?.destrezas ?? [],
-    aniosLectivos: cached?.aniosLectivos ?? [],
-    periodos: cached?.periodos ?? [],
-    nombresDocentes: cached?.nombresDocentes ?? {},
-    ready: cached !== null,
-  };
-}
-
-// ==================== PROVIDER ====================
 export function DataProvider({ children }: { children: ReactNode }) {
-  const initial = getInitialState();
-
-  const [grados, setGrados] = useState<Grado[]>(initial.grados);
-  const [ambitos, setAmbitos] = useState<Ambito[]>(initial.ambitos);
-  const [destrezas, setDestrezas] = useState<Destreza[]>(initial.destrezas);
-  const [aniosLectivos, setAniosLectivos] = useState<AnioLectivo[]>(
-    initial.aniosLectivos,
-  );
-  const [periodos, setPeriodos] = useState<PeriodoEvaluacion[]>(
-    initial.periodos,
-  );
+  const [grados, setGrados] = useState<Grado[]>([]);
+  const [ambitos, setAmbitos] = useState<Ambito[]>([]);
+  const [destrezas, setDestrezas] = useState<Destreza[]>([]);
+  const [aniosLectivos, setAniosLectivos] = useState<AnioLectivo[]>([]);
+  const [periodos, setPeriodos] = useState<PeriodoEvaluacion[]>([]);
   const [nombresDocentes, setNombresDocentes] = useState<
     Record<string, string>
-  >(initial.nombresDocentes);
-  const [ready, setReady] = useState(initial.ready);
+  >({});
+  const [ready, setReady] = useState(false);
 
-  const cargarTodo = useCallback(async (force = false) => {
-    if (!force) {
-      const cached = readCache();
-      if (cached) {
-        setGrados(cached.grados);
-        setAmbitos(cached.ambitos);
-        setDestrezas(cached.destrezas);
-        setAniosLectivos(cached.aniosLectivos);
-        setPeriodos(cached.periodos);
-        setNombresDocentes(cached.nombresDocentes);
-        setReady(true);
-        return;
-      }
-    }
+  // ✅ Carga inicial única con onSnapshot para que la caché persistente
+  // comparta las lecturas entre pestañas y evite getDocs repetidos.
+  useEffect(() => {
+    let mounted = true;
 
-    try {
-      const [
-        gradosSnap,
-        ambitosSnap,
-        destrezasSnap,
-        aniosSnap,
-        periodosSnap,
-        usuariosSnap,
-      ] = await Promise.all([
-        getDocs(query(collection(db, "grados"), where("activo", "==", true))),
-        getDocs(query(collection(db, "ambitos"), where("activo", "==", true))),
-        getDocs(
-          query(collection(db, "destrezas"), where("activo", "==", true)),
-        ),
-        getDocs(
-          query(collection(db, "aniosLectivos"), where("activo", "==", true)),
-        ),
-        getDocs(
-          query(
-            collection(db, "periodosEvaluacion"),
-            where("activo", "==", true),
+    // 1. Grados activos
+    const unsubGrados = onSnapshot(
+      query(collection(db, "grados"), where("activo", "==", true)),
+      (snap) => {
+        if (!mounted) return;
+        setGrados(
+          sortByOrden(
+            snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Grado),
           ),
-        ),
-        getDocs(collection(db, "usuarios")),
-      ]);
+        );
+      },
+    );
 
-      const g = sortByOrden(
-        gradosSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as Grado),
-      );
-      const a = sortByOrden(
-        ambitosSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as Ambito),
-      );
-      const de = sortByOrden(
-        destrezasSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as Destreza),
-      );
-      const al = aniosSnap.docs.map(
-        (d) => ({ id: d.id, ...d.data() }) as AnioLectivo,
-      );
-      const pe = sortByOrden(
-        periodosSnap.docs.map(
-          (d) => ({ id: d.id, ...d.data() }) as PeriodoEvaluacion,
-        ),
-      );
+    // 2. Ámbitos activos
+    const unsubAmbitos = onSnapshot(
+      query(collection(db, "ambitos"), where("activo", "==", true)),
+      (snap) => {
+        if (!mounted) return;
+        setAmbitos(
+          sortByOrden(
+            snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Ambito),
+          ),
+        );
+      },
+    );
 
+    // 3. Destrezas activas
+    const unsubDestrezas = onSnapshot(
+      query(collection(db, "destrezas"), where("activo", "==", true)),
+      (snap) => {
+        if (!mounted) return;
+        setDestrezas(
+          sortByOrden(
+            snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Destreza),
+          ),
+        );
+      },
+    );
+
+    // 4. Años lectivos activos
+    const unsubAnios = onSnapshot(
+      query(collection(db, "aniosLectivos"), where("activo", "==", true)),
+      (snap) => {
+        if (!mounted) return;
+        setAniosLectivos(
+          snap.docs.map((d) => ({ id: d.id, ...d.data() }) as AnioLectivo),
+        );
+      },
+    );
+
+    // 5. Períodos de evaluación activos
+    const unsubPeriodos = onSnapshot(
+      query(collection(db, "periodosEvaluacion"), where("activo", "==", true)),
+      (snap) => {
+        if (!mounted) return;
+        setPeriodos(
+          sortByOrden(
+            snap.docs.map(
+              (d) => ({ id: d.id, ...d.data() }) as PeriodoEvaluacion,
+            ),
+          ),
+        );
+      },
+    );
+
+    // 6. Usuarios (para nombres de docentes)
+    const unsubUsuarios = onSnapshot(collection(db, "usuarios"), (snap) => {
+      if (!mounted) return;
       const nombres: Record<string, string> = {};
-      usuariosSnap.docs.forEach((d) => {
+      snap.docs.forEach((d) => {
         const data = d.data() as {
           nombreDocumento?: string;
           displayName?: string;
@@ -188,58 +137,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
         nombres[d.id] =
           data.nombreDocumento || data.displayName || data.email || "Docente";
       });
-
-      setGrados(g);
-      setAmbitos(a);
-      setDestrezas(de);
-      setAniosLectivos(al);
-      setPeriodos(pe);
       setNombresDocentes(nombres);
-      setReady(true);
+      setReady(true); // Marcar como listo cuando al menos usuarios cargue
+    });
 
-      writeCache({
-        grados: g,
-        ambitos: a,
-        destrezas: de,
-        aniosLectivos: al,
-        periodos: pe,
-        nombresDocentes: nombres,
-      });
-    } catch (err) {
-      console.error("Error cargando DataProvider:", err);
-      setReady(true);
-    }
-  }, []);
-
-  const reload = useCallback(async () => {
-    clearCache();
-    await cargarTodo(true);
-  }, [cargarTodo]);
-
-  // ✅ Carga inicial
-  useEffect(() => {
-    let mounted = true;
-    const cargar = async () => {
-      if (!mounted) return;
-      await cargarTodo();
-    };
-    cargar();
     return () => {
       mounted = false;
+      unsubGrados();
+      unsubAmbitos();
+      unsubDestrezas();
+      unsubAnios();
+      unsubPeriodos();
+      unsubUsuarios();
     };
-  }, [cargarTodo]);
+  }, []);
 
-  // ✅ Listener del evento global de refresh
-  // Se dispara desde los módulos que escriben datos (Grados, Años Lectivos, etc.)
-  useEffect(() => {
-    const handler = () => {
-      console.log("🔄 DataContext: recibida señal de refresh, recargando...");
-      clearCache();
-      cargarTodo(true);
-    };
-    window.addEventListener("eduX:refreshData", handler);
-    return () => window.removeEventListener("eduX:refreshData", handler);
-  }, [cargarTodo]);
+  // ✅ Recarga manual (botón "Actualizar" si existiera).
+  // Al usar onSnapshot, los datos se actualizan solos, así que esta función
+  // solo es un puente de compatibilidad.
+  const reload = useCallback(async () => {
+    // Ya no hacemos getDocs aquí. onSnapshot se encarga en tiempo real.
+    console.log("DataContext: recarga automática por onSnapshot.");
+  }, []);
 
   const anioActivo = aniosLectivos.find((a) => a.activo) || null;
   useEffect(() => {

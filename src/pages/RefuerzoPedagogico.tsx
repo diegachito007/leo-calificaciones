@@ -26,6 +26,13 @@ import {
   recalcularInsumos,
   type RefuerzoConHistorial,
 } from "../utils/refuerzo";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  asegurarEstudiantesCache,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+} from "../utils/estudiantesCache";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -241,16 +248,23 @@ const eliminarUndefined = (valor: unknown): unknown => {
 };
 
 const resultadoSinTope = (orig: number, ref: number, e: EstrategiaNota) =>
-  e === "reemplazar" ? ref : e === "maxima" ? Math.max(orig, ref) : (orig + ref) / 2;
+  e === "reemplazar"
+    ? ref
+    : e === "maxima"
+      ? Math.max(orig, ref)
+      : (orig + ref) / 2;
 
 const notaFinalSegun = (orig: number, ref: number, e: EstrategiaNota) =>
   round2(Math.min(7, resultadoSinTope(orig, ref, e)));
 
 const detalleCalculo = (orig: number, ref: number, e: EstrategiaNota) => {
   const resultado = resultadoSinTope(orig, ref, e);
-  const operacion = e === "reemplazar" ? `Reemplazar por ${ref}`
-    : e === "maxima" ? `Máxima entre ${orig} y ${ref}`
-    : `(${orig} + ${ref}) / 2`;
+  const operacion =
+    e === "reemplazar"
+      ? `Reemplazar por ${ref}`
+      : e === "maxima"
+        ? `Máxima entre ${orig} y ${ref}`
+        : `(${orig} + ${ref}) / 2`;
   return `${operacion} = ${round2(resultado)}${resultado > 7 ? " · Se limita a 7" : ""}`;
 };
 
@@ -302,6 +316,16 @@ export default function RefuerzoPedagogico() {
   const { grados, destrezas, anioActivo, periodoActual, ready } = useData();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+
+  // ============================================================
+  // FASE 3.5: ACCESO A LA CACHÉ COMPARTIDA DE ESTUDIANTES
+  // ============================================================
+  const userUid = user?.uid;
+  const accesoCache = useMemo(
+    () => claveAccesoEstudiantes(user?.uid, userData),
+    [user?.uid, userData],
+  );
+  const anioCache = anioActivo?.id || "";
 
   const urlParamsInit = useMemo(() => {
     const p = new URLSearchParams(window.location.search);
@@ -373,12 +397,16 @@ export default function RefuerzoPedagogico() {
   const [directorAreaCampo, setDirectorAreaCampo] = useState("");
   useEffect(() => {
     if (!user?.uid) return;
-    return onSnapshot(doc(db, "usuarios", user.uid), (snapshot) => {
-      setDirectorAreaCampo(snapshot.data()?.directorArea || "");
-    }, (error) => {
-      console.error("Error consultando director de área:", error);
-      setDirectorAreaCampo("");
-    });
+    return onSnapshot(
+      doc(db, "usuarios", user.uid),
+      (snapshot) => {
+        setDirectorAreaCampo(snapshot.data()?.directorArea || "");
+      },
+      (error) => {
+        console.error("Error consultando director de área:", error);
+        setDirectorAreaCampo("");
+      },
+    );
   }, [user?.uid]);
   const [aplicarNota, setAplicarNota] = useState("7");
   const [aplicarEstrategia, setAplicarEstrategia] =
@@ -417,12 +445,20 @@ export default function RefuerzoPedagogico() {
     [],
   );
 
-  const camposDirector = ["nombreDirectorMatematica", "nombreDirectorCienciasNaturales", "nombreDirectorEstudiosSociales", "nombreDirectorLenguaLiteratura"] as const;
-  const campoDirector = camposDirector.find((campo) => campo === directorAreaCampo);
-  const nombreDirectorArea = campoDirector ? configInst?.[campoDirector] || "" : "";
+  const camposDirector = [
+    "nombreDirectorMatematica",
+    "nombreDirectorCienciasNaturales",
+    "nombreDirectorEstudiosSociales",
+    "nombreDirectorLenguaLiteratura",
+  ] as const;
+  const campoDirector = camposDirector.find(
+    (campo) => campo === directorAreaCampo,
+  );
+  const nombreDirectorArea = campoDirector
+    ? configInst?.[campoDirector] || ""
+    : "";
   const nombreVicerrector = configInst?.nombreVicerrector || "";
 
-  const userUid = user?.uid;
   const contextoCacheRefuerzo = JSON.stringify([
     userUid || "",
     anioActivo?.id || "",
@@ -432,7 +468,9 @@ export default function RefuerzoPedagogico() {
   ]);
   const mostrarDiagnosticoRefuerzo =
     import.meta.env.DEV &&
-    new URLSearchParams(window.location.search).get("diagnosticoRefuerzoPedagogico") === "1";
+    new URLSearchParams(window.location.search).get(
+      "diagnosticoRefuerzoPedagogico",
+    ) === "1";
 
   useEffect(() => {
     const nuevo = searchParams.get("nuevo");
@@ -478,24 +516,14 @@ export default function RefuerzoPedagogico() {
     return () => un();
   }, [ready, userUid, anioActivo?.id]);
 
+  // ============================================================
+  // FASE 3.5: ESTUDIANTES DEL PROCESO ACTIVO DESDE estudiantesCache
+  // (antes: onSnapshot sobre /estudiantes con gradoId== y activo==)
+  // ============================================================
   useEffect(() => {
     if (!procesoActivo?.id) return;
-    const un1 = onSnapshot(
-      query(
-        collection(db, "estudiantes"),
-        where("gradoId", "==", procesoActivo.gradoId),
-        where("activo", "==", true),
-      ),
-      (s) =>
-        setEstudiantes(
-          s.docs
-            .map(
-              (d) => ({ id: d.id, ...d.data() }) as EstudianteConRepresentante,
-            )
-            .sort((a, b) => a.apellidos.localeCompare(b.apellidos)),
-        ),
-      (e) => console.error(e),
-    );
+
+    // 1. Suscripción a sesiones (no cambia: colección propia).
     const un2 = onSnapshot(
       query(
         collection(db, "refuerzoSesiones"),
@@ -522,12 +550,40 @@ export default function RefuerzoPedagogico() {
       },
       (e) => console.error(e),
     );
+
+    // 2. Estudiantes del grado desde estudiantesCache.
+    const gradoId = procesoActivo.gradoId;
+    const clave = claveConsultaEstudiantes(accesoCache, anioCache, gradoId);
+    if (!clave || !accesoCache || !anioCache) {
+      // Sin contexto válido: dejamos la lista vacía y salimos.
+      void Promise.resolve().then(() => setEstudiantes([]));
+      return () => {
+        un2();
+        un3();
+      };
+    }
+
+    asegurarEstudiantesCache(clave);
+
+    const actualizarDesdeCache = () => {
+      const estado = leerEstudiantesCache(clave);
+      if (estado.estado !== "listo") return;
+      const items = estado.items
+        .filter((e) => e.activo === true)
+        .map((e) => e as EstudianteConRepresentante)
+        .sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+      setEstudiantes(items);
+    };
+
+    actualizarDesdeCache();
+    const unEstudiantes = observarEstudiantesCache(actualizarDesdeCache);
+
     return () => {
-      un1();
       un2();
       un3();
+      unEstudiantes();
     };
-  }, [procesoActivo?.id, procesoActivo?.gradoId]);
+  }, [procesoActivo?.id, procesoActivo?.gradoId, accesoCache, anioCache]);
 
   const estudiantesDelProceso = useMemo(() => {
     if (!procesoActivo) return [];
@@ -543,10 +599,43 @@ export default function RefuerzoPedagogico() {
     [procesoActivo?.sesiones],
   );
 
+  // ============================================================
+  // FASE 3.5: PREVIEW DE ESTUDIANTES DESDE estudiantesCache
+  // (antes: getDocs sobre /estudiantes con gradoId== y activo==)
+  // ============================================================
   const previewEstudiantes = useCallback(async () => {
     if (!form.gradoId || !form.destrezaId) return;
     setIsPreviewing(true);
     try {
+      // 1. Estudiantes del grado desde la caché compartida.
+      const claveEst = claveConsultaEstudiantes(
+        accesoCache,
+        anioCache,
+        form.gradoId,
+      );
+      if (!claveEst || !accesoCache || !anioCache) {
+        mostrarToast(
+          "error",
+          "Contexto inválido",
+          "No se pudo determinar el año lectivo o los permisos para leer la nómina.",
+        );
+        return;
+      }
+      asegurarEstudiantesCache(claveEst);
+      const estadoEst = leerEstudiantesCache(claveEst);
+      if (estadoEst.estado !== "listo") {
+        mostrarToast(
+          "info",
+          "Esperando nómina…",
+          "La nómina del grado todavía se está sincronizando. Vuelve a intentarlo en 1 o 2 segundos.",
+        );
+        return;
+      }
+      const ests: Estudiante[] = estadoEst.items.filter(
+        (e) => e.activo === true,
+      );
+
+      // 2. Actividades de la destreza (colección propia, sigue con su caché).
       const allActs = await cargarRefuerzoConCache<ActividadSnap[]>(
         `preview:actividades:${contextoCacheRefuerzo}:${form.destrezaId}`,
         async () => {
@@ -569,21 +658,7 @@ export default function RefuerzoPedagogico() {
       });
       const acts = allActs.filter((a) => !idsAgrupados.has(a.id));
       const actIds = acts.map((a) => a.id);
-      const ests = await cargarRefuerzoConCache<Estudiante[]>(
-        `preview:estudiantes:${contextoCacheRefuerzo}:${form.gradoId}`,
-        async () => {
-          const estsSnap = await getDocs(
-            query(
-              collection(db, "estudiantes"),
-              where("gradoId", "==", form.gradoId),
-              where("activo", "==", true),
-            ),
-          );
-          return estsSnap.docs.map(
-            (d) => ({ id: d.id, ...d.data() }) as Estudiante,
-          );
-        },
-      );
+
       const bajos: Record<string, NotaBaja[]> = {};
       for (let i = 0; i < actIds.length; i += 30) {
         const lote = actIds.slice(i, i + 30);
@@ -642,7 +717,14 @@ export default function RefuerzoPedagogico() {
     } finally {
       setIsPreviewing(false);
     }
-  }, [form.gradoId, form.destrezaId, mostrarToast, contextoCacheRefuerzo]);
+  }, [
+    form.gradoId,
+    form.destrezaId,
+    mostrarToast,
+    contextoCacheRefuerzo,
+    accesoCache,
+    anioCache,
+  ]);
 
   useEffect(() => {
     if (
@@ -996,23 +1078,36 @@ export default function RefuerzoPedagogico() {
     }
   };
 
-
-
   const notaAplicarNum = Number(aplicarNota.trim().replace(",", "."));
-  const notaAplicarValida = aplicarNota.trim() !== "" && Number.isFinite(notaAplicarNum) && notaAplicarNum >= 0 && notaAplicarNum <= 10;
+  const notaAplicarValida =
+    aplicarNota.trim() !== "" &&
+    Number.isFinite(notaAplicarNum) &&
+    notaAplicarNum >= 0 &&
+    notaAplicarNum <= 10;
 
   const aplicarRefuerzo = async () => {
     if (!aplicarPara || !procesoActivo) return;
     if (!notaAplicarValida) {
-      mostrarToast("warning", "Nota no válida", "Ingresa una nota entre 0 y 10. El resultado aplicado tendrá un máximo de 7.");
+      mostrarToast(
+        "warning",
+        "Nota no válida",
+        "Ingresa una nota entre 0 y 10. El resultado aplicado tendrá un máximo de 7.",
+      );
       return;
     }
     const avance = fichasEst[aplicarPara];
-    if (!avance?.indicadores?.trim() || !avance.logros?.trim() || !avance.recomendaciones?.trim()) {
-      mostrarToast("warning", "Completa el avance individual", "Registra y guarda indicadores de logro, logros de aprendizaje y recomendaciones antes de aplicar la nota.");
+    if (
+      !avance?.indicadores?.trim() ||
+      !avance.logros?.trim() ||
+      !avance.recomendaciones?.trim()
+    ) {
+      mostrarToast(
+        "warning",
+        "Completa el avance individual",
+        "Registra y guarda indicadores de logro, logros de aprendizaje y recomendaciones antes de aplicar la nota.",
+      );
       return;
     }
-
 
     setIsAplicando(true);
     try {
@@ -1236,7 +1331,7 @@ export default function RefuerzoPedagogico() {
       if (fichaExistente) {
         await updateDoc(doc(db, "refuerzoEstudiantes", fichaExistente.id), {
           notaRefuerzo: round2(Math.min(7, notaAplicarNum)),
-        notaEvaluacion: round2(notaAplicarNum),
+          notaEvaluacion: round2(notaAplicarNum),
           estrategiaAplicada: aplicarEstrategia,
           aplicado: true,
           aplicadoEl: serverTimestamp(),
@@ -1251,7 +1346,7 @@ export default function RefuerzoPedagogico() {
           logros: "",
           recomendaciones: "",
           notaRefuerzo: round2(Math.min(7, notaAplicarNum)),
-        notaEvaluacion: round2(notaAplicarNum),
+          notaEvaluacion: round2(notaAplicarNum),
           estrategiaAplicada: aplicarEstrategia,
           aplicado: true,
           aplicadoEl: serverTimestamp(),
@@ -1282,8 +1377,16 @@ export default function RefuerzoPedagogico() {
 
   const guardarAvance = async () => {
     if (!avanceEdit || !procesoActivo) return;
-    if (!avanceForm.indicadores.trim() || !avanceForm.logros.trim() || !avanceForm.recomendaciones.trim()) {
-      mostrarToast("warning", "Avance incompleto", "Completa indicadores de logro, logros de aprendizaje y recomendaciones.");
+    if (
+      !avanceForm.indicadores.trim() ||
+      !avanceForm.logros.trim() ||
+      !avanceForm.recomendaciones.trim()
+    ) {
+      mostrarToast(
+        "warning",
+        "Avance incompleto",
+        "Completa indicadores de logro, logros de aprendizaje y recomendaciones.",
+      );
       return;
     }
     setIsSavingAvance(true);
@@ -1691,8 +1794,6 @@ export default function RefuerzoPedagogico() {
       userData?.displayName ||
       "Docente";
 
-
-
     const fechaActual = new Date().toLocaleDateString("es-EC", {
       day: "2-digit",
       month: "long",
@@ -1974,31 +2075,47 @@ export default function RefuerzoPedagogico() {
     // =====================================================
 
     const espacioEntreFirmas = 20;
-    const anchoBloqueFirma = (anchoPagina - margenIzquierdo - margenDerecho - espacioEntreFirmas) / 2;
+    const anchoBloqueFirma =
+      (anchoPagina - margenIzquierdo - margenDerecho - espacioEntreFirmas) / 2;
     const centrosFirma = [
       margenIzquierdo + anchoBloqueFirma / 2,
       anchoPagina - margenDerecho - anchoBloqueFirma / 2,
     ];
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
-    const nombresFirma: string[][] = [nombreDocente, nombreVicerrector].map((nombre) =>
-      doc.splitTextToSize(sanitizeText(nombre), anchoBloqueFirma - 4) as string[],
+    const nombresFirma: string[][] = [nombreDocente, nombreVicerrector].map(
+      (nombre) =>
+        doc.splitTextToSize(
+          sanitizeText(nombre),
+          anchoBloqueFirma - 4,
+        ) as string[],
     );
-    const altoNombres = Math.max(...nombresFirma.map((lineas) => lineas.length)) * 4;
+    const altoNombres =
+      Math.max(...nombresFirma.map((lineas) => lineas.length)) * 4;
     verificarEspacio(18 + altoNombres);
     const firmaY = y;
     const anchoLineaFirma = Math.min(55, anchoBloqueFirma - 8);
     centrosFirma.forEach((centro, indice) => {
       doc.setDrawColor(0, 0, 0);
       doc.setLineWidth(0.2);
-      doc.line(centro - anchoLineaFirma / 2, firmaY, centro + anchoLineaFirma / 2, firmaY);
+      doc.line(
+        centro - anchoLineaFirma / 2,
+        firmaY,
+        centro + anchoLineaFirma / 2,
+        firmaY,
+      );
       doc.setFont("helvetica", "normal");
       doc.setFontSize(8.5);
       nombresFirma[indice].forEach((linea, fila) => {
         doc.text(linea, centro, firmaY + 5 + fila * 4, { align: "center" });
       });
       doc.setFont("helvetica", "bold");
-      doc.text(indice === 0 ? "DOCENTE" : "VICERRECTOR", centro, firmaY + altoNombres + 6, { align: "center" });
+      doc.text(
+        indice === 0 ? "DOCENTE" : "VICERRECTOR",
+        centro,
+        firmaY + altoNombres + 6,
+        { align: "center" },
+      );
     });
 
     // =====================================================
@@ -2013,7 +2130,6 @@ export default function RefuerzoPedagogico() {
       )}_${procesoActivo.gradoNombre.replace(/\s+/g, "_")}`,
     );
   };
-
   // ✅ ACTUALIZADO: Generar Actas con datos del representante
 
   const generarActasPDF = () => {
@@ -4276,8 +4392,7 @@ export default function RefuerzoPedagogico() {
     };
 
     // =====================================================
-    // 3. FUNCIÓN PARA ESCRIBIR PÁRRAFOS
-    // =====================================================
+    // 3. FUNCIÓN PARA ESCRIBIR PÁRRAFOS    // =====================================================
 
     const escribirParrafo = (
       texto: string,
@@ -4621,12 +4736,26 @@ export default function RefuerzoPedagogico() {
         );
         return;
       }
-      if (["notificacion", "planificacion", "avances"].includes(tipo) && !nombreVicerrector.trim()) {
-        mostrarToast("warning", "Vicerrector sin registrar", "Registra el nombre del vicerrector en Configuración Institucional.");
+      if (
+        ["notificacion", "planificacion", "avances"].includes(tipo) &&
+        !nombreVicerrector.trim()
+      ) {
+        mostrarToast(
+          "warning",
+          "Vicerrector sin registrar",
+          "Registra el nombre del vicerrector en Configuración Institucional.",
+        );
         return;
       }
-      if (["planificacion", "avances"].includes(tipo) && !nombreDirectorArea.trim()) {
-        mostrarToast("warning", "Director de área pendiente", "Selecciona y guarda tu director en Mi Perfil y verifica su nombre en Configuración Institucional.");
+      if (
+        ["planificacion", "avances"].includes(tipo) &&
+        !nombreDirectorArea.trim()
+      ) {
+        mostrarToast(
+          "warning",
+          "Director de área pendiente",
+          "Selecciona y guarda tu director en Mi Perfil y verifica su nombre en Configuración Institucional.",
+        );
         return;
       }
       switch (tipo) {
@@ -4856,11 +4985,23 @@ export default function RefuerzoPedagogico() {
                           </div>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <button type="button" onClick={() => {
-                            setAvanceEdit(est.id);
-                            setAvanceForm({ indicadores: ficha?.indicadores || "", logros: ficha?.logros || "", recomendaciones: ficha?.recomendaciones || "" });
-                          }} className="min-h-8 rounded-md border border-[#BFC9D4] bg-white px-2.5 text-[10px] font-semibold text-[#244563] hover:bg-[#EAF0F6]">
-                            {ficha?.indicadores?.trim() && ficha.logros?.trim() && ficha.recomendaciones?.trim() ? "Editar avance" : "Registrar avance"}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAvanceEdit(est.id);
+                              setAvanceForm({
+                                indicadores: ficha?.indicadores || "",
+                                logros: ficha?.logros || "",
+                                recomendaciones: ficha?.recomendaciones || "",
+                              });
+                            }}
+                            className="min-h-8 rounded-md border border-[#BFC9D4] bg-white px-2.5 text-[10px] font-semibold text-[#244563] hover:bg-[#EAF0F6]"
+                          >
+                            {ficha?.indicadores?.trim() &&
+                            ficha.logros?.trim() &&
+                            ficha.recomendaciones?.trim()
+                              ? "Editar avance"
+                              : "Registrar avance"}
                           </button>
                           {ficha?.aplicado ? (
                             <span className="text-[10px] px-2 py-1 rounded-full bg-[#E2EAF3] text-[#1B354D] font-bold">
@@ -4869,10 +5010,23 @@ export default function RefuerzoPedagogico() {
                           ) : (
                             <button
                               onClick={() => {
-                                if (!ficha?.indicadores?.trim() || !ficha.logros?.trim() || !ficha.recomendaciones?.trim()) {
+                                if (
+                                  !ficha?.indicadores?.trim() ||
+                                  !ficha.logros?.trim() ||
+                                  !ficha.recomendaciones?.trim()
+                                ) {
                                   setAvanceEdit(est.id);
-                                  setAvanceForm({ indicadores: ficha?.indicadores || "", logros: ficha?.logros || "", recomendaciones: ficha?.recomendaciones || "" });
-                                  mostrarToast("info", "Primero registra el avance", "Guarda los tres campos individuales y luego aplica la nota.");
+                                  setAvanceForm({
+                                    indicadores: ficha?.indicadores || "",
+                                    logros: ficha?.logros || "",
+                                    recomendaciones:
+                                      ficha?.recomendaciones || "",
+                                  });
+                                  mostrarToast(
+                                    "info",
+                                    "Primero registra el avance",
+                                    "Guarda los tres campos individuales y luego aplica la nota.",
+                                  );
                                   return;
                                 }
                                 setAplicarPara(est.id);
@@ -5538,8 +5692,9 @@ export default function RefuerzoPedagogico() {
               </select>
             </div>
             <p className="mb-3 text-[11px] text-[#64748B]">
-              La nota final registrada nunca supera 7. En Promediar se calcula primero
-              el promedio con la nota obtenida y después se aplica el tope.
+              La nota final registrada nunca supera 7. En Promediar se calcula
+              primero el promedio con la nota obtenida y después se aplica el
+              tope.
             </p>
             <div className="mb-3 p-3 bg-[#ECEFF3] border border-[#D8DEE6] rounded-lg">
               <p className="text-[10px] font-bold text-[#4B5563] mb-2">
@@ -5566,13 +5721,26 @@ export default function RefuerzoPedagogico() {
                       {notaAplicarValida ? (
                         <>
                           <span className="block text-[10px] text-[#64748B]">
-                            {detalleCalculo(b.nota, notaAplicarNum, aplicarEstrategia)}
+                            {detalleCalculo(
+                              b.nota,
+                              notaAplicarNum,
+                              aplicarEstrategia,
+                            )}
                           </span>
                           <span className="font-bold text-[#244563]">
-                            Se registrará: {notaFinalSegun(b.nota, notaAplicarNum, aplicarEstrategia).toFixed(2)}
+                            Se registrará:{" "}
+                            {notaFinalSegun(
+                              b.nota,
+                              notaAplicarNum,
+                              aplicarEstrategia,
+                            ).toFixed(2)}
                           </span>
                         </>
-                      ) : <span className="text-[#64748B]">Ingresa una nota de 0 a 10</span>}
+                      ) : (
+                        <span className="text-[#64748B]">
+                          Ingresa una nota de 0 a 10
+                        </span>
+                      )}
                     </span>
                   </div>
                 ))}
@@ -5852,23 +6020,63 @@ export default function RefuerzoPedagogico() {
 
       {refuerzoAEliminar && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-3 backdrop-blur-[2px] sm:p-4">
-          <div role="alertdialog" aria-modal="true" aria-labelledby="eliminar-refuerzo-titulo" aria-describedby="eliminar-refuerzo-descripcion" aria-busy={eliminandoRefuerzo} className="flex max-h-[88vh] w-full max-w-sm flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="eliminar-refuerzo-titulo"
+            aria-describedby="eliminar-refuerzo-descripcion"
+            aria-busy={eliminandoRefuerzo}
+            className="flex max-h-[88vh] w-full max-w-sm flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]"
+          >
             <div className="flex min-h-0 items-start gap-3 overflow-y-auto px-4 py-3.5">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#ECEFF3] text-[#4B5563]">
                 <FaTrash className="text-sm" />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 id="eliminar-refuerzo-titulo" className="text-sm font-semibold text-[#273444]">Eliminar refuerzo</h3>
-                <div id="eliminar-refuerzo-descripcion" className="mt-1 space-y-3 text-[11px] leading-relaxed text-[#64748B]">
-                  <p>¿Eliminar el refuerzo de {refuerzoAEliminar.materiaNombre ?? ""} ({refuerzoAEliminar.gradoNombre ?? ""})?</p>
-                  <p>Se borrarán también sus sesiones, las fichas de avance de los estudiantes y se revertirán las notas de refuerzo ya aplicadas. Esta acción no se puede deshacer.</p>
+                <h3
+                  id="eliminar-refuerzo-titulo"
+                  className="text-sm font-semibold text-[#273444]"
+                >
+                  Eliminar refuerzo
+                </h3>
+                <div
+                  id="eliminar-refuerzo-descripcion"
+                  className="mt-1 space-y-3 text-[11px] leading-relaxed text-[#64748B]"
+                >
+                  <p>
+                    ¿Eliminar el refuerzo de{" "}
+                    {refuerzoAEliminar.materiaNombre ?? ""} (
+                    {refuerzoAEliminar.gradoNombre ?? ""})?
+                  </p>
+                  <p>
+                    Se borrarán también sus sesiones, las fichas de avance de
+                    los estudiantes y se revertirán las notas de refuerzo ya
+                    aplicadas. Esta acción no se puede deshacer.
+                  </p>
                 </div>
               </div>
             </div>
             <div className="flex shrink-0 flex-col gap-2 border-t border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2.5 sm:flex-row sm:justify-end">
-              <button type="button" autoFocus onClick={() => setRefuerzoAEliminar(null)} disabled={eliminandoRefuerzo} className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3] disabled:cursor-not-allowed disabled:opacity-50">Cancelar</button>
-              <button type="button" onClick={eliminarRefuerzo} disabled={eliminandoRefuerzo} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#C93F45] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#AD3038] disabled:cursor-not-allowed disabled:opacity-50">
-                {eliminandoRefuerzo ? <FaSpinner className="animate-spin text-[10px]" /> : <FaTrash className="text-[10px]" />}
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setRefuerzoAEliminar(null)}
+                disabled={eliminandoRefuerzo}
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={eliminarRefuerzo}
+                disabled={eliminandoRefuerzo}
+                className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#C93F45] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#AD3038] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {eliminandoRefuerzo ? (
+                  <FaSpinner className="animate-spin text-[10px]" />
+                ) : (
+                  <FaTrash className="text-[10px]" />
+                )}
                 {eliminandoRefuerzo ? "Eliminando..." : "Sí, eliminar"}
               </button>
             </div>

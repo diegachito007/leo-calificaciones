@@ -1,10 +1,11 @@
 import {
-  FaLaptopCode,
+  FaCogs,
   FaTools,
   FaMagic,
   FaRocket,
   FaSpinner,
   FaSignOutAlt,
+  FaClock,
 } from "react-icons/fa";
 import { useAuth } from "../context/AuthContext";
 
@@ -25,58 +26,60 @@ export default function EnMantenimiento({
   };
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-slate-900 via-slate-800 to-indigo-950 flex items-center justify-center p-6">
-      <div className="max-w-lg w-full text-center">
-        {/* Genios programando */}
+    <div className="min-h-screen bg-[#F8FAFC] flex items-center justify-center p-4 sm:p-6">
+      <div className="w-full max-w-lg">
+        
+        {/* Iconos animados */}
         <div className="flex items-end justify-center gap-3 mb-8">
           <div className="animate-bounce" style={{ animationDelay: "0ms" }}>
-            <div className="w-14 h-14 rounded-2xl bg-linear-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-orange-500/30">
-              <FaTools className="text-white text-xl" />
+            <div className="w-14 h-14 rounded-2xl bg-[#EAF0F6] border border-[#C8D6E5] flex items-center justify-center shadow-sm">
+              <FaTools className="text-[#244563] text-xl" />
             </div>
           </div>
           <div className="animate-bounce" style={{ animationDelay: "150ms" }}>
-            <div className="w-20 h-20 rounded-2xl bg-linear-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/40">
-              <FaLaptopCode className="text-white text-3xl" />
+            <div className="w-20 h-20 rounded-2xl bg-[#244563] flex items-center justify-center shadow-md">
+              <FaCogs className="text-white text-3xl" />
             </div>
           </div>
           <div className="animate-bounce" style={{ animationDelay: "300ms" }}>
-            <div className="w-14 h-14 rounded-2xl bg-linear-to-br from-purple-500 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-purple-500/30">
-              <FaMagic className="text-white text-xl" />
+            <div className="w-14 h-14 rounded-2xl bg-[#EAF0F6] border border-[#C8D6E5] flex items-center justify-center shadow-sm">
+              <FaMagic className="text-[#244563] text-xl" />
             </div>
           </div>
         </div>
 
-        <div className="bg-white/10 backdrop-blur-lg rounded-3xl border border-white/20 p-8 shadow-2xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/20 border border-amber-400/40 text-amber-300 text-xs font-bold uppercase tracking-wider mb-4">
-            <FaSpinner className="animate-spin text-[10px]" />
+        {/* Tarjeta de mantenimiento */}
+        <div className="rounded-xl border border-[#D8DEE6] bg-[#FFFFFF] p-6 sm:p-8 text-center shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+          <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-700 mb-4">
+            <FaSpinner className="animate-spin text-[9px]" />
             En mantenimiento
           </div>
 
-          <h1 className="text-3xl font-black text-white mb-3">
-            {titulo || "¡Genios programando!"}
+          <h1 className="text-xl sm:text-2xl font-bold text-[#273444] mb-3">
+            {titulo || "¡Estamos actualizando el sistema!"}
           </h1>
 
-          <p className="text-slate-300 text-sm leading-relaxed mb-6">
+          <p className="text-[12px] leading-relaxed text-[#4B5563] mb-6">
             {mensaje ||
               "Estamos mejorando el sistema para ti. Nuestro equipo está trabajando en nuevas mejoras y actualizaciones. Volvemos en unos minutos."}
           </p>
 
-          <div className="flex items-center justify-center gap-2 text-slate-400 text-xs mb-6">
-            <FaRocket className="text-indigo-400" />
+          <div className="flex items-center justify-center gap-2 text-[#6B7280] text-[11px] mb-6">
+            <FaRocket className="text-[#244563]" />
             <span>Gracias por tu paciencia</span>
           </div>
 
-          {/* ✅ Botón para cerrar sesión limpiamente */}
           <button
             onClick={handleSalir}
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white text-sm font-semibold transition-all"
+            className="inline-flex items-center justify-center gap-2 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-4 py-2 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#F3F4F6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
           >
-            <FaSignOutAlt className="text-xs" />
+            <FaSignOutAlt className="text-[10px]" />
             Cerrar sesión
           </button>
         </div>
 
-        <p className="mt-6 text-slate-500 text-xs">
+        <p className="mt-6 flex items-center justify-center gap-1.5 text-[10px] text-[#6B7280]">
+          <FaClock className="text-[#244563]" />
           Si eres administrador, puedes ingresar normalmente.
         </p>
       </div>

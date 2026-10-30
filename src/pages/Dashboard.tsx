@@ -1,11 +1,4 @@
-import {
-  useState,
-  useEffect,
-  useCallback,
-  useSyncExternalStore,
-  useRef,
-  useMemo,
-} from "react";
+import { useState, useEffect, useSyncExternalStore, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -13,26 +6,14 @@ import {
   onSnapshot,
   runTransaction,
   collection,
-  query,
-  where,
   getDocs,
-  getCountFromServer,
 } from "firebase/firestore";
-import type { Query } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useData } from "../context/DataContext";
+import { claveAccesoEstudiantes } from "../utils/estudiantesCache";
 import {
-  claveAccesoEstudiantes,
-  claveConsultaEstudiantes,
-  leerEstudiantesCache,
-  observarEstudiantesCache,
-} from "../utils/estudiantesCache";
-import {
-  useHorarioPanel,
   observarPanel,
   leerRevisionNotasPanel,
-  leerUnaVezPanel,
-  contextoPanelVigente,
   prepararPanel,
 } from "../utils/panelCache";
 import Layout from "../components/Layout";
@@ -44,18 +25,17 @@ import {
   FaCalendarAlt,
   FaUserShield,
   FaCogs,
-  FaUserGraduate,
   FaChalkboardTeacher,
   FaClipboardCheck,
   FaExclamationTriangle,
   FaExchangeAlt,
   FaLock,
   FaSync,
-  FaClock,
   FaHandsHelping,
   FaClipboardList,
   FaBell,
 } from "react-icons/fa";
+
 interface InstitutionData {
   nombreInstitucion?: string;
   codigoAmie?: string;
@@ -65,8 +45,10 @@ interface InstitutionData {
   telefono?: string;
 }
 type ActiveRole = "super_admin" | "docente";
+
 const ACTIVE_ROLE_KEY = "eduX_activeRole";
 const PENDING_ROLE_DIALOG_KEY = "eduX_pendingRoleDialog";
+
 // Acentos suaves para identificar cada área sin alterar la paleta institucional.
 const MODULE_ACCENTS = [
   {
@@ -106,40 +88,23 @@ const MODULE_ACCENTS = [
     stat: "bg-orange-50 text-orange-800",
   },
 ];
+
 export default function Dashboard() {
   const { user, userData } = useAuth();
   const navigate = useNavigate();
-  const {
-    grados: todosGrados,
-    anioActivo,
-    aniosLectivos,
-    ambitos,
-    ready,
-  } = useData();
+  const { grados: todosGrados, anioActivo, ready } = useData();
+
   const anioActivoId = anioActivo?.id || "";
   const acceso = claveAccesoEstudiantes(user?.uid, userData);
   const asignadosKey = JSON.stringify(
     [...new Set(userData?.gradosAsignados || [])].sort(),
   );
-  const [conteosEstudiantes, setConteosEstudiantes] = useState<
-    Record<string, number>
-  >({});
-  const [errorStats, setErrorStats] = useState("");
-  const solicitudStats = useRef(0);
-  const [statsBase, setStats] = useState({
-    aniosActivos: 0,
-    gradosActivos: 0,
-    estudiantesActivos: 0,
-    ambitos: 0,
-    calificaciones: 0,
-    solicitudesPendientes: 0,
-    notasEnRiesgo: 0,
-  });
-  const [statsLoading, setStatsLoading] = useState(false);
+
   const [institutionData, setInstitutionData] =
     useState<InstitutionData | null>(null);
   const [loadingInstitution, setLoadingInstitution] = useState(true);
   const [activeRole, setActiveRole] = useState<ActiveRole | null>(null);
+
   // ✅ Lazy initializer: lee localStorage una sola vez al montar, sin useEffect ni setState síncrono
   const [showRoleDialog, setShowRoleDialog] = useState<boolean>(() => {
     try {
@@ -150,6 +115,7 @@ export default function Dashboard() {
       return false;
     }
   });
+
   const grados = useMemo(
     () =>
       todosGrados.filter(
@@ -160,63 +126,19 @@ export default function Dashboard() {
       ),
     [todosGrados, anioActivoId, activeRole, asignadosKey],
   );
-  const propias = useHorarioPanel(
-    acceso,
-    anioActivoId,
-    "propias",
-    activeRole === "docente" ? user?.uid || "" : "",
-  );
-  const [dia, setDia] = useState(() => new Date().getDay());
+
+  const [, setDia] = useState(() => new Date().getDay());
   useEffect(() => {
     const timer = window.setInterval(() => setDia(new Date().getDay()), 60000);
     return () => window.clearInterval(timer);
   }, []);
-  const horasHoy = propias.items.reduce(
-    (total, a) =>
-      total +
-      (a.horario || [])
-        .filter((b) => b.dia === dia)
-        .reduce((n, b) => n + b.horas.length, 0),
-    0,
-  );
-  const materiasCount = propias.items.length;
-  const totalEstudiantes = useSyncExternalStore(
-    observarEstudiantesCache,
-    useCallback(() => {
-      if (activeRole !== "docente") {
-        const cache = leerEstudiantesCache(
-          claveConsultaEstudiantes(acceso, anioActivoId, null),
-        );
-        return cache.estado === "listo"
-          ? cache.items.filter((e) => e.activo).length
-          : statsBase.estudiantesActivos;
-      }
-      return grados.reduce((total, g) => {
-        const cache = leerEstudiantesCache(
-          claveConsultaEstudiantes(acceso, anioActivoId, g.id),
-        );
-        return (
-          total +
-          (cache.estado === "listo"
-            ? cache.items.filter((e) => e.activo).length
-            : conteosEstudiantes[g.id] || 0)
-        );
-      }, 0);
-    }, [
-      acceso,
-      anioActivoId,
-      activeRole,
-      grados,
-      conteosEstudiantes,
-      statsBase.estudiantesActivos,
-    ]),
-  );
-  const stats = { ...statsBase, estudiantesActivos: totalEstudiantes };
+
   const [mantenimiento, setMantenimiento] = useState(false);
   const [mantenimientoListo, setMantenimientoListo] = useState(false);
   const [guardandoMantenimiento, setGuardandoMantenimiento] = useState(false);
   const [errorMantenimiento, setErrorMantenimiento] = useState("");
   const isSuperAdmin = userData?.role === "super_admin";
+
   useEffect(() => {
     if (!isSuperAdmin || activeRole !== "super_admin") return;
     return onSnapshot(
@@ -235,6 +157,7 @@ export default function Dashboard() {
       },
     );
   }, [isSuperAdmin, activeRole]);
+
   const cambiarMantenimiento = async () => {
     if (
       !isSuperAdmin ||
@@ -271,9 +194,11 @@ export default function Dashboard() {
       setGuardandoMantenimiento(false);
     }
   };
+
   const hasDocenteCapabilities =
     (userData?.gradosAsignados && userData.gradosAsignados.length > 0) ||
     (userData?.tutorDe && userData.tutorDe.length > 0);
+
   useEffect(() => {
     if (!userData) return;
     const determinarRol = async () => {
@@ -294,6 +219,7 @@ export default function Dashboard() {
     };
     determinarRol();
   }, [userData, isSuperAdmin, hasDocenteCapabilities]);
+
   const seleccionarRol = (rol: ActiveRole) => {
     setActiveRole(rol);
     try {
@@ -304,6 +230,7 @@ export default function Dashboard() {
     window.dispatchEvent(new CustomEvent("eduX:activeRole", { detail: rol }));
     setShowRoleDialog(false);
   };
+
   useEffect(() => {
     // El aviso institucional solamente se muestra al administrador.
     if (!ready || !acceso || !anioActivoId || activeRole !== "super_admin")
@@ -311,8 +238,6 @@ export default function Dashboard() {
     let vigente = true;
     const cargar = async () => {
       try {
-        // La vista administrativa conserva su lectura al entrar para reflejar
-        // cambios de Configuración Institucional, todavía fuera de esta etapa.
         const snap = await getDocs(
           collection(db, "configuracionInstitucional"),
         );
@@ -331,162 +256,29 @@ export default function Dashboard() {
       vigente = false;
     };
   }, [acceso, anioActivoId, activeRole, ready]);
+
   const tutorDeAnioActivo = useMemo(() => {
     if (!userData?.tutorDe) return [];
     return grados
       .filter((g) => userData.tutorDe?.includes(g.id))
       .map((g) => g.id);
   }, [grados, userData]);
+
   const nombreUsuario = userData?.nombreDocumento
     ? userData.nombreDocumento
     : user?.displayName || "Usuario";
+
   const revisionNotas = useSyncExternalStore(
     observarPanel,
     leerRevisionNotasPanel,
   );
-  const cargarStats = useCallback(
-    async (forzar = false) => {
-      if (!activeRole || !ready || !prepararPanel(acceso, anioActivoId)) return;
-      const version = ++solicitudStats.current;
-      const vigente = () =>
-        version === solicitudStats.current &&
-        contextoPanelVigente(acceso, anioActivoId);
-      setStatsLoading(true);
-      setErrorStats("");
-      try {
-        const asignados = JSON.parse(asignadosKey) as string[];
-        const docente = activeRole === "docente";
-        const contar = (clave: string, q: Query) =>
-          leerUnaVezPanel(
-            acceso,
-            anioActivoId,
-            `${activeRole}:${clave}`,
-            () => getCountFromServer(q).then((s) => s.data().count),
-            forzar,
-          );
-        const cargarEstudiantes = async () => {
-          if (!docente) {
-            const cache = leerEstudiantesCache(
-              claveConsultaEstudiantes(acceso, anioActivoId, null),
-            );
-            const total =
-              cache.estado === "listo"
-                ? cache.items.filter((e) => e.activo).length
-                : await contar(
-                    "estudiantes",
-                    query(
-                      collection(db, "estudiantes"),
-                      where("activo", "==", true),
-                    ),
-                  );
-            return { total, porGrado: {} as Record<string, number> };
-          }
-          const pares = await Promise.all(
-            grados.map(async (g) => {
-              const cache = leerEstudiantesCache(
-                claveConsultaEstudiantes(acceso, anioActivoId, g.id),
-              );
-              const total =
-                cache.estado === "listo"
-                  ? cache.items.filter((e) => e.activo).length
-                  : await contar(
-                      `estudiantes:${g.id}`,
-                      query(
-                        collection(db, "estudiantes"),
-                        where("activo", "==", true),
-                        where("gradoId", "==", g.id),
-                      ),
-                    );
-              return [g.id, total] as const;
-            }),
-          );
-          return {
-            total: pares.reduce((n, [, total]) => n + total, 0),
-            porGrado: Object.fromEntries(pares),
-          };
-        };
-        // Conserva el alcance original de calificaciones/riesgo. Su optimización por periodo
-        // se aborda en la etapa de Calificaciones; no se descargan documentos para contarlos.
-        const [
-          estudiantes,
-          calificaciones,
-          solicitudesPendientes,
-          notasEnRiesgo,
-        ] = await Promise.all([
-          cargarEstudiantes(),
-          docente && !asignados.length
-            ? Promise.resolve(0)
-            : contar(
-                "calificaciones",
-                docente
-                  ? query(
-                      collection(db, "calificaciones"),
-                      where("gradoId", "in", asignados),
-                    )
-                  : collection(db, "calificaciones"),
-              ),
-          docente
-            ? Promise.resolve(0)
-            : contar(
-                "solicitudes",
-                query(
-                  collection(db, "solicitudesMatriculas"),
-                  where("estado", "==", "pendiente"),
-                ),
-              ),
-          contar(
-            "riesgo",
-            query(collection(db, "calificaciones"), where("nota", "<", 7)),
-          ),
-        ]);
-        if (!vigente()) return;
-        setConteosEstudiantes(estudiantes.porGrado);
-        setStats({
-          aniosActivos: aniosLectivos.length,
-          gradosActivos: docente ? grados.length : todosGrados.length,
-          ambitos: ambitos.filter(
-            (a) => !docente || asignados.includes(a.gradoId),
-          ).length,
-          estudiantesActivos: estudiantes.total,
-          calificaciones,
-          solicitudesPendientes,
-          notasEnRiesgo,
-        });
-      } catch (error) {
-        if (vigente())
-          setErrorStats(
-            "No se pudieron actualizar todos los indicadores. Pulsa Actualizar para reintentar.",
-          );
-        console.error("Error cargando estadísticas:", error);
-      } finally {
-        if (vigente()) setStatsLoading(false);
-      }
-    },
-    [
-      activeRole,
-      ready,
-      acceso,
-      anioActivoId,
-      asignadosKey,
-      grados,
-      aniosLectivos,
-      todosGrados,
-      ambitos,
-    ],
-  );
-  const cancelarStats = useCallback(() => {
-    solicitudStats.current++;
-  }, []);
+
+  // Efecto mantenido solo para forzar la actualización visual de la caché
+  // cuando hay cambios en notas, pero sin cargar estadísticas pesadas.
   useEffect(() => {
-    let cancelado = false;
-    void Promise.resolve().then(() => {
-      if (!cancelado) void cargarStats();
-    });
-    return () => {
-      cancelado = true;
-      cancelarStats();
-    };
-  }, [cargarStats, cancelarStats, revisionNotas]);
+    if (ready) prepararPanel(acceso, anioActivoId);
+  }, [ready, acceso, anioActivoId, revisionNotas]);
+
   const modules = [
     {
       path: "/configuracion-institucional",
@@ -524,7 +316,7 @@ export default function Dashboard() {
       icon: FaCalendarAlt,
       color: "from-pink-500 to-pink-600",
       desc: "Base del sistema: periodos académicos",
-      stats: `${stats.aniosActivos} activo${stats.aniosActivos !== 1 ? "s" : ""}`,
+      stats: "Configurar",
       badge: "BASE",
       roles: ["super_admin"] as ActiveRole[],
     },
@@ -534,7 +326,7 @@ export default function Dashboard() {
       icon: FaGraduationCap,
       color: "from-blue-500 to-blue-600",
       desc: "Niveles educativos y paralelos",
-      stats: `${stats.gradosActivos} activo${stats.gradosActivos !== 1 ? "s" : ""}`,
+      stats: "Configurar",
       badge: "NIVEL 2",
       roles: ["super_admin"] as ActiveRole[],
     },
@@ -544,18 +336,8 @@ export default function Dashboard() {
       icon: FaBook,
       color: "from-purple-500 to-purple-600",
       desc: "Competencias y destrezas",
-      stats: `${stats.ambitos} ámbito${stats.ambitos !== 1 ? "s" : ""}`,
+      stats: "Configurar",
       badge: "NIVEL 3",
-      roles: ["super_admin"] as ActiveRole[],
-    },
-    {
-      path: "/matriculas",
-      name: "Matrículas",
-      icon: FaUserGraduate,
-      color: "from-indigo-500 to-indigo-600",
-      desc: "Revisar y aprobar solicitudes de matrícula",
-      stats: `${stats.solicitudesPendientes} pendiente${stats.solicitudesPendientes !== 1 ? "s" : ""}`,
-      badge: "ADMIN",
       roles: ["super_admin"] as ActiveRole[],
     },
     {
@@ -564,7 +346,7 @@ export default function Dashboard() {
       icon: FaChartBar,
       color: "from-orange-500 to-orange-600",
       desc: "Registro de asistencia y notas",
-      stats: `${stats.calificaciones} registro${stats.calificaciones !== 1 ? "s" : ""}`,
+      stats: "Registrar",
       badge: "DOCENTE",
       roles: ["docente"] as ActiveRole[],
     },
@@ -574,7 +356,7 @@ export default function Dashboard() {
       icon: FaClipboardCheck,
       color: "from-rose-500 to-rose-600",
       desc: "Control de asistencia por grado y materia",
-      stats: "Semanal",
+      stats: "Ver reporte",
       badge: "TUTOR/DOCENTE",
       roles: ["docente"] as ActiveRole[],
     },
@@ -584,7 +366,7 @@ export default function Dashboard() {
       icon: FaExclamationTriangle,
       color: "from-amber-500 to-amber-600",
       desc: "Calificaciones menores a 7 que requieren refuerzo",
-      stats: `${stats.notasEnRiesgo} nota${stats.notasEnRiesgo !== 1 ? "s" : ""}`,
+      stats: "Ver reporte",
       badge: "TUTOR/DOCENTE",
       roles: ["docente"] as ActiveRole[],
     },
@@ -596,7 +378,7 @@ export default function Dashboard() {
       desc: "Citaciones, asistencia de representantes, actas y seguimiento",
       stats: "Ver seguimiento",
       badge: "DOCENTE",
-      roles: ["super_admin", "docente"] as ActiveRole[],
+      roles: ["docente"] as ActiveRole[], // ✅ CORREGIDO: Solo docentes
     },
     {
       path: "/refuerzo-pedagogico",
@@ -634,101 +416,32 @@ export default function Dashboard() {
       icon: FaUsers,
       color: "from-green-500 to-green-600",
       desc: "Listado de alumnos",
-      stats: `${stats.estudiantesActivos} activo${stats.estudiantesActivos !== 1 ? "s" : ""}`,
+      stats: "Ver listado",
       badge: "TUTOR",
       roles: ["super_admin", "docente"] as ActiveRole[],
     },
   ];
+
   const filteredModules = modules.filter(
     (mod) => activeRole && mod.roles.includes(activeRole),
   );
+
   const esTutor = tutorDeAnioActivo.length > 0;
-  const diaSemanaLabel = new Date().toLocaleDateString("es-EC", {
-    weekday: "long",
-  });
-  const kpis =
-    activeRole === "docente"
-      ? [
-          {
-            label: "Estudiantes",
-            value: stats.estudiantesActivos,
-            sub: "en mis grados",
-            icon: FaUsers,
-            color: "bg-[#EAF0F6] text-[#244563]",
-          },
-          {
-            label: "Horas hoy",
-            value: horasHoy,
-            sub: diaSemanaLabel,
-            icon: FaClock,
-            color: "bg-[#EAF0F6] text-[#244563]",
-          },
-          {
-            label: "Materias",
-            value: materiasCount,
-            sub: "configuradas",
-            icon: FaBook,
-            color: "bg-[#FFF7ED] text-[#9A4518]",
-          },
-          {
-            label: "Grados",
-            value: stats.gradosActivos,
-            sub: "asignados",
-            icon: FaGraduationCap,
-            color: "bg-[#EAF0F6] text-[#244563]",
-          },
-        ]
-      : [
-          {
-            label: "Estudiantes",
-            value: stats.estudiantesActivos,
-            sub: "activos",
-            icon: FaUsers,
-            color: "bg-[#EAF0F6] text-[#244563]",
-          },
-          {
-            label: "Grados",
-            value: stats.gradosActivos,
-            sub: "activos",
-            icon: FaGraduationCap,
-            color: "bg-[#EAF0F6] text-[#244563]",
-          },
-          {
-            label: "Matrículas",
-            value: stats.solicitudesPendientes,
-            sub: "pendientes",
-            icon: FaUserGraduate,
-            color: "bg-amber-100 text-amber-600",
-          },
-          {
-            label: "Notas < 7",
-            value: stats.notasEnRiesgo,
-            sub: "en riesgo",
-            icon: FaExclamationTriangle,
-            color: "bg-red-100 text-[#C93F45]",
-          },
-        ];
+
   const hora = new Date().getHours();
   const saludo =
     hora < 12 ? "Buenos días" : hora < 18 ? "Buenas tardes" : "Buenas noches";
+
   const fechaLarga = new Date().toLocaleDateString("es-EC", {
     weekday: "long",
     day: "numeric",
     month: "long",
     year: "numeric",
   });
+
   if (activeRole === null) {
     return (
       <Layout>
-        {(errorStats || propias.error) && (
-          <p
-            role="alert"
-            className="mb-3 rounded-md border border-red-200 bg-red-50 p-3 text-xs text-red-800"
-          >
-            {errorStats ||
-              "No se pudo consultar el horario. Pulsa Actualizar para reintentar."}
-          </p>
-        )}
         <div className="flex items-center justify-center py-10">
           <div className="text-center">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-[#244563] border-t-transparent mx-auto mb-2"></div>
@@ -738,6 +451,7 @@ export default function Dashboard() {
       </Layout>
     );
   }
+
   return (
     <Layout>
       {showRoleDialog && (
@@ -818,6 +532,7 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
       {activeRole === "super_admin" &&
         loadingInstitution === false &&
         !institutionData && (
@@ -855,6 +570,7 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
       {!userData?.nombreDocumento && (
         <div className="mb-3 bg-[#EAF0F6] border-l-4 border-[#C96522] p-2.5 rounded-lg">
           <div className="flex items-start gap-3">
@@ -890,7 +606,8 @@ export default function Dashboard() {
           </div>
         </div>
       )}
-      <div className="mb-3 flex flex-col gap-3 rounded-lg border border-[#C8D6E5] border-l-4 border-l-[#244563] bg-linear-to-r from-[#EAF0F6] via-[#F3F4F6] to-[#FFFFFF] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+
+      <div className="mb-4 flex flex-col gap-3 rounded-lg border border-[#C8D6E5] border-l-4 border-l-[#244563] bg-linear-to-r from-[#EAF0F6] via-[#F3F4F6] to-[#FFFFFF] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-lg font-semibold tracking-tight text-[#244563] truncate">
             {saludo}, {nombreUsuario} 👋
@@ -929,22 +646,9 @@ export default function Dashboard() {
                     : "Activar mantenimiento"}
             </button>
           )}
-          <button
-            onClick={() => {
-              void cargarStats(true);
-              propias.reintentar();
-            }}
-            disabled={statsLoading}
-            className="inline-flex items-center gap-2 px-3 py-2 bg-[#244563] hover:bg-[#1B354D] border border-[#244563] rounded-md text-[11px] font-semibold text-white transition-colors disabled:opacity-50 shrink-0 h-8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-            title="Actualizar estadísticas"
-          >
-            <FaSync
-              className={`text-[11px] ${statsLoading ? "animate-spin" : ""}`}
-            />
-            {statsLoading ? "Actualizando..." : "Actualizar"}
-          </button>
         </div>
       </div>
+
       {isSuperAdmin && activeRole === "super_admin" && errorMantenimiento && (
         <p
           role="alert"
@@ -953,39 +657,11 @@ export default function Dashboard() {
           {errorMantenimiento}
         </p>
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-2 mb-3">
-        {kpis.map((kpi) => {
-          const Icon = kpi.icon;
-          const accent =
-            MODULE_ACCENTS[kpis.indexOf(kpi) % MODULE_ACCENTS.length];
-          return (
-            <div
-              key={kpi.label}
-              className="bg-[#FFFFFF] rounded-lg border border-[#D8DEE6] p-3 flex items-center gap-2.5 shadow-[0_3px_12px_-8px_rgba(15,23,42,0.22)]"
-            >
-              <div
-                className={`w-8 h-8 sm:w-8 sm:h-8 rounded-md flex items-center justify-center shrink-0 ${accent.icon}`}
-              >
-                <Icon className="text-xs sm:text-sm" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xl font-semibold tabular-nums text-[#244563] leading-tight truncate">
-                  {statsLoading ? "…" : kpi.value}
-                </p>
-                <p className="text-[11px] sm:text-[10px] font-semibold text-[#64748B] uppercase tracking-wide truncate">
-                  {kpi.label}
-                </p>
-                <p className="text-[10px] sm:text-[11px] text-[#6B7280] truncate capitalize">
-                  {kpi.sub}
-                </p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <h2 className="text-[11px] font-bold text-[#6B7280] uppercase tracking-wider mb-3">
+
+      <h2 className="text-[11px] font-bold text-[#6B7280] uppercase tracking-wider mb-3 mt-4">
         Módulos
       </h2>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
         {filteredModules.map((mod, index) => (
           <Link

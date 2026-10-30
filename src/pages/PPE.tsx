@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
@@ -21,6 +21,10 @@ import {
   FaCheckCircle,
   FaEye,
   FaFileExcel,
+  FaExclamationTriangle,
+  FaInfoCircle,
+  FaTimesCircle,
+  FaArrowLeft,
 } from "react-icons/fa";
 import * as XLSX from "xlsx";
 import { useAuth } from "../context/AuthContext";
@@ -29,6 +33,13 @@ import type { Estudiante } from "../types";
 import { db } from "../lib/firebase";
 import Layout from "../components/Layout";
 import { getPPECached, invalidatePPECache } from "../utils/ppeCache";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  asegurarEstudiantesCache,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+} from "../utils/estudiantesCache";
 
 type EstudiantePPE = Estudiante & { id: string };
 type EstadoPPE = "presente" | "ausente" | "justificado" | "atraso";
@@ -63,6 +74,14 @@ interface NotaPPE {
   nota: number;
   observacion?: string;
 }
+
+interface Toast {
+  id: string;
+  type: "success" | "error" | "warning" | "info";
+  title: string;
+  message?: string;
+}
+
 const fechaHoy = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -109,6 +128,14 @@ export default function PPE() {
   const configId =
     docenteId && anioLectivoId ? `${docenteId}_${anioLectivoId}` : "";
 
+  // ============================================================
+  // FASE 3.3: ACCESO A LA CACHÉ COMPARTIDA DE ESTUDIANTES
+  // ============================================================
+  const accesoCache = useMemo(
+    () => claveAccesoEstudiantes(user?.uid, userData),
+    [user?.uid, userData],
+  );
+
   const [estudiantesDisponibles, setEstudiantesDisponibles] = useState<
     EstudiantePPE[]
   >([]);
@@ -121,8 +148,11 @@ export default function PPE() {
   const [busqueda, setBusqueda] = useState("");
   const [fecha, setFecha] = useState(fechaHoy());
   const [vista, setVista] = useState<VistaPPE>("principal");
-  const [seccion, setSeccion] = useState<"asistencia" | "actividades">(
-    "asistencia",
+  const [seccionActiva, setSeccionActiva] = useState<
+    "ninguna" | "asistencia" | "actividades"
+  >("ninguna");
+  const [vistaLista, setVistaLista] = useState<"grados" | "alfabetico">(
+    "grados",
   );
   const [asistencias, setAsistencias] = useState<Record<string, EstadoPPE>>({});
   const [observacionesAsistencia, setObservacionesAsistencia] = useState<
@@ -140,10 +170,10 @@ export default function PPE() {
   const [reporteNotas, setReporteNotas] = useState<NotaPPE[]>([]);
   const [estudianteDetalle, setEstudianteDetalle] =
     useState<EstudiantePPE | null>(null);
-  const [mensaje, setMensaje] = useState<{
-    tipo: "ok" | "error";
-    texto: string;
-  } | null>(null);
+
+  // SISTEMA DE TOASTS
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
   const [filtroReporte, setFiltroReporte] = useState<
     "todo" | "asistencia" | "notas"
   >("todo");
@@ -159,19 +189,51 @@ export default function PPE() {
     String(new Date().getFullYear()),
   );
 
+  const mostrarToast = useCallback(
+    (type: Toast["type"], title: string, message?: string, duration = 4000) => {
+      const id = `toast-${Date.now()}-${Math.random()}`;
+      const toast: Toast = { id, type, title, message };
+      setToasts((prev) => [...prev, toast]);
+      setTimeout(
+        () => setToasts((prev) => prev.filter((t) => t.id !== id)),
+        duration,
+      );
+    },
+    [],
+  );
+
+  const cerrarToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
   const gradosPermitidos = useMemo(() => {
-    const ids = [
-      ...new Set([
-        ...(userData?.gradosAsignados ?? []),
-        ...(userData?.tutorDe ?? []),
-      ]),
-    ];
-    return userData?.role === "docente" && ids.length > 0
-      ? grados.filter((g) => ids.includes(g.id))
-      : userData?.role === "docente"
-        ? []
-        : grados;
-  }, [grados, userData?.gradosAsignados, userData?.tutorDe, userData?.role]);
+    // 1. Partimos de todos los grados a los que tiene acceso el docente
+    let base = grados;
+    if (
+      userData?.role === "docente" &&
+      userData?.gradosAsignados &&
+      userData.gradosAsignados.length > 0
+    ) {
+      const asignados = new Set(userData.gradosAsignados);
+      base = grados.filter((g) => asignados.has(g.id));
+    }
+
+    // 2. Filtramos ESTRICTAMENTE para que solo queden los de Bachillerato
+    const gradosBachillerato = base.filter((g) => {
+      const nombre = g.nombre.toUpperCase();
+      // Buscamos explícitamente BGU, BC o Bachillerato, o los números de curso de bachillerato
+      return (
+        nombre.includes("BGU") ||
+        nombre.includes(" BC ") || // Con espacios para evitar falsos positivos
+        nombre.includes("BACHILLERATO") ||
+        nombre.includes("1RO") ||
+        nombre.includes("2DO") ||
+        nombre.includes("3RO")
+      );
+    });
+
+    return gradosBachillerato;
+  }, [grados, userData]); // <-- CORREGIDO AQUÍ
 
   const gradoNombre = useCallback(
     (gradoId?: string) => {
@@ -184,55 +246,86 @@ export default function PPE() {
     [grados],
   );
 
+  // ============================================================
+  // FASE 3.3: LECTURA DE ESTUDIANTES DESDE CACHÉ COMPARTIDA
+  // + configuración y actividades del PPE (siguen usando ppeCache)
+  // ============================================================
   useEffect(() => {
+    if (!docenteId || !anioLectivoId || !ready) {
+      // Diferimos el setState para no ejecutarlo sincrónicamente en el efecto.
+      void Promise.resolve().then(() => setLoading(false));
+      return;
+    }
+
     let cancelled = false;
 
-    const cargarBase = async () => {
-      if (!docenteId || !anioLectivoId || !ready) {
-        // Diferimos la actualización para no ejecutar setState sincrónicamente
-        // dentro del cuerpo del efecto.
-        await Promise.resolve();
-        if (!cancelled) setLoading(false);
-        return;
-      }
+    // 1. Aseguramos la caché de los grados permitidos
+    const gradosIds = gradosPermitidos.map((g) => g.id);
+    gradosIds.forEach((gradoId) => {
+      const clave = claveConsultaEstudiantes(
+        accesoCache,
+        anioLectivoId,
+        gradoId,
+      );
+      if (clave) asegurarEstudiantesCache(clave);
+    });
 
+    // 2. Extraemos estudiantes de la caché (solo activos del año)
+    const actualizarEstudiantes = () => {
+      if (cancelled) return;
+      const todos: EstudiantePPE[] = [];
+      gradosIds.forEach((gradoId) => {
+        const clave = claveConsultaEstudiantes(
+          accesoCache,
+          anioLectivoId,
+          gradoId,
+        );
+        if (!clave) return;
+        const estado = leerEstudiantesCache(clave);
+        if (estado.estado === "listo") {
+          estado.items.forEach((e) => {
+            if (e.activo !== true) return;
+            if (e.anioLectivoId && e.anioLectivoId !== anioLectivoId) return;
+            todos.push(e as EstudiantePPE);
+          });
+        }
+      });
+      todos.sort((a, b) =>
+        nombreCompleto(a).localeCompare(nombreCompleto(b), "es"),
+      );
+      setEstudiantesDisponibles(todos);
+    };
+
+    const unsubscribeCache = observarEstudiantesCache(actualizarEstudiantes);
+    actualizarEstudiantes();
+
+    // 3. Cargamos configuración y actividades (pocas lecturas reales)
+    const cargarConfigYActividades = async () => {
       try {
-        const [estSnap, configSnap, actSnap] = await Promise.all([
-          getPPECached(`ppe:${docenteId}:${anioLectivoId}:estudiantes-activos`, () =>
-            getDocs(query(collection(db, "estudiantes"), where("activo", "==", true))),
-          ),
+        const [configSnap, actSnap] = await Promise.all([
           getPPECached(`ppe:${docenteId}:${anioLectivoId}:configuracion`, () =>
-            getDocs(query(
-              collection(db, "ppeConfiguraciones"),
-              where("docenteId", "==", docenteId),
-              where("anioLectivoId", "==", anioLectivoId),
-            )),
+            getDocs(
+              query(
+                collection(db, "ppeConfiguraciones"),
+                where("docenteId", "==", docenteId),
+                where("anioLectivoId", "==", anioLectivoId),
+              ),
+            ),
           ),
           getPPECached(`ppe:${docenteId}:${anioLectivoId}:actividades`, () =>
-            getDocs(query(
-              collection(db, "ppeActividades"),
-              where("docenteId", "==", docenteId),
-              where("anioLectivoId", "==", anioLectivoId),
-            )),
+            getDocs(
+              query(
+                collection(db, "ppeActividades"),
+                where("docenteId", "==", docenteId),
+                where("anioLectivoId", "==", anioLectivoId),
+              ),
+            ),
           ),
         ]);
 
         if (cancelled) return;
 
-        const allowed = new Set(gradosPermitidos.map((g) => g.id));
-        const allStudents = estSnap.docs
-          .map((d) => ({ id: d.id, ...d.data() }) as EstudiantePPE)
-          .filter(
-            (e) =>
-              (!allowed.size || allowed.has(e.gradoId)) &&
-              (!e.anioLectivoId || e.anioLectivoId === anioLectivoId),
-          );
-        allStudents.sort((a, b) =>
-          nombreCompleto(a).localeCompare(nombreCompleto(b), "es"),
-        );
-
         const config = configSnap.docs[0]?.data() as ConfigPPE | undefined;
-        setEstudiantesDisponibles(allStudents);
         setEstudianteIds(config?.estudianteIds ?? []);
         setActividades(
           actSnap.docs
@@ -242,21 +335,24 @@ export default function PPE() {
       } catch (e) {
         if (!cancelled) {
           console.error("Error cargando PPE:", e);
-          setMensaje({
-            tipo: "error",
-            texto: "No se pudo cargar la información del PPE.",
-          });
+          mostrarToast(
+            "error",
+            "Error de carga",
+            "No se pudo cargar la información del PPE.",
+          );
         }
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
 
-    void cargarBase();
+    void cargarConfigYActividades();
+
     return () => {
       cancelled = true;
+      unsubscribeCache();
     };
-  }, [docenteId, anioLectivoId, ready, gradosPermitidos]);
+  }, [docenteId, anioLectivoId, ready, gradosPermitidos, accesoCache, mostrarToast]);
 
   const estudiantesPPE = useMemo(
     () =>
@@ -292,6 +388,36 @@ export default function PPE() {
     );
   }, [estudiantesFiltrados, gradoNombre]);
 
+  // NUEVA LISTA DINÁMICA (Agrupada o Alfabética)
+  const listaEstudiantesRender = useMemo(() => {
+    if (vistaLista === "alfabetico") {
+      // Ya vienen ordenados alfabéticamente desde estudiantesPPE
+      return estudiantesPPE.map((e) => ({
+        ...e,
+        mostrarCabecera: false,
+        nombreGrado: "",
+      }));
+    }
+
+    // Ordenar por grado y luego por nombre
+    const ordenados = [...estudiantesPPE].sort((a, b) => {
+      const gradoA = gradoNombre(a.gradoId);
+      const gradoB = gradoNombre(b.gradoId);
+      return (
+        gradoA.localeCompare(gradoB, "es") ||
+        nombreCompleto(a).localeCompare(nombreCompleto(b), "es")
+      );
+    });
+
+    let gradoAnterior = "";
+    return ordenados.map((e) => {
+      const gradoActual = gradoNombre(e.gradoId);
+      const mostrarCabecera = gradoActual !== gradoAnterior;
+      gradoAnterior = gradoActual;
+      return { ...e, mostrarCabecera, nombreGrado: gradoActual };
+    });
+  }, [estudiantesPPE, vistaLista, gradoNombre]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -307,20 +433,26 @@ export default function PPE() {
 
       try {
         const [asisSnap, notasSnap] = await Promise.all([
-          getPPECached(`ppe:${docenteId}:${anioLectivoId}:asistencia-fecha:${fecha}`, () =>
-            getDocs(query(
-              collection(db, "ppeAsistencias"),
-              where("docenteId", "==", docenteId),
-              where("anioLectivoId", "==", anioLectivoId),
-              where("fecha", "==", fecha),
-            )),
+          getPPECached(
+            `ppe:${docenteId}:${anioLectivoId}:asistencia-fecha:${fecha}`,
+            () =>
+              getDocs(
+                query(
+                  collection(db, "ppeAsistencias"),
+                  where("docenteId", "==", docenteId),
+                  where("anioLectivoId", "==", anioLectivoId),
+                  where("fecha", "==", fecha),
+                ),
+              ),
           ),
           getPPECached(`ppe:${docenteId}:${anioLectivoId}:calificaciones`, () =>
-            getDocs(query(
-              collection(db, "ppeCalificaciones"),
-              where("docenteId", "==", docenteId),
-              where("anioLectivoId", "==", anioLectivoId),
-            )),
+            getDocs(
+              query(
+                collection(db, "ppeCalificaciones"),
+                where("docenteId", "==", docenteId),
+                where("anioLectivoId", "==", anioLectivoId),
+              ),
+            ),
           ),
         ]);
 
@@ -348,10 +480,11 @@ export default function PPE() {
       } catch (e) {
         if (!cancelled) {
           console.error("Error cargando registros PPE:", e);
-          setMensaje({
-            tipo: "error",
-            texto: "No se pudieron cargar asistencia y notas.",
-          });
+          mostrarToast(
+            "error",
+            "Error de carga",
+            "No se pudieron cargar asistencia y notas.",
+          );
         }
       }
     };
@@ -360,12 +493,11 @@ export default function PPE() {
     return () => {
       cancelled = true;
     };
-  }, [docenteId, anioLectivoId, estudianteIds, fecha, actividadSeleccionada]);
+  }, [docenteId, anioLectivoId, estudianteIds, fecha, actividadSeleccionada, mostrarToast]);
 
   const guardarSeleccion = async () => {
     if (!docenteId || !anioLectivoId) return;
     setSaving(true);
-    setMensaje(null);
     try {
       await setDoc(
         doc(db, "ppeConfiguraciones", configId),
@@ -381,16 +513,18 @@ export default function PPE() {
       invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:configuracion`);
       setEstudianteIds(seleccionTemporal);
       setShowSelector(false);
-      setMensaje({
-        tipo: "ok",
-        texto: `Se guardó la selección de ${seleccionTemporal.length} estudiante(s).`,
-      });
+      mostrarToast(
+        "success",
+        "Selección guardada",
+        `Se guardó la selección de ${seleccionTemporal.length} estudiante(s).`,
+      );
     } catch (e) {
       console.error("Error guardando selección PPE:", e);
-      setMensaje({
-        tipo: "error",
-        texto: "No se pudo guardar la lista de estudiantes.",
-      });
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo guardar la lista de estudiantes.",
+      );
     } finally {
       setSaving(false);
     }
@@ -399,20 +533,18 @@ export default function PPE() {
   const guardarAsistencias = async () => {
     if (!docenteId || !anioLectivoId || estudiantesPPE.length === 0) return;
     setSaving(true);
-    setMensaje(null);
     try {
       const pendientes = estudiantesPPE.filter((e) =>
         Boolean(asistencias[e.id]),
       );
       if (pendientes.length === 0) {
-        setMensaje({
-          tipo: "error",
-          texto:
-            "Marca la asistencia de al menos un estudiante antes de guardar.",
-        });
+        mostrarToast(
+          "warning",
+          "Sin registros",
+          "Marca la asistencia de al menos un estudiante antes de guardar.",
+        );
         return;
       }
-      // Firestore limita cada batch a 500 operaciones; guardamos en bloques seguros.
       for (let inicio = 0; inicio < pendientes.length; inicio += 450) {
         const batch = writeBatch(db);
         pendientes.slice(inicio, inicio + 450).forEach((e) => {
@@ -436,14 +568,19 @@ export default function PPE() {
         await batch.commit();
       }
       invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:`);
-      setMensaje({
-        tipo: "ok",
-        texto: `Asistencia guardada para ${pendientes.length} estudiante(s).`,
-      });
+      mostrarToast(
+        "success",
+        "Asistencia guardada",
+        `Asistencia guardada para ${pendientes.length} estudiante(s).`,
+      );
       await cargarReporte();
     } catch (e) {
       console.error("Error guardando asistencia PPE:", e);
-      setMensaje({ tipo: "error", texto: "No se pudo guardar la asistencia." });
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo guardar la asistencia.",
+      );
     } finally {
       setSaving(false);
     }
@@ -451,14 +588,14 @@ export default function PPE() {
 
   const crearActividad = async () => {
     if (!docenteId || !anioLectivoId || !tituloActividad.trim()) {
-      setMensaje({
-        tipo: "error",
-        texto: "Escribe el nombre de la actividad.",
-      });
+      mostrarToast(
+        "warning",
+        "Nombre requerido",
+        "Escribe el nombre de la actividad.",
+      );
       return;
     }
     setSaving(true);
-    setMensaje(null);
     try {
       const ref = await addDoc(collection(db, "ppeActividades"), {
         titulo: tituloActividad.trim(),
@@ -480,13 +617,18 @@ export default function PPE() {
       setActividadSeleccionada(ref.id);
       setTituloActividad("");
       setDescripcionActividad("");
-      setMensaje({
-        tipo: "ok",
-        texto: "Actividad creada. Ya puedes registrar las notas.",
-      });
+      mostrarToast(
+        "success",
+        "Actividad creada",
+        "Ya puedes registrar las notas.",
+      );
     } catch (e) {
       console.error("Error creando actividad PPE:", e);
-      setMensaje({ tipo: "error", texto: "No se pudo crear la actividad." });
+      mostrarToast(
+        "error",
+        "Error al crear",
+        "No se pudo crear la actividad.",
+      );
     } finally {
       setSaving(false);
     }
@@ -494,14 +636,14 @@ export default function PPE() {
 
   const guardarNotas = async () => {
     if (!docenteId || !anioLectivoId || !actividadSeleccionada) {
-      setMensaje({
-        tipo: "error",
-        texto: "Selecciona una actividad antes de guardar las notas.",
-      });
+      mostrarToast(
+        "warning",
+        "Actividad requerida",
+        "Selecciona una actividad antes de guardar las notas.",
+      );
       return;
     }
     setSaving(true);
-    setMensaje(null);
     try {
       const batch = writeBatch(db);
       let cantidad = 0;
@@ -528,19 +670,28 @@ export default function PPE() {
         cantidad += 1;
       });
       if (cantidad === 0) {
-        setMensaje({
-          tipo: "error",
-          texto: "Ingresa al menos una nota válida entre 0 y 10.",
-        });
+        mostrarToast(
+          "warning",
+          "Sin notas",
+          "Ingresa al menos una nota válida entre 0 y 10.",
+        );
         return;
       }
       await batch.commit();
       invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:`);
-      setMensaje({ tipo: "ok", texto: `Se guardaron ${cantidad} nota(s).` });
+      mostrarToast(
+        "success",
+        "Notas guardadas",
+        `Se guardaron ${cantidad} nota(s).`,
+      );
       await cargarReporte();
     } catch (e) {
       console.error("Error guardando notas PPE:", e);
-      setMensaje({ tipo: "error", texto: "No se pudieron guardar las notas." });
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudieron guardar las notas.",
+      );
     } finally {
       setSaving(false);
     }
@@ -550,19 +701,27 @@ export default function PPE() {
     if (!docenteId || !anioLectivoId) return;
     try {
       const [asisSnap, notasSnap] = await Promise.all([
-        getPPECached(`ppe:${docenteId}:${anioLectivoId}:reporte-asistencias`, () =>
-          getDocs(query(
-            collection(db, "ppeAsistencias"),
-            where("docenteId", "==", docenteId),
-            where("anioLectivoId", "==", anioLectivoId),
-          )),
+        getPPECached(
+          `ppe:${docenteId}:${anioLectivoId}:reporte-asistencias`,
+          () =>
+            getDocs(
+              query(
+                collection(db, "ppeAsistencias"),
+                where("docenteId", "==", docenteId),
+                where("anioLectivoId", "==", anioLectivoId),
+              ),
+            ),
         ),
-        getPPECached(`ppe:${docenteId}:${anioLectivoId}:reporte-calificaciones`, () =>
-          getDocs(query(
-            collection(db, "ppeCalificaciones"),
-            where("docenteId", "==", docenteId),
-            where("anioLectivoId", "==", anioLectivoId),
-          )),
+        getPPECached(
+          `ppe:${docenteId}:${anioLectivoId}:reporte-calificaciones`,
+          () =>
+            getDocs(
+              query(
+                collection(db, "ppeCalificaciones"),
+                where("docenteId", "==", docenteId),
+                where("anioLectivoId", "==", anioLectivoId),
+              ),
+            ),
         ),
       ]);
       setReporteAsistencias(
@@ -573,17 +732,18 @@ export default function PPE() {
       );
     } catch (e) {
       console.error("Error cargando reporte PPE:", e);
-      setMensaje({ tipo: "error", texto: "No se pudo cargar el reporte." });
+      mostrarToast(
+        "error",
+        "Error de carga",
+        "No se pudo cargar el reporte.",
+      );
     }
-  }, [docenteId, anioLectivoId]);
+  }, [docenteId, anioLectivoId, mostrarToast]);
 
   useEffect(() => {
     if (vista === "reporte") void cargarReporte();
   }, [vista, cargarReporte]);
 
-  // Derivar el periodo seleccionado y el rango de fechas evita efectos que actualicen
-  // estado sincronamente. Si todavía no se ha elegido un periodo, se usa el primero
-  // disponible como valor visual inicial sin modificar estado durante el render.
   const periodoReporteEfectivo = periodos.some((p) => p.id === periodoReporteId)
     ? periodoReporteId
     : (periodos[0]?.id ?? "");
@@ -630,7 +790,6 @@ export default function PPE() {
   const fechaInicioReporte = rangoFechasReporte.inicio;
   const fechaFinReporte = rangoFechasReporte.fin;
 
-  // PPE almacena la fecha de cada registro, no un periodoId; se filtra por fechas reales.
   const rangoReporteValido = Boolean(
     fechaInicioReporte &&
     fechaFinReporte &&
@@ -740,10 +899,11 @@ export default function PPE() {
 
   const exportarReporteExcel = () => {
     if (!rangoReporteValido) {
-      setMensaje({
-        tipo: "error",
-        texto: "Selecciona fechas válidas de inicio y fin para el trimestre.",
-      });
+      mostrarToast(
+        "error",
+        "Rango no válido",
+        "Selecciona fechas válidas de inicio y fin para el trimestre.",
+      );
       return;
     }
 
@@ -840,10 +1000,43 @@ export default function PPE() {
       wb,
       `PPE_${tipoPeriodoReporte}_${safe(fechaInicioReporte)}_${safe(fechaFinReporte)}.xlsx`,
     );
-    setMensaje({
-      tipo: "ok",
-      texto: "Reporte exportado a Excel con resumen, asistencias y notas.",
-    });
+    mostrarToast(
+      "success",
+      "Reporte exportado",
+      "Reporte exportado a Excel con resumen, asistencias y notas.",
+    );
+  };
+
+  // CONFIGURACIÓN VISUAL DE LOS TOASTS
+  const toastConfig = {
+    success: {
+      bg: "border-l-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
+      icon: FaCheckCircle,
+    },
+    error: {
+      bg: "border-l-red-400",
+      iconBg: "bg-[#C93F45]",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
+      icon: FaTimesCircle,
+    },
+    warning: {
+      bg: "border-l-amber-400",
+      iconBg: "bg-amber-500",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
+      icon: FaExclamationTriangle,
+    },
+    info: {
+      bg: "border-l-[#244563]",
+      iconBg: "bg-[#244563]",
+      titleColor: "text-[#273444]",
+      msgColor: "text-[#64748B]",
+      icon: FaInfoCircle,
+    },
   };
 
   if (!ready || loading) {
@@ -861,380 +1054,442 @@ export default function PPE() {
   return (
     <Layout>
       <div className="space-y-3">
-        <header className="flex flex-col gap-3 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3 shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#244563]">
-              Gestión docente
-            </p>
-            <h1 className="text-base font-semibold tracking-tight text-[#244563]">
-              Programa de Participación Estudiantil (PPE)
-            </h1>
-            <p className="mt-1 text-[11px] text-[#6B7280]">
-              Selecciona participantes, registra asistencia y evalúa actividades
-              de forma sencilla.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              onClick={() => setVista("principal")}
-              className={`min-h-8 rounded-md px-2.5  text-[11px] font-semibold ${vista === "principal" ? "bg-[#244563] text-white" : "border bg-[#FFFFFF] text-[#4B5563]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
-            >
-              Gestión PPE
-            </button>
-            <button
-              onClick={() => setVista("reporte")}
-              className={`min-h-8 rounded-md px-2.5  text-[11px] font-semibold ${vista === "reporte" ? "bg-[#244563] text-white" : "border bg-[#FFFFFF] text-[#4B5563]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
-            >
-              Reporte asistencias y notas
-            </button>
-          </div>
-        </header>
-
-        {mensaje && (
-          <div
-            className={`flex items-start justify-between rounded-lg border px-2.5 py-3 text-[11px] ${mensaje.tipo === "ok" ? "border-[#C8D6E5] bg-[#EAF0F6] text-[#1B354D]" : "border-rose-200 bg-rose-50 text-rose-800"}`}
-            role="status"
-          >
-            <span>{mensaje.texto}</span>
-            <button onClick={() => setMensaje(null)} aria-label="Cerrar aviso">
-              <FaTimes />
-            </button>
-          </div>
-        )}
-
         {vista === "principal" ? (
           <>
-            <div className="grid gap-3 md:grid-cols-2">
+            {/* ============ 3 TARJETAS EN UNA SOLA FILA ============ */}
+            <div className="grid gap-3 md:grid-cols-3">
+              {/* Card 1: Asistencia y actividades */}
+              <button
+                onClick={() =>
+                  setSeccionActiva((prev) =>
+                    prev === "asistencia" ? "ninguna" : "asistencia",
+                  )
+                }
+                className={`group relative overflow-hidden rounded-lg border p-3 text-left shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C96522]/50 ${
+                  seccionActiva === "asistencia"
+                    ? "border-[#C96522] bg-[#FFF7ED] ring-1 ring-[#C96522]/30"
+                    : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/50"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg ${seccionActiva === "asistencia" ? "bg-[#FED7AA] text-[#9A4518]" : "bg-sky-100 text-sky-700"}`}
+                  >
+                    <FaClipboardCheck className="text-sm" />
+                  </span>
+                  <span className="text-[10px] text-[#6B7280] transition-transform group-hover:translate-x-1">
+                    {seccionActiva === "asistencia" ? "Cerrar" : "Abrir →"}
+                  </span>
+                </div>
+                <h2 className="mt-2 text-xs font-semibold text-[#273444]">
+                  Asistencia y actividades
+                </h2>
+                <p className="mt-0.5 text-[10px] text-[#6B7280] line-clamp-2">
+                  Registra asistencia y evalúa actividades.
+                </p>
+              </button>
+
+              {/* Card 2: Reporte de asistencias y notas */}
+              <button
+                onClick={() => setVista("reporte")}
+                className="group relative overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#C96522]/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C96522]/50"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+                    <FaChartBar className="text-sm" />
+                  </span>
+                  <span className="text-[10px] text-[#6B7280] transition-transform group-hover:translate-x-1">
+                    Ver →
+                  </span>
+                </div>
+                <h2 className="mt-2 text-xs font-semibold text-[#273444]">
+                  Reporte de asistencias y notas
+                </h2>
+                <p className="mt-0.5 text-[10px] text-[#6B7280] line-clamp-2">
+                  Consulta asistencias y promedios.
+                </p>
+              </button>
+
+              {/* Card 3: Seleccionar estudiantes */}
               <button
                 onClick={() => {
                   setSeleccionTemporal(estudianteIds);
                   setShowSelector(true);
                 }}
-                className="group rounded-md border border-[#D8DEE6] bg-[#FFFFFF] p-3 text-left shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] transition  hover:shadow-[0_6px_18px_-12px_rgba(15,23,42,0.24)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                className="group relative overflow-hidden rounded-lg border border-[#244563] bg-[#244563] p-3 text-left text-white shadow-sm transition-all hover:bg-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C96522]/50"
               >
-                <span className="mb-2 flex h-8 w-8 items-center justify-center rounded-lg bg-[#E2EAF3] text-[#244563]">
-                  <FaUsers />
-                </span>
-                <h2 className="text-sm font-semibold text-[#273444]">
+                <div className="flex items-center justify-between">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/15 backdrop-blur">
+                    <FaUsers className="text-sm text-white" />
+                  </span>
+                  <span className="rounded-full bg-[#FDBA74] px-2 py-0.5 text-[10px] font-bold text-[#7C2D12]">
+                    {estudiantesPPE.length} activos
+                  </span>
+                </div>
+                <h2 className="mt-2 text-xs font-semibold">
                   Seleccionar estudiantes
                 </h2>
-                <p className="mt-1 text-[11px] text-[#6B7280]">
-                  Elige un curso completo o estudiantes de distintos cursos
-                  dentro de tus grados asignados.
-                </p>
-                <p className="mt-3 text-[11px] font-semibold text-[#244563]">
-                  {estudiantesPPE.length} estudiante(s) seleccionados · Editar
-                  selección →
-                </p>
-              </button>
-              <button
-                onClick={() => {
-                  setVista("principal");
-                  setSeccion("asistencia");
-                }}
-                className="group rounded-md border border-[#D8DEE6] bg-[#FFFFFF] p-3 text-left shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] transition hover:-translate-y-0.5 hover:shadow-[0_6px_18px_-12px_rgba(15,23,42,0.24)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-              >
-                <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-sky-100 text-sky-700">
-                  <FaClipboardCheck />
-                </span>
-                <h2 className="text-sm font-semibold text-[#273444]">
-                  Asistencia y actividades
-                </h2>
-                <p className="mt-1 text-[11px] text-[#6B7280]">
-                  Registra la asistencia de la sesión y asigna actividades con
-                  calificación sobre 10.
-                </p>
-                <p className="mt-3 text-[11px] font-semibold text-sky-700">
-                  Abrir registro →
-                </p>
-              </button>
-              <button
-                onClick={() => setVista("reporte")}
-                className="group rounded-md border border-[#D8DEE6] bg-[#FFFFFF] p-3 text-left shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] transition hover:-translate-y-0.5 hover:shadow-[0_6px_18px_-12px_rgba(15,23,42,0.24)] md:col-span-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-              >
-                <span className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
-                  <FaChartBar />
-                </span>
-                <h2 className="text-sm font-semibold text-[#273444]">
-                  Reporte de asistencias y notas
-                </h2>
-                <p className="mt-1 text-[11px] text-[#6B7280]">
-                  Consulta asistencias, ausencias, notas registradas y promedio
-                  de cada participante.
-                </p>
-                <p className="mt-3 text-[11px] font-semibold text-violet-700">
-                  Ver reporte →
+                <p className="mt-0.5 text-[10px] text-white/80 line-clamp-2">
+                  Curso completo o estudiantes individuales.
                 </p>
               </button>
             </div>
 
-            <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)]">
-              <div className="flex flex-col gap-3 border-b border-[#ECEFF3] p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="font-semibold text-[#273444]">Registro PPE</h2>
-                  <p className="text-[11px] text-[#6B7280]">
-                    Solo aparecen los estudiantes que guardaste en tu selección.
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={() => setSeccion("asistencia")}
-                    className={`min-h-8 rounded-md px-3  text-[11px] font-semibold ${seccion === "asistencia" ? "bg-[#244563] text-white" : "border text-[#64748B]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
-                  >
-                    Asistencia
-                  </button>
-                  <button
-                    onClick={() => setSeccion("actividades")}
-                    className={`min-h-8 rounded-md px-3  text-[11px] font-semibold ${seccion === "actividades" ? "bg-[#273444] text-white" : "border text-[#64748B]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
-                  >
-                    Actividades y notas
-                  </button>
-                </div>
-              </div>
-              {estudiantesPPE.length === 0 ? (
-                <div className="p-8 text-center">
-                  <FaUsers className="mx-auto mb-3 text-xl text-[#BFC9D4]" />
-                  <p className="font-semibold text-[#4B5563]">
-                    Aún no has seleccionado estudiantes
-                  </p>
-                  <p className="mt-1 text-[11px] text-[#6B7280]">
-                    Abre “Seleccionar estudiantes” para crear tu lista PPE.
-                  </p>
-                  <button
-                    onClick={() => {
-                      setSeleccionTemporal(estudianteIds);
-                      setShowSelector(true);
-                    }}
-                    className="min-h-8 mt-4 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                  >
-                    Seleccionar estudiantes
-                  </button>
-                </div>
-              ) : seccion === "asistencia" ? (
-                <>
-                  <div className="flex flex-wrap items-end gap-3 p-3">
-                    <label className="text-[11px] font-medium text-[#4B5563]">
-                      Fecha de sesión
-                      <input
-                        type="date"
-                        value={fecha}
-                        onChange={(e) => setFecha(e.target.value)}
-                        className="h-8 mt-1 block rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                      />
-                    </label>
+            {/* ============ TABLA (SOLO SE MUESTRA SI HAY SECCIÓN ACTIVA) ============ */}
+            {seccionActiva !== "ninguna" && (
+              <section className="mt-3 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)]">
+                <div className="flex flex-col gap-3 border-b border-[#ECEFF3] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#EAF0F6] text-[#244563]">
+                      <FaClipboardCheck className="text-base" />
+                    </span>
+                    <div>
+                      <h2 className="text-sm font-semibold text-[#273444]">
+                        {seccionActiva === "asistencia"
+                          ? "Registro de Asistencia"
+                          : "Registro de Actividades y Notas"}
+                      </h2>
+                      <p className="text-[10px] text-[#6B7280]">
+                        {estudiantesPPE.length} estudiante
+                        {estudiantesPPE.length !== 1 ? "s" : ""} en tu lista.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="inline-flex rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-0.5">
                     <button
-                      type="button"
+                      onClick={() => setSeccionActiva("asistencia")}
+                      className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${seccionActiva === "asistencia" ? "bg-[#244563] text-white shadow-sm" : "text-[#4B5563] hover:text-[#273444]"}`}
+                    >
+                      Asistencia
+                    </button>
+                    <button
+                      onClick={() => setSeccionActiva("actividades")}
+                      className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${seccionActiva === "actividades" ? "bg-[#273444] text-white shadow-sm" : "text-[#4B5563] hover:text-[#273444]"}`}
+                    >
+                      Actividades y notas
+                    </button>
+                  </div>
+                </div>
+
+                {estudiantesPPE.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center p-12 text-center">
+                    <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-[#EAF0F6]">
+                      <FaUsers className="text-2xl text-[#244563]" />
+                    </div>
+                    <h3 className="text-sm font-semibold text-[#273444]">
+                      Aún no tienes estudiantes en tu lista PPE
+                    </h3>
+                    <p className="mt-1 max-w-sm text-[11px] text-[#6B7280]">
+                      Selecciona un curso completo o estudiantes individuales
+                      para empezar a registrar asistencia y notas.
+                    </p>
+                    <button
                       onClick={() => {
-                        setAsistencias(
-                          Object.fromEntries(
-                            estudiantesPPE.map((e) => [
-                              e.id,
-                              "presente" as EstadoPPE,
-                            ]),
-                          ),
-                        );
-                        setMensaje({
-                          tipo: "ok",
-                          texto: `Se marcó como presente a ${estudiantesPPE.length} estudiante(s). Recuerda guardar la asistencia.`,
-                        });
+                        setSeleccionTemporal(estudianteIds);
+                        setShowSelector(true);
                       }}
-                      disabled={saving || estudiantesPPE.length === 0}
-                      className="min-h-8 inline-flex items-center gap-2 rounded-md border border-[#A8BDD2] bg-[#EAF0F6] px-2.5  text-[11px] font-semibold text-[#1B354D] hover:bg-[#E2EAF3] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                      className="mt-5 inline-flex items-center gap-2 rounded-md bg-[#244563] px-4 py-2 text-[11px] font-semibold text-white shadow-sm transition-colors hover:bg-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C96522]/50"
                     >
-                      <FaCheckCircle /> Todos presentes
-                    </button>
-                    <button
-                      onClick={guardarAsistencias}
-                      disabled={saving || !Object.keys(asistencias).length}
-                      className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                    >
-                      <FaSave /> Guardar asistencia
+                      <FaPlus className="text-[10px]" />
+                      Seleccionar estudiantes
                     </button>
                   </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-160 text-[11px] border-collapse">
-                      <thead className="bg-[#ECEFF3] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
-                        <tr>
-                          <th className="px-2.5 py-1.5">Estudiante</th>
-                          <th className="px-2.5 py-1.5">Grado</th>
-                          <th className="px-2.5 py-1.5">
-                            Estado de asistencia
-                          </th>
-                          <th className="px-2.5 py-1.5">Observación</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {estudiantesPPE.map((e) => (
-                          <tr key={e.id} className="hover:bg-[#ECEFF3]">
-                            <td className="px-2.5 py-1.5 font-medium text-[#374151]">
-                              {nombreCompleto(e)}
-                            </td>
-                            <td className="px-2.5 py-1.5 text-[#6B7280]">
-                              {gradoNombre(e.gradoId)}
-                            </td>
-                            <td className="px-2.5 py-1.5">
-                              <select
-                                value={asistencias[e.id] ?? ""}
-                                onChange={(ev) =>
-                                  setAsistencias((p) => ({
-                                    ...p,
-                                    [e.id]: ev.target.value as EstadoPPE,
-                                  }))
-                                }
-                                className="h-8 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                              >
-                                <option value="">Seleccionar…</option>
-                                <option value="presente">Presente</option>
-                                <option value="ausente">Ausente</option>
-                                <option value="justificado">Justificado</option>
-                                <option value="atraso">Atraso</option>
-                              </select>
-                            </td>
-                            <td className="px-2.5 py-1.5">
-                              <input
-                                value={observacionesAsistencia[e.id] ?? ""}
-                                onChange={(ev) =>
-                                  setObservacionesAsistencia((p) => ({
-                                    ...p,
-                                    [e.id]: ev.target.value,
-                                  }))
-                                }
-                                placeholder="Opcional"
-                                className="h-8 w-full min-w-36 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="grid gap-3 border-b border-[#ECEFF3] p-3 md:grid-cols-4">
-                    <label className="text-[11px] font-medium text-[#4B5563] md:col-span-2">
-                      Nombre de actividad
-                      <input
-                        value={tituloActividad}
-                        onChange={(e) => setTituloActividad(e.target.value)}
-                        placeholder="Ej. Proyecto comunitario"
-                        className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                      />
-                    </label>
-                    <label className="text-[11px] font-medium text-[#4B5563]">
-                      Fecha
-                      <input
-                        type="date"
-                        value={fechaActividad}
-                        onChange={(e) => setFechaActividad(e.target.value)}
-                        className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                      />
-                    </label>
-                    <div className="flex items-end">
+                ) : seccionActiva === "asistencia" ? (
+                  <>
+                    <div className="flex flex-wrap items-end gap-3 p-3 border-b border-[#ECEFF3]">
+                      <label className="text-[11px] font-medium text-[#4B5563]">
+                        Fecha de sesión
+                        <input
+                          type="date"
+                          value={fecha}
+                          onChange={(e) => setFecha(e.target.value)}
+                          className="h-8 mt-1 block rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                        />
+                      </label>
                       <button
-                        onClick={crearActividad}
-                        disabled={saving || !tituloActividad.trim()}
+                        type="button"
+                        onClick={() => {
+                          setAsistencias(
+                            Object.fromEntries(
+                              estudiantesPPE.map((e) => [
+                                e.id,
+                                "presente" as EstadoPPE,
+                              ]),
+                            ),
+                          );
+                          mostrarToast(
+                            "success",
+                            "Todos presentes",
+                            `Se marcó como presente a ${estudiantesPPE.length} estudiante(s). Recuerda guardar la asistencia.`,
+                          );
+                        }}
+                        disabled={saving || estudiantesPPE.length === 0}
+                        className="min-h-8 inline-flex items-center gap-2 rounded-md border border-[#A8BDD2] bg-[#EAF0F6] px-2.5  text-[11px] font-semibold text-[#1B354D] hover:bg-[#E2EAF3] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                      >
+                        <FaCheckCircle /> Todos presentes
+                      </button>
+                      <button
+                        onClick={guardarAsistencias}
+                        disabled={saving || !Object.keys(asistencias).length}
                         className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                       >
-                        <FaPlus /> Crear actividad
+                        <FaSave /> Guardar asistencia
                       </button>
+
+                      {/* NUEVO TOGGLE DE VISTA */}
+                      <div className="ml-auto inline-flex rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-0.5">
+                        <button
+                          onClick={() => setVistaLista("grados")}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "grados" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                        >
+                          Por Grados
+                        </button>
+                        <button
+                          onClick={() => setVistaLista("alfabetico")}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "alfabetico" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                        >
+                          Alfabético
+                        </button>
+                      </div>
                     </div>
-                    <label className="text-[11px] font-medium text-[#4B5563] md:col-span-4">
-                      Descripción (opcional)
-                      <input
-                        value={descripcionActividad}
-                        onChange={(e) =>
-                          setDescripcionActividad(e.target.value)
-                        }
-                        placeholder="Detalle breve"
-                        className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                      />
-                    </label>
-                  </div>
-                  <div className="flex flex-wrap items-end gap-3 p-3">
-                    <label className="text-[11px] font-medium text-[#4B5563]">
-                      Actividad
-                      <select
-                        value={actividadSeleccionada}
-                        onChange={(e) =>
-                          setActividadSeleccionada(e.target.value)
-                        }
-                        className="h-8 mt-1 block min-w-64 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                      >
-                        <option value="">Seleccionar actividad…</option>
-                        {actividades.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.fecha} · {a.titulo}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      onClick={guardarNotas}
-                      disabled={saving || !actividadSeleccionada}
-                      className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                    >
-                      <FaSave /> Guardar notas
-                    </button>
-                    <p className="text-[10px] text-[#6B7280]">
-                      Calificación de 0 a 10. Deja vacío si no corresponde.
-                    </p>
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-130 text-[11px] border-collapse">
-                      <thead className="bg-[#ECEFF3] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
-                        <tr>
-                          <th className="px-2.5 py-1.5">Estudiante</th>
-                          <th className="px-2.5 py-1.5">Grado</th>
-                          <th className="px-2.5 py-1.5">Nota / 10</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {estudiantesPPE.map((e) => (
-                          <tr key={e.id}>
-                            <td className="px-2.5 py-1.5 font-medium">
-                              {nombreCompleto(e)}
-                            </td>
-                            <td className="px-2.5 py-1.5 text-[#6B7280]">
-                              {gradoNombre(e.gradoId)}
-                            </td>
-                            <td className="px-2.5 py-1.5">
-                              <input
-                                type="number"
-                                min="0"
-                                max="10"
-                                step="0.01"
-                                value={notas[e.id] ?? ""}
-                                onChange={(ev) =>
-                                  setNotas((p) => ({
-                                    ...p,
-                                    [e.id]: ev.target.value,
-                                  }))
-                                }
-                                className="h-8 w-28 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                                placeholder="0–10"
-                              />
-                            </td>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-160 text-[11px] border-collapse">
+                        <thead className="bg-[#ECEFF3] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
+                          <tr>
+                            <th className="px-2.5 py-1.5">Estudiante</th>
+                            <th className="px-2.5 py-1.5">Grado</th>
+                            <th className="px-2.5 py-1.5">
+                              Estado de asistencia
+                            </th>
+                            <th className="px-2.5 py-1.5">Observación</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-            </section>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {listaEstudiantesRender.map((e) => (
+                            <Fragment key={e.id}>
+                              {/* CABECERA DE GRADO (solo si está agrupado) */}
+                              {e.mostrarCabecera && vistaLista === "grados" && (
+                                <tr className="bg-[#F8FAFC]">
+                                  <td
+                                    colSpan={4}
+                                    className="px-2.5 py-2 font-bold text-[#244563] uppercase tracking-wider text-[10px]"
+                                  >
+                                    {e.nombreGrado}
+                                  </td>
+                                </tr>
+                              )}
+                              <tr className="hover:bg-[#ECEFF3]">
+                                <td className="px-2.5 py-1.5 font-medium text-[#374151]">
+                                  {nombreCompleto(e)}
+                                </td>
+                                <td className="px-2.5 py-1.5 text-[#6B7280]">
+                                  {gradoNombre(e.gradoId)}
+                                </td>
+                                <td className="px-2.5 py-1.5">
+                                  <select
+                                    value={asistencias[e.id] ?? ""}
+                                    onChange={(ev) =>
+                                      setAsistencias((p) => ({
+                                        ...p,
+                                        [e.id]: ev.target.value as EstadoPPE,
+                                      }))
+                                    }
+                                    className="h-8 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                                  >
+                                    <option value="">Seleccionar…</option>
+                                    <option value="presente">Presente</option>
+                                    <option value="ausente">Ausente</option>
+                                    <option value="justificado">
+                                      Justificado
+                                    </option>
+                                    <option value="atraso">Atraso</option>
+                                  </select>
+                                </td>
+                                <td className="px-2.5 py-1.5">
+                                  <input
+                                    value={observacionesAsistencia[e.id] ?? ""}
+                                    onChange={(ev) =>
+                                      setObservacionesAsistencia((p) => ({
+                                        ...p,
+                                        [e.id]: ev.target.value,
+                                      }))
+                                    }
+                                    placeholder="Opcional"
+                                    className="h-8 w-full min-w-36 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                                  />
+                                </td>
+                              </tr>
+                            </Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="grid gap-3 border-b border-[#ECEFF3] p-3 md:grid-cols-4">
+                      <label className="text-[11px] font-medium text-[#4B5563] md:col-span-2">
+                        Nombre de actividad
+                        <input
+                          value={tituloActividad}
+                          onChange={(e) => setTituloActividad(e.target.value)}
+                          placeholder="Ej. Proyecto comunitario"
+                          className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                        />
+                      </label>
+                      <label className="text-[11px] font-medium text-[#4B5563]">
+                        Fecha
+                        <input
+                          type="date"
+                          value={fechaActividad}
+                          onChange={(e) => setFechaActividad(e.target.value)}
+                          className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                        />
+                      </label>
+                      <div className="flex items-end">
+                        <button
+                          onClick={crearActividad}
+                          disabled={saving || !tituloActividad.trim()}
+                          className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                        >
+                          <FaPlus /> Crear actividad
+                        </button>
+                      </div>
+                      <label className="text-[11px] font-medium text-[#4B5563] md:col-span-4">
+                        Descripción (opcional)
+                        <input
+                          value={descripcionActividad}
+                          onChange={(e) =>
+                            setDescripcionActividad(e.target.value)
+                          }
+                          placeholder="Detalle breve"
+                          className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                        />
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap items-end gap-3 p-3">
+                      <label className="text-[11px] font-medium text-[#4B5563]">
+                        Actividad
+                        <select
+                          value={actividadSeleccionada}
+                          onChange={(e) =>
+                            setActividadSeleccionada(e.target.value)
+                          }
+                          className="h-8 mt-1 block min-w-64 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                        >
+                          <option value="">Seleccionar actividad…</option>
+                          {actividades.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {a.fecha} · {a.titulo}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        onClick={guardarNotas}
+                        disabled={saving || !actividadSeleccionada}
+                        className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                      >
+                        <FaSave /> Guardar notas
+                      </button>
+                      <p className="text-[10px] text-[#6B7280]">
+                        Calificación de 0 a 10. Deja vacío si no corresponde.
+                      </p>
+
+                      {/* NUEVO TOGGLE DE VISTA (ACTIVIDADES) */}
+                      <div className="ml-auto inline-flex rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-0.5">
+                        <button
+                          onClick={() => setVistaLista("grados")}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "grados" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                        >
+                          Por Grados
+                        </button>
+                        <button
+                          onClick={() => setVistaLista("alfabetico")}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "alfabetico" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                        >
+                          Alfabético
+                        </button>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-130 text-[11px] border-collapse">
+                        <thead className="bg-[#ECEFF3] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
+                          <tr>
+                            <th className="px-2.5 py-1.5">Estudiante</th>
+                            <th className="px-2.5 py-1.5">Grado</th>
+                            <th className="px-2.5 py-1.5">Nota / 10</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {listaEstudiantesRender.map((e) => (
+                            <Fragment key={e.id}>
+                              {/* CABECERA DE GRADO (solo si está agrupado) */}
+                              {e.mostrarCabecera && vistaLista === "grados" && (
+                                <tr className="bg-[#F8FAFC]">
+                                  <td
+                                    colSpan={3}
+                                    className="px-2.5 py-2 font-bold text-[#244563] uppercase tracking-wider text-[10px]"
+                                  >
+                                    {e.nombreGrado}
+                                  </td>
+                                </tr>
+                              )}
+                              <tr>
+                                <td className="px-2.5 py-1.5 font-medium">
+                                  {nombreCompleto(e)}
+                                </td>
+                                <td className="px-2.5 py-1.5 text-[#6B7280]">
+                                  {gradoNombre(e.gradoId)}
+                                </td>
+                                <td className="px-2.5 py-1.5">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="10"
+                                    step="0.01"
+                                    value={notas[e.id] ?? ""}
+                                    onChange={(ev) =>
+                                      setNotas((p) => ({
+                                        ...p,
+                                        [e.id]: ev.target.value,
+                                      }))
+                                    }
+                                    className="h-8 w-28 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                                    placeholder="0–10"
+                                  />
+                                </td>
+                              </tr>
+                            </Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </section>
+            )}
           </>
         ) : (
           <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)]">
             <div className="flex flex-col gap-3 border-b border-[#ECEFF3] p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="font-semibold text-[#273444]">
-                  Reporte de asistencias y notas
-                </h2>
-                <p className="text-[11px] text-[#6B7280]">
-                  Cuenta asistencias, actividades calificadas y promedio dentro
-                  del rango semanal, mensual o trimestral seleccionado.
-                </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setVista("principal")}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#273444]"
+                  title="Volver al panel principal"
+                >
+                  <FaArrowLeft className="text-sm" />
+                </button>
+                <div>
+                  <h2 className="font-semibold text-[#273444]">
+                    Reporte de asistencias y notas
+                  </h2>
+                  <p className="text-[11px] text-[#6B7280]">
+                    Cuenta asistencias, actividades calificadas y promedio dentro
+                    del rango semanal, mensual o trimestral seleccionado.
+                  </p>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -1913,6 +2168,43 @@ export default function PPE() {
           </div>
         </div>
       )}
+
+      {/* SISTEMA DE TOASTS FLOTANTES */}
+      <div className="pointer-events-none fixed right-3 top-3 z-100 w-full max-w-xs space-y-2">
+        {toasts.map((toast) => {
+          const config = toastConfig[toast.type];
+          const Icon = config.icon;
+          return (
+            <div
+              key={toast.id}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}
+            >
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}
+              >
+                <Icon className="text-[10px]" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold text-[#273444]">
+                  {toast.title}
+                </p>
+                {toast.message && (
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">
+                    {toast.message}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => cerrarToast(toast.id)}
+                className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]"
+                title="Cerrar"
+              >
+                <FaTimes className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </Layout>
   );
 }

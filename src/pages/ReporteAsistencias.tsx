@@ -14,11 +14,16 @@ import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { Estudiante, Ambito, Destreza } from "../types";
 import Layout from "../components/Layout";
-import { claveAccesoEstudiantes } from "../utils/estudiantesCache";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  asegurarEstudiantesCache,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+} from "../utils/estudiantesCache";
 import { useHorarioPanel } from "../utils/panelCache";
 import {
   cargarCacheReporteAsistencias,
-  cargarNominaReporteAsistencias,
   claveCacheReporteAsistencias,
   configurarContextoReporteAsistencias,
   invalidarCacheReporteAsistencias,
@@ -425,71 +430,63 @@ export default function ReporteAsistencias() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  useEffect(() => {
-    if (!ready) return;
-    const gradosPermitidos = [
+  // ============================================================
+  // FASE 3: LECTURA DE ESTUDIANTES DESDE CACHÉ COMPARTIDA
+  // ============================================================
+  const gradosPermitidos = useMemo(() => {
+    return [
       ...new Set([
         ...gradosTutor.map((g) => g.id),
         ...gradosDocente.map((g) => g.id),
       ]),
     ].sort();
-    let isMounted = true;
-    const fetchEstudiantes = async () => {
-      if (isMounted) setLoadingEstudiantes(true);
-      if (!accesoCache || !anioCache || gradosPermitidos.length === 0) {
-        if (isMounted) {
-          setEstudiantes([]);
-          setLoadingEstudiantes(false);
+  }, [gradosTutor, gradosDocente]);
+
+  useEffect(() => {
+    if (!ready || !accesoCache || !anioCache || gradosPermitidos.length === 0) {
+      // Retrasamos el setState para evitar el error de ESLint y renders en cascada
+      Promise.resolve().then(() => {
+        setEstudiantes([]);
+        setLoadingEstudiantes(false);
+      });
+      return;
+    }
+
+    // 1. Aseguramos que la caché de cada grado esté activa
+    gradosPermitidos.forEach((gradoId) => {
+      const clave = claveConsultaEstudiantes(accesoCache, anioCache, gradoId);
+      if (clave) asegurarEstudiantesCache(clave);
+    });
+
+    // 2. Extraemos los estudiantes de la caché
+    const actualizarDesdeCache = () => {
+      const todos: Estudiante[] = [];
+      let todosListos = true;
+
+      gradosPermitidos.forEach((gradoId) => {
+        const clave = claveConsultaEstudiantes(accesoCache, anioCache, gradoId);
+        if (clave) {
+          const estado = leerEstudiantesCache(clave);
+          if (estado.estado === "listo") {
+            todos.push(...estado.items.filter((e) => e.activo === true));
+          } else if (estado.estado !== "error") {
+            todosListos = false;
+          }
         }
-        return;
-      }
-      const claveNomina = JSON.stringify([
-        accesoCache,
-        anioCache,
-        "nomina-activa",
-        gradosPermitidos,
-      ]);
-      try {
-        const todos = await cargarNominaReporteAsistencias<Estudiante>(
-          claveNomina,
-          async () => {
-            const chunks: string[][] = [];
-            for (let i = 0; i < gradosPermitidos.length; i += 10)
-              chunks.push(gradosPermitidos.slice(i, i + 10));
-            const resultado: Estudiante[] = [];
-            for (const chunk of chunks) {
-              const q = query(
-                collection(db, "estudiantes"),
-                where("activo", "==", true),
-                where("gradoId", "in", chunk),
-              );
-              const snap = await getDocs(q);
-              resultado.push(
-                ...snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Estudiante),
-              );
-            }
-            resultado.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
-            return resultado;
-          },
-        );
-        if (isMounted) setEstudiantes(todos);
-      } catch (error) {
-        console.error("Error cargando estudiantes del reporte:", error);
-        if (isMounted)
-          mostrarToast(
-            "error",
-            "No se pudo cargar la nómina",
-            "Comprueba tu conexión y vuelve a entrar al reporte.",
-          );
-      } finally {
-        if (isMounted) setLoadingEstudiantes(false);
-      }
+      });
+
+      // Ordenar alfabéticamente
+      todos.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+      setEstudiantes(todos);
+      setLoadingEstudiantes(!todosListos && todos.length === 0);
     };
-    void fetchEstudiantes();
-    return () => {
-      isMounted = false;
-    };
-  }, [ready, gradosTutor, gradosDocente, accesoCache, anioCache, mostrarToast]);
+
+    // 3. Ejecutamos y nos suscribimos a los cambios
+    actualizarDesdeCache();
+    const unsubscribe = observarEstudiantesCache(actualizarDesdeCache);
+
+    return () => unsubscribe();
+  }, [ready, accesoCache, anioCache, gradosPermitidos]);
 
   // Carga histórica con caché compartida entre montajes, deduplicación de promesas
   // y clave aislada por cuenta, permisos, año, vista, grado, fechas y tipo de reporte.
@@ -555,14 +552,29 @@ export default function ReporteAsistencias() {
           cacheKey,
           async () => {
             const resultado: AsistenciaData[] = [];
-            for (let i = 0; i < fechasAFiltrar.length; i += 30) {
-              const chunk = fechasAFiltrar.slice(i, i + 30);
-              const filtros = vistaEfectiva === "docente"
-                ? [where("registradoPor", "==", userUid), where("fecha", "in", chunk)]
-                : [where("gradoId", "==", gradoEfectivo), where("fecha", "in", chunk)];
-              const q = query(collection(db, "asistencias"), ...filtros);
-              const snap = await getDocs(q);
-              resultado.push(...normalizarDocs(snap.docs));
+            // FASE 4.3: Consulta por día (fecha == dia) en lotes paralelos.
+            // Procesamos 5 días en paralelo para acelerar trimestres.
+            const LOTES_PARALELOS = 5;
+            for (let i = 0; i < fechasAFiltrar.length; i += LOTES_PARALELOS) {
+              const lote = fechasAFiltrar.slice(i, i + LOTES_PARALELOS);
+              const resultadosLote = await Promise.all(
+                lote.map(async (dia) => {
+                  const filtros =
+                    vistaEfectiva === "docente"
+                      ? [
+                          where("registradoPor", "==", userUid),
+                          where("fecha", "==", dia),
+                        ]
+                      : [
+                          where("gradoId", "==", gradoEfectivo),
+                          where("fecha", "==", dia),
+                        ];
+                  const q = query(collection(db, "asistencias"), ...filtros);
+                  const snap = await getDocs(q);
+                  return normalizarDocs(snap.docs);
+                }),
+              );
+              resultadosLote.forEach((docs) => resultado.push(...docs));
             }
             return resultado;
           },
@@ -640,9 +652,8 @@ export default function ReporteAsistencias() {
         ).map(formatFechaISO);
     }
     if (fechasAFiltrar.length === 0 || !accesoCache || !anioCache) return;
-    const gradoEfectivo = vistaEfectiva === "tutor"
-      ? gradoTutorEfectivo
-      : gradoDocenteEfectivo;
+    const gradoEfectivo =
+      vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
     if (vistaEfectiva === "tutor" && !gradoEfectivo) return;
     if (vistaEfectiva === "docente" && !userUid) return;
     const cacheKey = claveCacheReporteAsistencias({

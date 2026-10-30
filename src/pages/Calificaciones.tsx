@@ -50,8 +50,10 @@ import {
 } from "../utils/calificacionesCache";
 import {
   construirRefuerzoConHistorial,
+  recalcularInsumos,
   type EntradaRefuerzo,
   type RefuerzoConHistorial,
+  type ContextoRecalculoEnMemoria,
 } from "../utils/refuerzo";
 import {
   FaUserCheck,
@@ -141,7 +143,6 @@ interface ActividadData {
   estrategiaNota: EstrategiaNota;
   dirigidaA?: "general" | "ambos" | "especial";
   estudianteIds?: string[];
-  // ✅ INSUMOS: actividad consolidada y fuentes agrupadas
   esConsolidado?: boolean;
   actividadesAgrupadas?: string[];
   createdAt?: Timestamp | Date;
@@ -679,68 +680,157 @@ function ContenidoCalificaciones() {
     0,
   );
 
-  // Paleta segura por materia: cada índice usado abajo existe y hay respaldo.
+  // ============================================================
+  // 🎨 PALETA POR MATERIA
+  // Cubre las 14 materias de Básica Superior y Bachillerato
+  // + un color de fallback para materias no listadas.
+  // La coincidencia es por regex sobre el nombre normalizado
+  // (sin tildes, minúsculas). El orden importa: se evalúa de
+  // la más específica a la más general.
+  // ============================================================
   const PALETA_MATERIAS = [
+    // 0 — Matemática (Exactas, azul institucional)
     {
       fondo: "bg-[#EAF0F6]",
       anillo: "ring-[#C8D6E5]",
       punto: "bg-[#244563]",
       hover: "hover:bg-[#E2EAF3]",
     },
+    // 1 — Lengua y Literatura (Lengua, morado suave)
     {
-      fondo: "bg-[#F3E8FF]",
-      anillo: "ring-[#D8B4FE]",
-      punto: "bg-[#7E22CE]",
-      hover: "hover:bg-[#EDE0FF]",
+      fondo: "bg-[#F1ECF8]",
+      anillo: "ring-[#D7C9E8]",
+      punto: "bg-[#5B3B8C]",
+      hover: "hover:bg-[#E9E1F4]",
     },
+    // 2 — Ciencias Naturales (Naturales, verde)
     {
-      fondo: "bg-[#DCFCE7]",
-      anillo: "ring-[#86EFAC]",
-      punto: "bg-[#15803D]",
-      hover: "hover:bg-[#D1FAE5]",
+      fondo: "bg-[#E7F3EA]",
+      anillo: "ring-[#C6E3CD]",
+      punto: "bg-[#2E6B3B]",
+      hover: "hover:bg-[#DDEEDF]",
     },
+    // 3 — Estudios Sociales (Sociales, ámbar)
     {
-      fondo: "bg-[#FEF3C7]",
-      anillo: "ring-[#FCD34D]",
-      punto: "bg-[#B45309]",
-      hover: "hover:bg-[#FDECC8]",
+      fondo: "bg-[#FBF1E3]",
+      anillo: "ring-[#E9D6B4]",
+      punto: "bg-[#8A5A1B]",
+      hover: "hover:bg-[#F5E7D0]",
     },
+    // 4 — Inglés (Lengua, morado rosado)
     {
-      fondo: "bg-[#FFE4E6]",
-      anillo: "ring-[#FDA4AF]",
-      punto: "bg-[#BE123C]",
-      hover: "hover:bg-[#FECDD3]",
+      fondo: "bg-[#F6E7EF]",
+      anillo: "ring-[#E6C7D6]",
+      punto: "bg-[#8A3358]",
+      hover: "hover:bg-[#EFD7E2]",
+    },
+    // 5 — Educación Cultural y Artística (Arte, magenta)
+    {
+      fondo: "bg-[#F8E7EC]",
+      anillo: "ring-[#E8C7D0]",
+      punto: "bg-[#A32E52]",
+      hover: "hover:bg-[#F1D7DF]",
+    },
+    // 6 — Educación Física (Deporte, naranja)
+    {
+      fondo: "bg-[#FCEFE1]",
+      anillo: "ring-[#EFD3AE]",
+      punto: "bg-[#B25A1E]",
+      hover: "hover:bg-[#F7E3CB]",
+    },
+    // 7 — Física (Naturales Bach., verde cian)
+    {
+      fondo: "bg-[#E5F2F0]",
+      anillo: "ring-[#C3E1DB]",
+      punto: "bg-[#1F6B63]",
+      hover: "hover:bg-[#D7EBE6]",
+    },
+    // 8 — Química (Naturales Bach., verde lima)
+    {
+      fondo: "bg-[#EDF3E2]",
+      anillo: "ring-[#D3E2BC]",
+      punto: "bg-[#4E6E1F]",
+      hover: "hover:bg-[#E1ECD0]",
+    },
+    // 9 — Biología (Naturales Bach., verde esmeralda)
+    {
+      fondo: "bg-[#E5F3E7]",
+      anillo: "ring-[#C2E3C8]",
+      punto: "bg-[#1F6B34]",
+      hover: "hover:bg-[#D6ECD9]",
+    },
+    // 10 — Historia (Sociales Bach., ámbar oscuro)
+    {
+      fondo: "bg-[#F7ECDB]",
+      anillo: "ring-[#E3CCAA]",
+      punto: "bg-[#7A4A11]",
+      hover: "hover:bg-[#F0E1C6]",
+    },
+    // 11 — Educación para la Ciudadanía (Sociales Bach., marrón cálido)
+    {
+      fondo: "bg-[#F4E9E1]",
+      anillo: "ring-[#E0C9B8]",
+      punto: "bg-[#7A4A2A]",
+      hover: "hover:bg-[#ECDCCD]",
+    },
+    // 12 — Filosofía (Sociales Bach., índigo)
+    {
+      fondo: "bg-[#EAEBF7]",
+      anillo: "ring-[#CBCEE8]",
+      punto: "bg-[#3B3E8A]",
+      hover: "hover:bg-[#DDDEF0]",
+    },
+    // 13 — Emprendimiento y Gestión (Transversal, teal)
+    {
+      fondo: "bg-[#E5F1F3]",
+      anillo: "ring-[#C3DDE0]",
+      punto: "bg-[#1E6B72]",
+      hover: "hover:bg-[#D7E9EC]",
+    },
+    // 14 — FALLBACK para materias no listadas (gris neutral)
+    {
+      fondo: "bg-[#F1F2F4]",
+      anillo: "ring-[#D6D9DE]",
+      punto: "bg-[#5B6470]",
+      hover: "hover:bg-[#E9EBEE]",
     },
   ];
+
   const colorPorMateria = (nombre: string, idFallback: string) => {
     const clave = (nombre || idFallback)
       .trim()
       .toLowerCase()
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "");
+    if (!clave) return PALETA_MATERIAS[14];
 
-    // eslint-disable-next-line no-useless-assignment
-    let indice = 0;
-    if (/(educacion fisica|deporte|arte|musica|dibujo)/.test(clave)) {
-      indice = 4;
-    } else if (/(social|historia|filosof|ciudadan)/.test(clave)) {
-      indice = 3;
-    } else if (/(natural|biolog|quimic|fisica)/.test(clave)) {
-      indice = 2;
-    } else if (/(lengua|literatura|ingl|idioma)/.test(clave)) {
-      indice = 1;
-    } else if (/(matem|inform)/.test(clave)) {
-      indice = 0;
-    } else {
-      let hash = 0;
-      for (let i = 0; i < clave.length; i += 1) {
-        hash = (hash * 31 + clave.charCodeAt(i)) >>> 0;
-      }
-      indice = hash % PALETA_MATERIAS.length;
+    // 1. Casos específicos de Bachillerato primero
+    if (/(fisica)/.test(clave)) return PALETA_MATERIAS[7];
+    if (/(quimica)/.test(clave)) return PALETA_MATERIAS[8];
+    if (/(biologia)/.test(clave)) return PALETA_MATERIAS[9];
+    if (/(historia)/.test(clave)) return PALETA_MATERIAS[10];
+    if (/(ciudadania)/.test(clave)) return PALETA_MATERIAS[11];
+    if (/(filosofia)/.test(clave)) return PALETA_MATERIAS[12];
+    if (/(emprendimiento)/.test(clave)) return PALETA_MATERIAS[13];
+
+    // 2. Áreas generales
+    if (/(lengua|literatura)/.test(clave)) return PALETA_MATERIAS[1];
+    if (/(matematica)/.test(clave)) return PALETA_MATERIAS[0];
+    if (/(ciencias naturales|naturales)/.test(clave)) return PALETA_MATERIAS[2];
+    if (/(estudios sociales|sociales)/.test(clave)) return PALETA_MATERIAS[3];
+    if (/(ingles|idioma extranjero)/.test(clave)) return PALETA_MATERIAS[4];
+    if (/(cultural y artistica|artistica|arte|musica|dibujo)/.test(clave))
+      return PALETA_MATERIAS[5];
+    if (/(educacion fisica|deporte)/.test(clave)) return PALETA_MATERIAS[6];
+
+    // 3. Fallback por hash para variantes no reconocidas
+    //    (nunca cae en undefined porque la paleta tiene 15 entradas
+    //    y solo se indexa con el último = neutral)
+    let hash = 0;
+    for (let i = 0; i < clave.length; i += 1) {
+      hash = (hash * 31 + clave.charCodeAt(i)) >>> 0;
     }
-
-    // Protección adicional para que un índice inesperado nunca deje la pantalla en blanco.
-    return PALETA_MATERIAS[indice] ?? PALETA_MATERIAS[0];
+    return PALETA_MATERIAS[hash % PALETA_MATERIAS.length];
   };
 
   const actividadSeleccionada = actividades.find(
@@ -1595,9 +1685,6 @@ function ContenidoCalificaciones() {
         const notaNum = parseFloat(calificacion.nota);
         if (isNaN(notaNum) || notaNum < 0 || notaNum > 10) return;
         const existente = existentesMap.get(est.id);
-        // Si existe un refuerzo, la nota original no debe sobrescribirse con la
-        // nota final que se muestra en pantalla. Las nuevas mejoras se registran
-        // únicamente mediante el historial de refuerzos.
         const notaPersistir = existente?.data.refuerzo
           ? round2(existente.data.nota)
           : round2(notaNum);
@@ -1650,6 +1737,69 @@ function ContenidoCalificaciones() {
           cacheInvalidate(`calificaciones_${selectedActividadId}`);
         cacheInvalidate(`calificacionesMatriz_${destrezaEfectivaId}`);
         cacheInvalidate(`actividades_${destrezaEfectivaId}`);
+
+        // ✅ FASE 4.2: Inyección de memoria para evitar lecturas redundantes al recalcular insumos
+        const actividadesMap = new Map(
+          actividades
+            .filter((a): a is ActividadData & { id: string } => !!a.id)
+            .map((a) => [a.id, a]),
+        );
+        const estudiantesMap = new Map(estudiantes.map((e) => [e.id, e]));
+
+        // Definimos el tipo inline para que coincida estructuralmente con CalificacionConRefuerzo
+        const calificacionesMap = new Map<
+          string,
+          {
+            id: string;
+            estudianteId: string;
+            actividadId: string;
+            nota: number;
+            refuerzo: RefuerzoData | null;
+          }
+        >();
+
+        // Usamos existentesMap que ya tiene los IDs de Firestore
+        estudiantesAplicables.forEach((est) => {
+          const existente = existentesMap.get(est.id);
+          if (existente) {
+            const calLocal = calificaciones[est.id];
+            calificacionesMap.set(existente.id, {
+              id: existente.id,
+              estudianteId: est.id,
+              actividadId: selectedActividadId,
+              nota: calLocal?.nota
+                ? parseFloat(calLocal.nota)
+                : existente.data.nota,
+              refuerzo: calLocal?.refuerzo ?? existente.data.refuerzo ?? null,
+            });
+          }
+        });
+
+        const contextoEnMemoria: ContextoRecalculoEnMemoria = {
+          actividades: actividadesMap,
+          estudiantes: estudiantesMap,
+          // Cast seguro estructural sin usar 'any'
+          calificaciones:
+            calificacionesMap as ContextoRecalculoEnMemoria["calificaciones"],
+        };
+
+        const recalc = await recalcularInsumos(
+          [selectedActividadId],
+          contextoEnMemoria,
+        );
+        if (recalc.actualizados > 0) {
+          mostrarToast(
+            "info",
+            "Insumo actualizado",
+            `Se recalculó el promedio de ${recalc.actualizados} insumo(s).`,
+          );
+        } else if (!recalc.ok) {
+          mostrarToast(
+            "warning",
+            "Insumos no actualizados",
+            `Falló el recálculo del insumo: ${recalc.error}`,
+          );
+        }
       }
       mostrarToast(
         "success",
@@ -1668,6 +1818,12 @@ function ContenidoCalificaciones() {
     }
   };
 
+  // ============================================================
+  // FASE 4.2: INYECCIÓN DE MEMORIA EN APLICAR REFUERZO
+  // ============================================================
+  // ============================================================
+  // FASE 4.2: INYECCIÓN DE MEMORIA EN APLICAR REFUERZO
+  // ============================================================
   const aplicarRefuerzo = async () => {
     if (
       !refuerzoEstudianteId ||
@@ -1715,7 +1871,6 @@ function ContenidoCalificaciones() {
         refuerzoPrevio,
         entradaRefuerzo,
       );
-      // Guardar cada refuerzo con un número consecutivo persistente.
       const refuerzoData = {
         ...refuerzoConstruido,
         historial: (refuerzoConstruido.historial || []).map(
@@ -1735,6 +1890,42 @@ function ContenidoCalificaciones() {
       setRefuerzoEstudianteId(null);
 
       await cargarCalificaciones(selectedActividadId);
+
+      // ✅ FASE 4.2: Inyectamos el contexto en memoria para evitar
+      // que recalcularInsumos haga consultas redundantes.
+      const contextoEnMemoria: ContextoRecalculoEnMemoria = {
+        actividades: new Map(
+          actividades
+            .filter((a): a is ActividadData & { id: string } => !!a.id)
+            .map((a) => [a.id, a]),
+        ),
+        estudiantes: new Map(estudiantes.map((e) => [e.id, e])),
+        calificaciones: new Map(
+          Object.entries(calificaciones)
+            .filter(([, c]) => c.nota)
+            .map(([estId, c]) => [
+              `${estId}|${selectedActividadId}`,
+              {
+                id: `${estId}|${selectedActividadId}`,
+                estudianteId: estId,
+                actividadId: selectedActividadId,
+                nota: parseFloat(c.nota),
+                refuerzo: c.refuerzo || null,
+              },
+            ]),
+        ),
+      };
+      const recalc = await recalcularInsumos(
+        [selectedActividadId],
+        contextoEnMemoria,
+      );
+      if (recalc.actualizados > 0) {
+        mostrarToast(
+          "info",
+          "Insumos actualizados",
+          `Se recalculó el promedio de ${recalc.actualizados} insumo(s).`,
+        );
+      }
     } catch (e) {
       console.error(e);
       mostrarToast(
@@ -1860,9 +2051,11 @@ function ContenidoCalificaciones() {
     setFichaBase({});
     setFichaAsistencias({});
     try {
+      // ✅ F8: Se aplica .sort() para tener un orden determinista y evitar churn
       const actividadIds = actividadesVisibles
         .map((a) => a.id)
-        .filter(Boolean) as string[];
+        .filter(Boolean)
+        .sort() as string[];
       if (!actividadIds.length) {
         setFichaLoading(false);
         return;

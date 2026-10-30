@@ -1,6 +1,12 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { updateDoc, doc, serverTimestamp } from "firebase/firestore";
-import { claveAccesoEstudiantes } from "../utils/estudiantesCache";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  asegurarEstudiantesCache,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+} from "../utils/estudiantesCache";
 import { useHorarioPanel, invalidarNotasPanel } from "../utils/panelCache";
 import {
   useConsultasReporte,
@@ -15,6 +21,7 @@ import {
   recalcularInsumos,
   type EntradaRefuerzo,
   type RefuerzoConHistorial,
+  type ContextoRecalculoEnMemoria, // ← Asegúrate de que esta línea esté aquí
 } from "../utils/refuerzo";
 import type { Estudiante, Grado } from "../types";
 import Layout from "../components/Layout";
@@ -43,11 +50,13 @@ import {
   FaClipboardList,
   FaCheck,
 } from "react-icons/fa";
+
 // ==================== INTERFACES ====================
 type EstudianteConContacto = Estudiante & {
   nombreRepresentante?: string;
   celularRepresentante?: string;
 };
+
 // Ecuador: 09XXXXXXXX, 9XXXXXXXX o 5939XXXXXXXX. Otros países: + o 00.
 const normalizarCelularRepresentante = (valor?: string): string | null => {
   const original = (valor || "").trim();
@@ -61,6 +70,7 @@ const normalizarCelularRepresentante = (valor?: string): string | null => {
   if (numero.startsWith("593")) return null;
   return internacional && /^[1-9]\d{7,14}$/.test(numero) ? numero : null;
 };
+
 interface ActividadData {
   id: string;
   tipo: string;
@@ -76,6 +86,7 @@ interface ActividadData {
   esConsolidado?: boolean;
   actividadesAgrupadas?: string[];
 }
+
 interface CalificacionData {
   id: string;
   estudianteId: string;
@@ -93,6 +104,7 @@ interface CalificacionData {
   } | null;
   docenteId?: string;
 }
+
 interface RegistroRiesgo {
   calificacionId: string;
   estudianteId: string;
@@ -114,12 +126,14 @@ interface RegistroRiesgo {
   esConsolidado: boolean;
   observacion?: string;
 }
+
 interface UnidadSeccion {
   id: string;
   nombre: string;
   ambitoNombre: string;
   actividades: ActividadData[];
 }
+
 interface GrupoMateriaRiesgo {
   destrezaId: string;
   materiaNombre: string;
@@ -129,7 +143,9 @@ interface GrupoMateriaRiesgo {
   conRefuerzo: number;
   notaPromedio: number;
 }
+
 type ModoVista = "tutor" | "docente";
+
 // ==================== HELPERS ====================
 const esGradoInicial = (nombre: string): boolean => {
   const n = (nombre || "").toLowerCase();
@@ -139,12 +155,15 @@ const esGradoInicial = (nombre: string): boolean => {
     n.includes("preparatoria")
   );
 };
+
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
 const ESTRATEGIAS_NOTA = [
   { value: "promediar", label: "Promediar (Original + Refuerzo) / 2" },
   { value: "reemplazar", label: "Reemplazar (Refuerzo reemplaza Original)" },
   { value: "maxima", label: "Máxima (Mayor entre Original y Refuerzo)" },
 ];
+
 const calcularNotaFinalRefuerzo = (
   notaOriginal: number,
   notaRefuerzo: number,
@@ -160,8 +179,7 @@ const calcularNotaFinalRefuerzo = (
       return round2((notaOriginal + notaRefuerzo) / 2);
   }
 };
-// ==================== COMPONENTE ====================
-// Misma regla de aplicabilidad que utiliza la matriz de Calificaciones.
+
 const aplicaActividad = (
   est: Estudiante | undefined | null,
   act: Pick<ActividadData, "dirigidaA" | "estudianteIds"> | undefined | null,
@@ -195,9 +213,11 @@ function ReporteNotasContenido() {
   const navigate = useNavigate();
   const [informeNotificacion, setInformeNotificacion] =
     useState<InformeNotificacion | null>(null);
+
   const acceso = claveAccesoEstudiantes(user?.uid, userData);
   const anio = anioActivo?.id || "";
   const esAdmin = userData?.role === "super_admin";
+
   const horario = useHorarioPanel(
     acceso,
     anio,
@@ -205,6 +225,7 @@ function ReporteNotasContenido() {
     esAdmin ? "" : user?.uid || "",
   );
   const asignaturasDocente = horario.items;
+
   const notificaciones = useConsultasReporte<{ id: string; enviadas?: number }>(
     acceso,
     anio,
@@ -217,6 +238,7 @@ function ReporteNotasContenido() {
         ]
       : [],
   );
+
   const contadoresNotificacion = useMemo(
     () =>
       Object.fromEntries(
@@ -224,6 +246,7 @@ function ReporteNotasContenido() {
       ),
     [notificaciones.items],
   );
+
   const [modoVista, setModoVista] = useState<ModoVista>("tutor");
   const [gradoTutorSel, setGradoTutorSel] = useState<string>("");
   const [gradoDocenteSel, setGradoDocenteSel] = useState<string>("");
@@ -240,17 +263,20 @@ function ReporteNotasContenido() {
     notaOriginal: number;
     estrategiaActividad: string;
   } | null>(null);
+
   const [refuerzoForm, setRefuerzoForm] = useState({
     nota: 7,
     detalle: "",
     fecha: new Date().toISOString().split("T")[0],
     estrategia: "promediar",
   });
+
   const [isGuardandoRefuerzo, setIsGuardandoRefuerzo] = useState(false);
   const [aviso, setAviso] = useState<{
     type: "success" | "error" | "info" | "warning";
     message: string;
   } | null>(null);
+
   const mostrarAviso = (
     type: "success" | "error" | "info" | "warning",
     message: string,
@@ -258,13 +284,16 @@ function ReporteNotasContenido() {
     setAviso({ type, message });
     setTimeout(() => setAviso(null), 6000);
   };
+
   const esTutor = (userData?.tutorDe || []).length > 0;
   const tieneMaterias = asignaturasDocente.length > 0;
+
   const modoEfectivo = useMemo<ModoVista>(() => {
     if (modoVista === "tutor" && !esTutor) return "docente";
     if (modoVista === "docente" && !tieneMaterias && esTutor) return "tutor";
     return modoVista;
   }, [modoVista, esTutor, tieneMaterias]);
+
   const gradosDisponibles = useMemo(() => {
     if (!anioActivo) return [] as Grado[];
     const anioGrados = grados.filter(
@@ -276,19 +305,23 @@ function ReporteNotasContenido() {
     (userData?.tutorDe || []).forEach((id) => idsSet.add(id));
     return anioGrados.filter((g) => idsSet.has(g.id));
   }, [grados, anioActivo, asignaturasDocente, userData, esAdmin]);
+
   const gradosTutorizados = useMemo(() => {
     const tutorIds = new Set(userData?.tutorDe || []);
     return gradosDisponibles.filter((g) => tutorIds.has(g.id));
   }, [gradosDisponibles, userData]);
+
   const gradosDocenteMios = useMemo(() => {
     const misGradoIds = new Set(asignaturasDocente.map((a) => a.gradoId));
     return gradosDisponibles.filter((g) => misGradoIds.has(g.id));
   }, [gradosDisponibles, asignaturasDocente]);
+
   const gradoTutorEfectivo = useMemo(() => {
     if (gradoTutorSel && gradosTutorizados.some((g) => g.id === gradoTutorSel))
       return gradoTutorSel;
     return gradosTutorizados[0]?.id || "";
   }, [gradoTutorSel, gradosTutorizados]);
+
   const gradoDocenteEfectivo = useMemo(() => {
     if (
       gradoDocenteSel &&
@@ -297,9 +330,11 @@ function ReporteNotasContenido() {
       return gradoDocenteSel;
     return gradosDocenteMios[0]?.id || "";
   }, [gradoDocenteSel, gradosDocenteMios]);
+
   const gradoTutorActual = grados.find((g) => g.id === gradoTutorEfectivo);
   const gradoDocenteActual = grados.find((g) => g.id === gradoDocenteEfectivo);
   const esInicialDocente = esGradoInicial(gradoDocenteActual?.nombre || "");
+
   const misDestrezasDelGrado = useMemo(() => {
     return new Set(
       asignaturasDocente
@@ -307,10 +342,12 @@ function ReporteNotasContenido() {
         .map((a) => a.destrezaId),
     );
   }, [asignaturasDocente, gradoDocenteEfectivo]);
+
   const misDestrezasTodas = useMemo(
     () => new Set(asignaturasDocente.map((a) => a.destrezaId)),
     [asignaturasDocente],
   );
+
   const misUnidadesDelGrado = useMemo(() => {
     return esInicialDocente
       ? new Set(
@@ -322,23 +359,66 @@ function ReporteNotasContenido() {
   }, [esInicialDocente, destrezas, misDestrezasDelGrado]);
 
   const shouldLoadData = ready && gradosDisponibles.length > 0;
-  const gradoIds = gradosDisponibles.map((g) => g.id).sort();
-  const consultasEstudiantes: ConsultaReporte[] = [];
+
+  // ============================================================
+  // FASE 3: LECTURA DE ESTUDIANTES DESDE CACHÉ COMPARTIDA
+  // ============================================================
+  const gradosIds = useMemo(
+    () => gradosDisponibles.map((g) => g.id),
+    [gradosDisponibles],
+  );
+
+  // 1. Estado local para guardar los estudiantes de la caché
+  const [estudiantesLocales, setEstudiantesLocales] = useState<Estudiante[]>(
+    [],
+  );
+
+  // 2. Efecto para asegurar la caché y suscribirse a sus cambios
+  useEffect(() => {
+    if (!acceso || !anio) return;
+
+    // Aseguramos que la caché de cada grado esté activa
+    gradosIds.forEach((gradoId) => {
+      const clave = claveConsultaEstudiantes(acceso, anio, gradoId);
+      if (clave) asegurarEstudiantesCache(clave);
+    });
+
+    // Definimos la función que extrae los estudiantes de la caché
+    const actualizarDesdeCache = () => {
+      const result: Estudiante[] = [];
+      gradosIds.forEach((gradoId) => {
+        const clave = claveConsultaEstudiantes(acceso, anio, gradoId);
+        if (clave) {
+          const estado = leerEstudiantesCache(clave);
+          if (estado.estado === "listo") {
+            result.push(...estado.items.filter((e) => e.activo === true));
+          }
+        }
+      });
+      // Ordenamos para evitar parpadeos
+      result.sort((a, b) => a.apellidos.localeCompare(b.apellidos));
+      setEstudiantesLocales(result);
+    };
+
+    // Ejecutamos una vez al entrar y nos suscribimos a los cambios de la caché
+    actualizarDesdeCache();
+    const unsubscribe = observarEstudiantesCache(actualizarDesdeCache);
+
+    return () => unsubscribe();
+  }, [acceso, anio, gradosIds]);
+
+  // 3. Usamos el estado local (esto ya no causa bucles infinitos)
+  const estudiantesFiltrados = estudiantesLocales;
+
+  // ============================================================
+  // ACTIVIDADES Y CALIFICACIONES
+  // ============================================================
   const consultasActividades: ConsultaReporte[] = [];
   if (shouldLoadData) {
-    for (let i = 0; i < gradoIds.length; i += 10) {
-      consultasEstudiantes.push({
-        coleccion: "estudiantes",
-        filtros: [
-          ["activo", "==", true],
-          ["gradoId", "in", gradoIds.slice(i, i + 10)],
-        ],
-      });
-    }
     const tutorIds = new Set(userData?.tutorDe || []);
     const gradosConsulta = esAdmin
-      ? gradoIds
-      : gradoIds.filter((id) => tutorIds.has(id));
+      ? gradosIds
+      : gradosIds.filter((id) => tutorIds.has(id));
     const agregarActividades = (
       campo: string,
       ids: string[],
@@ -354,75 +434,96 @@ function ReporteNotasContenido() {
       }
     };
     agregarActividades("gradoId", gradosConsulta, 10);
-    if (!esAdmin)
+    if (!esAdmin) {
       agregarActividades(
         "destrezaId",
         [...new Set(asignaturasDocente.map((a) => a.destrezaId))].sort(),
         30,
       );
+    }
   }
-  const nomina = useConsultasReporte<Estudiante>(
-    acceso,
-    anio,
-    consultasEstudiantes,
-  );
+
   const datosActividades = useConsultasReporte<ActividadData>(
     acceso,
     anio,
     consultasActividades,
   );
-  const estudiantesFiltrados = useMemo(() => {
-    const ids = new Set(gradosDisponibles.map((g) => g.id));
-    return nomina.items
-      .filter((e) => ids.has(e.gradoId))
-      .sort((a, b) => a.apellidos.localeCompare(b.apellidos));
-  }, [nomina.items, gradosDisponibles]);
+
   const actividades = useMemo(() => {
     const ids = new Set(gradosDisponibles.map((g) => g.id));
     return datosActividades.items.filter((a) => ids.has(a.gradoId));
   }, [datosActividades.items, gradosDisponibles]);
-  const actividadIds = actividades
-    .map((a) => a.id)
-    .filter(Boolean)
-    .sort();
-  const consultasNotas: ConsultaReporte[] = [];
-  if (
-    shouldLoadData &&
-    !datosActividades.cargando &&
-    !datosActividades.errores.length
-  ) {
-    for (let i = 0; i < actividadIds.length; i += 30) {
-      consultasNotas.push({
-        coleccion: "calificaciones",
-        filtros: [["actividadId", "in", actividadIds.slice(i, i + 30)]],
-      });
+
+  // ============================================================
+  // FASE 4.1: CONSULTA DE CALIFICACIONES POR ACTIVIDAD (==)
+  // ============================================================
+  // Se consulta cada actividad por separado con `actividadId == id`.
+  // Esto comparte el target canónico con Calificaciones.tsx y evita el churn.
+  // Optimización (sugerida en revisión): Filtramos los IDs de las actividades
+  // consolidadas ANTES de generar las consultas, para no abrir listeners
+  // innecesarios de calificaciones que luego se descartan en cliente.
+
+  const actividadIdsParaConsultar = useMemo(() => {
+    if (!shouldLoadData) return [];
+    // 1. Identificamos las actividades que están dentro de un insumo
+    const idsAgrupados = new Set<string>();
+    actividades.forEach((a) => {
+      if (a.esConsolidado && a.actividadesAgrupadas) {
+        a.actividadesAgrupadas.forEach((id) => idsAgrupados.add(id));
+      }
+    });
+    // 2. Solo devolvemos los IDs de actividades visibles (no agrupadas)
+    return actividades
+      .filter((a) => a.id && !idsAgrupados.has(a.id))
+      .map((a) => a.id);
+  }, [actividades, shouldLoadData]);
+
+  const consultasNotas: ConsultaReporte[] = useMemo(() => {
+    if (
+      !shouldLoadData ||
+      datosActividades.cargando ||
+      datosActividades.errores.length > 0
+    ) {
+      return [];
     }
-  }
+    // Una consulta por cada actividad visible (target estable y compartido).
+    return actividadIdsParaConsultar.map((id) => ({
+      coleccion: "calificaciones",
+      filtros: [["actividadId", "==", id]] as ConsultaReporte["filtros"],
+    }));
+  }, [
+    shouldLoadData,
+    datosActividades.cargando,
+    datosActividades.errores.length,
+    actividadIdsParaConsultar,
+  ]);
+
   const datosNotas = useConsultasReporte<CalificacionData>(
     acceso,
     anio,
     consultasNotas,
   );
   const calificaciones = datosNotas.items;
+
   const loading =
     (!esAdmin && !horario.listo && !horario.error) ||
-    nomina.cargando ||
     datosActividades.cargando ||
     datosNotas.cargando;
+
   const erroresCarga = [
     horario.error,
-    ...nomina.errores,
     ...datosActividades.errores,
     ...datosNotas.errores,
     ...notificaciones.errores,
   ].filter(Boolean);
+
   const reintentarCarga = () => {
     horario.reintentar();
-    nomina.reintentar();
     datosActividades.reintentar();
     datosNotas.reintentar();
     notificaciones.reintentar();
   };
+
   // ==================== FILTRO DE INSUMOS ====================
   const idsAgrupados = useMemo(() => {
     const s = new Set<string>();
@@ -433,14 +534,17 @@ function ReporteNotasContenido() {
     });
     return s;
   }, [actividades]);
+
   const actividadesVisibles = useMemo(
     () => actividades.filter((a) => a.id && !idsAgrupados.has(a.id)),
     [actividades, idsAgrupados],
   );
+
   const calificacionesVisibles = useMemo(
     () => calificaciones.filter((c) => !idsAgrupados.has(c.actividadId)),
     [calificaciones, idsAgrupados],
   );
+
   // ==================== MAPA DE CALIFICACIONES ====================
   const calMap = useMemo(() => {
     const map = new Map<string, CalificacionData>();
@@ -449,16 +553,13 @@ function ReporteNotasContenido() {
     });
     return map;
   }, [calificacionesVisibles]);
+
   const notaFinalDe = (c: CalificacionData): number => {
     const refuerzo = c.refuerzo as
-      | (typeof c.refuerzo & {
-          notaFinalAplicada?: number;
-          historial?: Array<Record<string, unknown>>;
-        })
+      | (typeof c.refuerzo & { notaFinalAplicada?: number })
       | undefined;
-    if (typeof refuerzo?.notaFinalAplicada === "number") {
+    if (typeof refuerzo?.notaFinalAplicada === "number")
       return refuerzo.notaFinalAplicada;
-    }
     if (refuerzo && typeof refuerzo.nota === "number") {
       return calcularNotaFinalRefuerzo(
         c.nota,
@@ -468,6 +569,7 @@ function ReporteNotasContenido() {
     }
     return c.nota;
   };
+
   // ==================== VISTA TUTOR: REGISTROS DE RIESGO ====================
   const registrosRiesgo = useMemo((): RegistroRiesgo[] => {
     if (!gradoTutorEfectivo) return [];
@@ -477,6 +579,7 @@ function ReporteNotasContenido() {
     const destrezasMap = new Map(destrezas.map((d) => [d.id, d]));
     const ambitosMap = new Map(ambitos.map((a) => [a.id, a]));
     const registros: RegistroRiesgo[] = [];
+
     calificacionesVisibles.forEach((cal) => {
       const nf = notaFinalDe(cal);
       if (nf >= 7) return;
@@ -485,11 +588,13 @@ function ReporteNotasContenido() {
       if (!estudiante || !actividad || !aplicaActividad(estudiante, actividad))
         return;
       if (estudiante.gradoId !== gradoTutorEfectivo) return;
+
       const grado = gradosMap.get(estudiante.gradoId);
       const destreza = destrezasMap.get(actividad.destrezaId);
       const ambito = ambitosMap.get(
         actividad.ambitoId || destreza?.ambitoId || "",
       );
+
       registros.push({
         calificacionId: cal.id,
         estudianteId: estudiante.id,
@@ -512,11 +617,11 @@ function ReporteNotasContenido() {
         observacion: cal.observacion,
       });
     });
-    registros.sort((a, b) => {
-      if (a.notaFinal !== b.notaFinal) return a.notaFinal - b.notaFinal;
-      return a.estudianteNombre.localeCompare(b.estudianteNombre);
-    });
-    return registros;
+    return registros.sort(
+      (a, b) =>
+        a.notaFinal - b.notaFinal ||
+        a.estudianteNombre.localeCompare(b.estudianteNombre),
+    );
   }, [
     gradoTutorEfectivo,
     estudiantesFiltrados,
@@ -526,6 +631,7 @@ function ReporteNotasContenido() {
     destrezas,
     ambitos,
   ]);
+
   const gruposPorMateria = useMemo((): GrupoMateriaRiesgo[] => {
     const map = new Map<
       string,
@@ -571,54 +677,44 @@ function ReporteNotasContenido() {
       }))
       .sort((a, b) => b.registros.length - a.registros.length);
   }, [registrosRiesgo]);
+
   const estudiantesUnicosEnRiesgo = useMemo(() => {
     const map = new Map<
       string,
-      {
-        estudiante: RegistroRiesgo;
-        conteo: number;
-        materias: Set<string>;
-      }
+      { estudiante: RegistroRiesgo; conteo: number; materias: Set<string> }
     >();
     registrosRiesgo.forEach((r) => {
-      if (!map.has(r.estudianteId)) {
+      if (!map.has(r.estudianteId))
         map.set(r.estudianteId, {
           estudiante: r,
           conteo: 0,
           materias: new Set(),
         });
-      }
       const entry = map.get(r.estudianteId)!;
       entry.conteo++;
       entry.materias.add(r.materiaNombre);
     });
     return Array.from(map.values()).sort((a, b) => b.conteo - a.conteo);
   }, [registrosRiesgo]);
+
   // ==================== VISTA DOCENTE: SECCIONES ====================
   const seccionesDocente = ((): UnidadSeccion[] => {
     if (!gradoDocenteEfectivo) return [];
     const esInicial = esInicialDocente;
-    const unidades: {
-      id: string;
-      nombre: string;
-      ambitoNombre: string;
-    }[] = Array.from(misUnidadesDelGrado).map((id) => {
-      if (esInicial) {
-        const a = ambitos.find((x) => x.id === id);
-        return {
-          id,
-          nombre: a?.nombre || "—",
-          ambitoNombre: a?.nombre || "—",
-        };
-      }
-      const d = destrezas.find((x) => x.id === id);
-      const a = ambitos.find((x) => x.id === (d?.ambitoId || ""));
-      return {
-        id,
-        nombre: d?.nombre || "—",
-        ambitoNombre: a?.nombre || "—",
-      };
-    });
+    const unidades: { id: string; nombre: string; ambitoNombre: string }[] =
+      Array.from(misUnidadesDelGrado).map((id) => {
+        if (esInicial) {
+          const a = ambitos.find((x) => x.id === id);
+          return {
+            id,
+            nombre: a?.nombre || "—",
+            ambitoNombre: a?.nombre || "—",
+          };
+        }
+        const d = destrezas.find((x) => x.id === id);
+        const a = ambitos.find((x) => x.id === (d?.ambitoId || ""));
+        return { id, nombre: d?.nombre || "—", ambitoNombre: a?.nombre || "—" };
+      });
     unidades.sort((a, b) => a.nombre.localeCompare(b.nombre));
     return unidades
       .map((u) => {
@@ -641,17 +737,20 @@ function ReporteNotasContenido() {
       })
       .filter((s) => s.actividades.length > 0);
   })();
+
   const estudiantesDelGradoDocente = useMemo(() => {
     return estudiantesFiltrados
       .filter((e) => e.gradoId === gradoDocenteEfectivo)
       .sort((a, b) => a.apellidos.localeCompare(b.apellidos));
   }, [estudiantesFiltrados, gradoDocenteEfectivo]);
+
   const estudianteDetalle = useMemo(
     () =>
       estudiantesDelGradoDocente.find((e) => e.id === estudianteDetalleId) ||
       null,
     [estudiantesDelGradoDocente, estudianteDetalleId],
   );
+
   const notasDetalleEstudiante = useMemo(() => {
     if (!estudianteDetalleId || !gradoDocenteEfectivo) return [];
     return actividadesVisibles
@@ -699,6 +798,7 @@ function ReporteNotasContenido() {
     misDestrezasDelGrado,
     calMap,
   ]);
+
   const prepararInformeNotificacion = (
     sec: UnidadSeccion,
     est: EstudianteConContacto,
@@ -753,6 +853,7 @@ function ReporteNotasContenido() {
         })),
     };
   };
+
   // ==================== REFUERZO ====================
   const abrirRefuerzo = (r: {
     calificacionId: string;
@@ -805,9 +906,9 @@ function ReporteNotasContenido() {
     });
     setShowRefuerzoModal(true);
   };
+
   const aplicarRefuerzo = async () => {
-    if (!refuerzoRegistro) return;
-    if (!refuerzoForm.detalle.trim()) return;
+    if (!refuerzoRegistro || !refuerzoForm.detalle.trim()) return;
     const contextoVigente = capturarContextoReporteNotas(acceso, anio);
     if (!contextoVigente()) return;
     setIsGuardandoRefuerzo(true);
@@ -860,19 +961,13 @@ function ReporteNotasContenido() {
       const refuerzoFinal = {
         ...refuerzoConstruido,
         historial: (refuerzoConstruido.historial || []).map(
-          (entrada, index) => ({
-            ...entrada,
-            numero: index + 1,
-          }),
+          (entrada, index) => ({ ...entrada, numero: index + 1 }),
         ),
       };
       const actividadAfectada = refuerzoRegistro.actividadId;
       await updateDoc(
         doc(db, "calificaciones", refuerzoRegistro.calificacionId),
-        {
-          refuerzo: refuerzoFinal,
-          updatedAt: serverTimestamp(),
-        },
+        { refuerzo: refuerzoFinal, updatedAt: serverTimestamp() },
       );
       if (!contextoVigente()) return;
       invalidarNotasPanel();
@@ -882,18 +977,50 @@ function ReporteNotasContenido() {
         "success",
         "Refuerzo aplicado: la nota final de la actividad quedó actualizada.",
       );
-      const recalc = await recalcularInsumos([actividadAfectada]);
+
+      // ✅ FASE 4.2: Inyección de memoria para evitar lecturas redundantes al recalcular insumos
+      const actividadesMap = new Map(
+        actividades
+          .filter((a): a is ActividadData & { id: string } => !!a.id)
+          .map((a) => [
+            a.id,
+            {
+              ...a,
+              estrategiaNota:
+                (a.estrategiaNota as
+                  | "promediar"
+                  | "reemplazar"
+                  | "maxima"
+                  | undefined) ?? "promediar",
+            },
+          ]),
+      );
+      const estudiantesMap = new Map(
+        estudiantesFiltrados.map((e) => [e.id, e]),
+      );
+
+      const contextoEnMemoria: ContextoRecalculoEnMemoria = {
+        actividades: actividadesMap,
+        estudiantes: estudiantesMap,
+      };
+
+      const recalc = await recalcularInsumos(
+        [actividadAfectada],
+        contextoEnMemoria,
+      );
+
       if (!contextoVigente()) return;
-      if (recalc.actualizados > 0)
+      if (recalc.actualizados > 0) {
         mostrarAviso(
           "info",
-          `Se recalculó el promedio de ${recalc.actualizados} insumo(s) consolidado(s).`,
+          `Insumos actualizados: Se recalculó el promedio de ${recalc.actualizados} insumo(s) consolidado(s).`,
         );
-      else if (!recalc.ok)
+      } else if (!recalc.ok) {
         mostrarAviso(
           "warning",
-          `El refuerzo se aplicó, pero falló el recálculo del insumo: ${recalc.error}`,
+          `Insumos no actualizados: El refuerzo se aplicó, pero falló el recálculo del insumo: ${recalc.error}`,
         );
+      }
     } catch (error) {
       console.error("Error aplicando refuerzo:", error);
       mostrarAviso(
@@ -904,6 +1031,7 @@ function ReporteNotasContenido() {
       setIsGuardandoRefuerzo(false);
     }
   };
+
   const notaFinalEstimada = refuerzoRegistro
     ? calcularNotaFinalRefuerzo(
         refuerzoRegistro.notaOriginal,
@@ -911,6 +1039,7 @@ function ReporteNotasContenido() {
         refuerzoForm.estrategia,
       )
     : 0;
+
   // ==================== DESCARGA EXCEL ====================
   const exportarSeccionExcel = (sec: UnidadSeccion, estudianteId?: string) => {
     try {
@@ -929,7 +1058,6 @@ function ReporteNotasContenido() {
             aplicaActividad(estudiantesExportar[0], a),
           )
         : sec.actividades;
-      // Both layouts share applicability, final-grade and average rules.
       const notaExportar = (
         est: Estudiante,
         actividad: ActividadData,
@@ -1062,8 +1190,10 @@ function ReporteNotasContenido() {
             "_",
           )
         : "";
-      const nombreArchivo = `${nombreGrado}_${paralelo}_${materiaLimpia}${estudianteSufijo}_${fechaStr}.xlsx`;
-      XLSX.writeFile(wb, nombreArchivo);
+      XLSX.writeFile(
+        wb,
+        `${nombreGrado}_${paralelo}_${materiaLimpia}${estudianteSufijo}_${fechaStr}.xlsx`,
+      );
     } catch (error) {
       console.error("Error exportando Excel:", error);
       mostrarAviso(
@@ -1072,6 +1202,7 @@ function ReporteNotasContenido() {
       );
     }
   };
+
   // ==================== RENDER ====================
   if (!ready) {
     return (
@@ -1087,6 +1218,7 @@ function ReporteNotasContenido() {
       </Layout>
     );
   }
+
   return (
     <Layout>
       {erroresCarga.length > 0 && (
@@ -1115,12 +1247,12 @@ function ReporteNotasContenido() {
           </span>
         )}
       </div>
+
       {/* Grados a la izquierda; selector de vista a la derecha */}
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold text-[#64748B]">
-            <FaGraduationCap className="text-[10px] text-[#244563]" />
-            Grado:
+            <FaGraduationCap className="text-[10px] text-[#244563]" /> Grado:
           </span>
           {(modoEfectivo === "tutor"
             ? gradosTutorizados
@@ -1138,13 +1270,7 @@ function ReporteNotasContenido() {
                     ? setGradoTutorSel(g.id)
                     : setGradoDocenteSel(g.id)
                 }
-                className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-medium border transition-colors ${
-                  sel
-                    ? modoEfectivo === "tutor"
-                      ? "bg-[#244563] text-[#FFFFFF] border-[#244563]"
-                      : "bg-[#244563] text-[#FFFFFF] border-[#244563]"
-                    : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"
-                }`}
+                className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-medium border transition-colors ${sel ? "bg-[#244563] text-[#FFFFFF] border-[#244563]" : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"}`}
               >
                 {g.nombre} - {g.paralelo}
               </button>
@@ -1155,33 +1281,22 @@ function ReporteNotasContenido() {
           {esTutor && (
             <button
               onClick={() => setModoVista("tutor")}
-              className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${
-                modoEfectivo === "tutor"
-                  ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70"
-                  : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"
-              }`}
+              className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${modoEfectivo === "tutor" ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70" : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"}`}
             >
-              <FaUserTie className="text-[10px]" />
-              Vista Tutor
+              <FaUserTie className="text-[10px]" /> Vista Tutor
             </button>
           )}
           {tieneMaterias && (
             <button
               onClick={() => setModoVista("docente")}
-              className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${
-                modoEfectivo === "docente"
-                  ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70"
-                  : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"
-              }`}
+              className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${modoEfectivo === "docente" ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70" : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"}`}
             >
-              <FaChalkboardTeacher className="text-[10px]" />
-              Vista Docente
+              <FaChalkboardTeacher className="text-[10px]" /> Vista Docente
             </button>
           )}
         </div>
       </div>
 
-      {/* Loading */}
       {loading ? (
         <div className="text-center py-10">
           <FaSpinner className="animate-spin text-2xl text-[#244563] mx-auto mb-3" />
@@ -1208,11 +1323,10 @@ function ReporteNotasContenido() {
           </div>
         ) : (
           <div className="grid min-w-0 items-start gap-3 xl:grid-cols-[260px_minmax(0,1fr)]">
-            {/* Resumen compacto por estudiante */}
             <section className="min-w-0 overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF]">
               <header className="flex items-center justify-between gap-2 border-b border-[#D8DEE6] bg-[#ECEFF3] px-3 py-2">
                 <h3 className="flex items-center gap-1.5 text-xs font-semibold text-[#273444]">
-                  <FaUserGraduate className="text-[11px] text-[#244563]" />
+                  <FaUserGraduate className="text-[11px] text-[#244563]" />{" "}
                   Estudiantes en riesgo
                 </h3>
                 <span className="rounded bg-[#EAF0F6] px-1.5 py-0.5 text-[10px] font-bold text-[#244563]">
@@ -1244,8 +1358,6 @@ function ReporteNotasContenido() {
                 )}
               </div>
             </section>
-
-            {/* Detalle por materia */}
             <div className="min-w-0 space-y-3">
               {gruposPorMateria.map((grupo) => (
                 <div
@@ -1355,11 +1467,7 @@ function ReporteNotasContenido() {
                                     </>
                                   ) : (
                                     <span
-                                      className={`inline-block px-2 py-1 rounded text-[10px] font-bold ${
-                                        r.notaFinal < 5
-                                          ? "bg-red-100 text-[#AD3038] border border-red-300"
-                                          : "bg-amber-100 text-amber-700 border border-amber-300"
-                                      }`}
+                                      className={`inline-block px-2 py-1 rounded text-[10px] font-bold ${r.notaFinal < 5 ? "bg-red-100 text-[#AD3038] border border-red-300" : "bg-amber-100 text-amber-700 border border-amber-300"}`}
                                     >
                                       {r.notaOriginal}
                                     </span>
@@ -1605,6 +1713,7 @@ function ReporteNotasContenido() {
           cerrar={() => setInformeNotificacion(null)}
         />
       )}
+
       {/* Modal de detalle del estudiante */}
       {estudianteDetalle && (
         <div
@@ -1631,9 +1740,9 @@ function ReporteNotasContenido() {
                     Detalle de calificaciones
                   </h3>
                   <p className="truncate text-[10px] text-[#6B7280]">
-                    {estudianteDetalle.apellidos} {estudianteDetalle.nombres}
-                    {" · "}
-                    {gradoDocenteActual?.nombre} {gradoDocenteActual?.paralelo}
+                    {estudianteDetalle.apellidos} {estudianteDetalle.nombres}{" "}
+                    {" · "} {gradoDocenteActual?.nombre}{" "}
+                    {gradoDocenteActual?.paralelo}
                   </p>
                 </div>
               </div>
@@ -1766,13 +1875,7 @@ function ReporteNotasContenido() {
                                 </p>
                               </div>
                               <div
-                                className={`rounded-lg border px-3 py-2 text-center ${
-                                  notaFinal === null
-                                    ? "border-[#D8DEE6] bg-[#FFFFFF] text-[#9CA3AF]"
-                                    : notaFinal >= 7
-                                      ? "border-[#C8D6E5] bg-[#EAF0F6] text-[#1B354D]"
-                                      : "border-rose-200 bg-rose-50 text-rose-800"
-                                }`}
+                                className={`rounded-lg border px-3 py-2 text-center ${notaFinal === null ? "border-[#D8DEE6] bg-[#FFFFFF] text-[#9CA3AF]" : notaFinal >= 7 ? "border-[#C8D6E5] bg-[#EAF0F6] text-[#1B354D]" : "border-rose-200 bg-rose-50 text-rose-800"}`}
                               >
                                 <p className="text-[9px] font-semibold uppercase">
                                   Final
@@ -1797,11 +1900,7 @@ function ReporteNotasContenido() {
                                 Historial de refuerzos
                               </p>
                               <span
-                                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                  entradasRefuerzo.length
-                                    ? "bg-[#E2EAF3] text-[#1B354D]"
-                                    : "bg-[#ECEFF3] text-[#6B7280]"
-                                }`}
+                                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${entradasRefuerzo.length ? "bg-[#E2EAF3] text-[#1B354D]" : "bg-[#ECEFF3] text-[#6B7280]"}`}
                               >
                                 {entradasRefuerzo.length
                                   ? `${entradasRefuerzo.length} registrado(s)`
@@ -1836,11 +1935,7 @@ function ReporteNotasContenido() {
                                       <div className="min-w-0 flex-1">
                                         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                                           <span
-                                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                                              esFormal
-                                                ? "bg-[#EAF0F6] text-[#244563]"
-                                                : "bg-[#FFF7ED] text-[#9A4518]"
-                                            }`}
+                                            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${esFormal ? "bg-[#EAF0F6] text-[#244563]" : "bg-[#FFF7ED] text-[#9A4518]"}`}
                                           >
                                             {esFormal
                                               ? "Refuerzo formal"
@@ -1901,7 +1996,7 @@ function ReporteNotasContenido() {
         </div>
       )}
 
-      {/* Modal de refuerzo: diseño compartido con Calificaciones */}
+      {/* Modal de refuerzo */}
       {showRefuerzoModal && refuerzoRegistro && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-3 backdrop-blur-[2px] sm:p-4">
           <div
@@ -2096,15 +2191,7 @@ function ReporteNotasContenido() {
       {aviso && (
         <div className="fixed bottom-4 right-4 z-110 max-w-sm">
           <div
-            className={`flex items-start gap-2 p-3 rounded-lg shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] border border-l-4 bg-[#FFFFFF] text-[11px] ${
-              aviso.type === "success"
-                ? "border-[#A8BDD2] text-[#1B354D]"
-                : aviso.type === "error"
-                  ? "border-red-300 text-red-800"
-                  : aviso.type === "warning"
-                    ? "border-amber-300 text-amber-800"
-                    : "border-[#C8D6E5] text-[#244563]"
-            }`}
+            className={`flex items-start gap-2 p-3 rounded-lg shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] border border-l-4 bg-[#FFFFFF] text-[11px] ${aviso.type === "success" ? "border-[#A8BDD2] text-[#1B354D]" : aviso.type === "error" ? "border-red-300 text-red-800" : aviso.type === "warning" ? "border-amber-300 text-amber-800" : "border-[#C8D6E5] text-[#244563]"}`}
           >
             {aviso.type === "success" ? (
               <FaCheckCircle className="mt-0.5 shrink-0" />

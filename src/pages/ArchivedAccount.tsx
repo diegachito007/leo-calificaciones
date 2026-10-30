@@ -1,33 +1,35 @@
-import { useAuth } from '../context/AuthContext';
-import { FaArchive, FaEnvelope, FaSignOutAlt, FaInfoCircle } from 'react-icons/fa';
+import { useAuth } from "../context/AuthContext";
+import { FaArchive, FaEnvelope, FaSignOutAlt, FaInfoCircle } from "react-icons/fa";
 
 export default function ArchivedAccount() {
   const { user, logout } = useAuth();
 
   return (
-    <div className="min-h-screen bg-linear-to-br from-slate-100 to-slate-200 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden">
-        {/* Header */}
-        <div className="bg-linear-to-r from-slate-600 to-slate-700 px-6 py-8 text-center">
-          <div className="bg-white/20 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <FaArchive className="text-white text-3xl" />
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-lg overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+        
+        {/* Header Institucional */}
+        <div className="bg-[#244563] px-6 py-8 text-center">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-white/15 backdrop-blur">
+            <FaArchive className="text-3xl text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white mb-2">Cuenta Archivada</h1>
-          <p className="text-white/80 text-sm">
+          <h1 className="text-xl font-bold text-white mb-2">Cuenta Archivada</h1>
+          <p className="text-[11px] text-white/80">
             Tu cuenta ya no está activa en el sistema
           </p>
         </div>
 
         {/* Contenido */}
         <div className="p-6 space-y-5">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          {/* Alerta Informativa */}
+          <div className="rounded-lg border border-[#C8D6E5] bg-[#EAF0F6] p-4">
             <div className="flex items-start gap-3">
-              <FaInfoCircle className="text-blue-600 mt-0.5 shrink-0" />
+              <FaInfoCircle className="text-[#244563] mt-0.5 shrink-0 text-sm" />
               <div className="flex-1">
-                <h3 className="font-semibold text-blue-900 text-sm mb-1">
+                <h3 className="font-semibold text-[#1B354D] text-xs mb-1">
                   ¿Qué significa esto?
                 </h3>
-                <p className="text-blue-800 text-xs leading-relaxed">
+                <p className="text-[11px] leading-relaxed text-[#4B5563]">
                   Tu cuenta fue archivada por la administración de la institución.
                   Esto suele ocurrir cuando un docente deja de laborar temporal o
                   permanentemente. <strong>Tu historial académico se conserva</strong> para
@@ -37,32 +39,35 @@ export default function ArchivedAccount() {
             </div>
           </div>
 
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-            <h3 className="font-semibold text-amber-900 text-sm mb-2 flex items-center gap-2">
+          {/* Instrucciones de Reactivación */}
+          <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-4">
+            <h3 className="font-semibold text-amber-900 text-xs mb-2 flex items-center gap-2">
               <FaEnvelope className="text-amber-600" />
               ¿Cómo reactivar tu cuenta?
             </h3>
-            <p className="text-amber-800 text-xs leading-relaxed mb-3">
+            <p className="text-[11px] leading-relaxed text-amber-800 mb-3">
               Si has retornado a la institución o necesitas acceso nuevamente,
               contacta al administrador del sistema para solicitar la reactivación.
             </p>
-            <div className="bg-white rounded-lg p-3 border border-amber-200">
-              <p className="text-xs text-slate-600 mb-1">Usuario asociado:</p>
-              <p className="font-semibold text-slate-900 text-sm truncate">
+            <div className="rounded-md border border-amber-200 bg-[#FFFFFF] p-3">
+              <p className="text-[10px] text-[#6B7280] mb-1">Usuario asociado:</p>
+              <p className="font-semibold text-[#273444] text-xs truncate">
                 {user?.email}
               </p>
             </div>
           </div>
 
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
+          {/* Nota Final */}
+          <div className="rounded-lg border border-[#E4E8EE] bg-[#F8FAFC] p-3 text-[10px] leading-relaxed text-[#6B7280]">
             <strong>Nota:</strong> Una vez reactivado por el administrador,
             podrás volver a ingresar normalmente y se te reasignarán los grados
             correspondientes.
           </div>
 
+          {/* Botón de Cerrar Sesión */}
           <button
             onClick={async () => await logout()}
-            className="w-full inline-flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-800 text-white px-4 py-3 rounded-lg font-semibold transition-colors"
+            className="w-full inline-flex items-center justify-center gap-2 rounded-md bg-[#244563] px-4 py-2.5 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
           >
             <FaSignOutAlt className="text-sm" />
             Cerrar Sesión

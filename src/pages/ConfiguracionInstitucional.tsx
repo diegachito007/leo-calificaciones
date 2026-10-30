@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  collection,
   doc,
   setDoc,
-  getDocs,
   serverTimestamp,
+  onSnapshot,
   Timestamp,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
@@ -14,13 +13,14 @@ import {
   FaSave,
   FaBuilding,
   FaUserTie,
-  FaCheck,
   FaTimes,
   FaExclamationTriangle,
   FaCheckCircle,
   FaTimesCircle,
   FaInfoCircle,
+  FaArrowLeft,
 } from "react-icons/fa";
+
 interface ConfiguracionInstitucional {
   id?: string;
   nombreInstitucion: string;
@@ -37,18 +37,21 @@ interface ConfiguracionInstitucional {
   createdAt?: Timestamp | null;
   createdBy?: string;
 }
+
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
+
 export default function InstitutionSettings() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasData, setHasData] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+
   const [formData, setFormData] = useState<ConfiguracionInstitucional>({
     nombreInstitucion: "",
     codigoAmie: "",
@@ -60,6 +63,7 @@ export default function InstitutionSettings() {
     nombreDirectorEstudiosSociales: "",
     nombreDirectorLenguaLiteratura: "",
   });
+
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -71,43 +75,55 @@ export default function InstitutionSettings() {
     },
     [],
   );
+
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
-  const cargarConfiguracion = useCallback(async () => {
-    try {
-      setLoading(true);
-      const configSnap = await getDocs(
-        collection(db, "configuracionInstitucional"),
-      );
-      if (!configSnap.empty) {
-        const docData = configSnap.docs[0].data() as ConfiguracionInstitucional;
-        setFormData({
-          nombreInstitucion: docData.nombreInstitucion || "",
-          codigoAmie: docData.codigoAmie || "",
-          nombreRector: docData.nombreRector || "",
-          nombreVicerrector: docData.nombreVicerrector || "",
-          nombreInspectorGeneral: docData.nombreInspectorGeneral || "",
-          nombreDirectorMatematica: docData.nombreDirectorMatematica || "",
-          nombreDirectorCienciasNaturales: docData.nombreDirectorCienciasNaturales || "",
-          nombreDirectorEstudiosSociales: docData.nombreDirectorEstudiosSociales || "",
-          nombreDirectorLenguaLiteratura: docData.nombreDirectorLenguaLiteratura || "",
-        });
-        setHasData(true);
-      } else {
-        setHasData(false);
-      }
-    } catch (error) {
-      console.error("Error cargando configuración:", error);
-      mostrarToast(
-        "error",
-        "Error al cargar",
-        "No se pudo cargar la configuración institucional.",
-      );
-    } finally {
-      setLoading(false);
-    }
+
+  // ✅ OPTIMIZACIÓN FIREBASE: Uso de onSnapshot en lugar de getDocs
+  // Esto reutiliza la caché local y solo hace 1 lectura inicial.
+  useEffect(() => {
+    const configRef = doc(db, "configuracionInstitucional", "principal");
+
+    const unsubscribe = onSnapshot(
+      configRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const docData = docSnap.data() as ConfiguracionInstitucional;
+          setFormData({
+            nombreInstitucion: docData.nombreInstitucion || "",
+            codigoAmie: docData.codigoAmie || "",
+            nombreRector: docData.nombreRector || "",
+            nombreVicerrector: docData.nombreVicerrector || "",
+            nombreInspectorGeneral: docData.nombreInspectorGeneral || "",
+            nombreDirectorMatematica: docData.nombreDirectorMatematica || "",
+            nombreDirectorCienciasNaturales:
+              docData.nombreDirectorCienciasNaturales || "",
+            nombreDirectorEstudiosSociales:
+              docData.nombreDirectorEstudiosSociales || "",
+            nombreDirectorLenguaLiteratura:
+              docData.nombreDirectorLenguaLiteratura || "",
+          });
+          setHasData(true);
+        } else {
+          setHasData(false);
+        }
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Error cargando configuración:", error);
+        mostrarToast(
+          "error",
+          "Error al cargar",
+          "No se pudo cargar la configuración institucional.",
+        );
+        setLoading(false);
+      },
+    );
+
+    return () => unsubscribe();
   }, [mostrarToast]);
+
   const guardarConfiguracion = useCallback(async () => {
     if (
       !formData.nombreInstitucion.trim() ||
@@ -127,9 +143,11 @@ export default function InstitutionSettings() {
       );
       return;
     }
+
     try {
       setSaving(true);
       const configRef = doc(db, "configuracionInstitucional", "principal");
+
       const dataToSave = {
         nombreInstitucion: formData.nombreInstitucion.trim(),
         codigoAmie: formData.codigoAmie.trim(),
@@ -137,12 +155,16 @@ export default function InstitutionSettings() {
         nombreVicerrector: formData.nombreVicerrector.trim(),
         nombreInspectorGeneral: formData.nombreInspectorGeneral.trim(),
         nombreDirectorMatematica: formData.nombreDirectorMatematica.trim(),
-        nombreDirectorCienciasNaturales: formData.nombreDirectorCienciasNaturales.trim(),
-        nombreDirectorEstudiosSociales: formData.nombreDirectorEstudiosSociales.trim(),
-        nombreDirectorLenguaLiteratura: formData.nombreDirectorLenguaLiteratura.trim(),
+        nombreDirectorCienciasNaturales:
+          formData.nombreDirectorCienciasNaturales.trim(),
+        nombreDirectorEstudiosSociales:
+          formData.nombreDirectorEstudiosSociales.trim(),
+        nombreDirectorLenguaLiteratura:
+          formData.nombreDirectorLenguaLiteratura.trim(),
         updatedAt: serverTimestamp(),
         updatedBy: user?.uid || "",
       };
+
       if (!hasData) {
         await setDoc(configRef, {
           ...dataToSave,
@@ -152,7 +174,7 @@ export default function InstitutionSettings() {
       } else {
         await setDoc(configRef, dataToSave, { merge: true });
       }
-      setHasData(true);
+
       mostrarToast(
         "success",
         "Configuración guardada",
@@ -169,139 +191,151 @@ export default function InstitutionSettings() {
       setSaving(false);
     }
   }, [formData, hasData, user, mostrarToast]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await guardarConfiguracion();
   };
-  useEffect(() => {
-    const loadData = async () => {
-      await cargarConfiguracion();
-    };
-    loadData();
-  }, [cargarConfiguracion]);
+
   const toastConfig = {
     success: {
       bg: "border-l-[#6687A5]",
       iconBg: "bg-[#244563]",
-      titleColor: "text-[#273444]",
-      msgColor: "text-[#64748B]",
       icon: FaCheckCircle,
     },
     error: {
       bg: "border-l-red-400",
       iconBg: "bg-[#C93F45]",
-      titleColor: "text-[#273444]",
-      msgColor: "text-[#64748B]",
       icon: FaTimesCircle,
     },
     warning: {
       bg: "border-l-amber-400",
       iconBg: "bg-amber-500",
-      titleColor: "text-[#273444]",
-      msgColor: "text-[#64748B]",
       icon: FaExclamationTriangle,
     },
     info: {
       bg: "border-l-[#244563]",
       iconBg: "bg-[#244563]",
-      titleColor: "text-[#273444]",
-      msgColor: "text-[#64748B]",
       icon: FaInfoCircle,
     },
   };
+
   if (loading) {
     return (
-      <div>
-        <Layout>
-          <div className="flex items-center justify-center py-12">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#244563] border-t-transparent mx-auto mb-3"></div>
-              <p className="text-[#6B7280] text-[11px] font-medium">
-                Cargando configuración...
-              </p>
-            </div>
+      <Layout>
+        <div className="flex items-center justify-center py-20">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-10 w-10 border-2 border-[#244563] border-t-transparent mx-auto mb-3"></div>
+            <p className="text-[#4B5563] text-sm font-medium">
+              Cargando configuración...
+            </p>
           </div>
-        </Layout>
-      </div>
+        </div>
+      </Layout>
     );
   }
+
   return (
-    <div>
-      <Layout>
-        <div className="mx-auto w-full max-w-175">
-          {!hasData && (
-            <div className="bg-[#ECEFF3] border border-[#D8DEE6] rounded-lg px-3 py-2.5 mb-3">
-              <div className="flex items-start gap-3">
-                <div className="bg-[#ECEFF3] p-1.5 rounded-md">
-                  <FaExclamationTriangle className="text-[#C96522] text-sm" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-[#4B5563] font-semibold text-[11px] mb-0.5">
-                    Configuración pendiente
-                  </h3>
-                  <p className="text-[#6B7280] text-[11px]">
-                    Esta es la primera vez que configuras la institución.
-                    Completa los datos a continuación para que aparezcan en
-                    todos los reportes del sistema.
-                  </p>
-                </div>
+    <Layout>
+      <div className="mx-auto w-full max-w-5xl space-y-4">
+        {/* Cabecera del módulo con botón de regreso */}
+        <div className="flex items-center gap-3 mb-2">
+          <button
+            onClick={() => window.history.back()}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563] transition-colors hover:bg-[#F3F4F6] hover:text-[#273444]"
+            title="Volver"
+          >
+            <FaArrowLeft className="text-sm" />
+          </button>
+          <div>
+            <h1 className="text-base font-semibold tracking-tight text-[#244563]">
+              Configuración Institucional
+            </h1>
+            <p className="text-[11px] text-[#6B7280]">
+              Define los datos oficiales que aparecerán en los reportes del
+              sistema.
+            </p>
+          </div>
+        </div>
+
+        {/* Alerta de primera configuración */}
+        {!hasData && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3">
+            <div className="flex items-start gap-2.5">
+              <FaExclamationTriangle className="mt-0.5 shrink-0 text-sm text-amber-600" />
+              <div className="min-w-0">
+                <h3 className="text-xs font-semibold text-amber-900">
+                  Configuración pendiente
+                </h3>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800">
+                  Esta es la primera vez que configuras la institución. Completa
+                  los datos a continuación para que aparezcan en todos los
+                  reportes del sistema.
+                </p>
               </div>
             </div>
-          )}
-          <form
-            onSubmit={handleSubmit}
-            className="bg-[#FFFFFF] rounded-lg shadow-sm border border-[#D8DEE6] overflow-hidden"
-          >
-            <div className="bg-[#ECEFF3] border-b border-[#D8DEE6] px-3 py-2">
-              <h3 className="text-[#4B5563] font-semibold text-[11px] flex items-center gap-2">
-                <FaBuilding className="text-sm" />
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Tarjeta: Datos de la Institución */}
+          <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
+            <header className="border-b border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2.5">
+              <h3 className="text-xs font-semibold text-[#4B5563] flex items-center gap-2">
+                <FaBuilding className="text-[#244563]" />
                 Datos de la Institución
               </h3>
-            </div>
-            <div className="p-3 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-3">
-                <div>
-                  <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Nombre oficial de la institución *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.nombreInstitucion}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        nombreInstitucion: e.target.value,
-                      })
-                    }
-                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder='Ej: CECIBEB "Leonardo Pérez Muñoz"'
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Código AMIE *
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.codigoAmie}
-                    onChange={(e) =>
-                      setFormData({ ...formData, codigoAmie: e.target.value })
-                    }
-                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: 10B00020"
-                    required
-                  />
-                </div>
+            </header>
+            <div className="p-4 grid grid-cols-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-4">
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                  Nombre oficial de la institución *
+                </label>
+                <input
+                  type="text"
+                  value={formData.nombreInstitucion}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      nombreInstitucion: e.target.value,
+                    })
+                  }
+                  className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
+                  placeholder='Ej: CECIBEB "Leonardo Pérez Muñoz"'
+                  required
+                />
               </div>
-              <div className="border-t border-[#E4E8EE] pt-3">
-                <h4 className="text-[11px] font-semibold text-[#4B5563] mb-2 flex items-center gap-2">
-                  <FaUserTie className="text-[#244563]" />
-                  Autoridades institucionales
-                </h4>
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                  Código AMIE *
+                </label>
+                <input
+                  type="text"
+                  value={formData.codigoAmie}
+                  onChange={(e) =>
+                    setFormData({ ...formData, codigoAmie: e.target.value })
+                  }
+                  className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
+                  placeholder="Ej: 10B00020"
+                  required
+                />
+              </div>
+            </div>
+          </section>
+
+          {/* Tarjeta: Autoridades */}
+          <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
+            <header className="border-b border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2.5">
+              <h3 className="text-xs font-semibold text-[#4B5563] flex items-center gap-2">
+                <FaUserTie className="text-[#244563]" />
+                Autoridades Institucionales
+              </h3>
+            </header>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Nombre completo del Rector/a con título *
+                    Rector/a (con título) *
                   </label>
                   <input
                     type="text"
@@ -310,184 +344,164 @@ export default function InstitutionSettings() {
                       setFormData({ ...formData, nombreRector: e.target.value })
                     }
                     className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: Mgs. Juan Pérez o Lic. María González"
+                    placeholder="Ej: Mgs. Juan Pérez"
                     required
                   />
-                  <p className="text-[10px] text-[#6B7280] mt-1">
-                    Incluye el título profesional al inicio (Lic., Ing., Dr.,
-                    Mgs., etc.)
-                  </p>
                 </div>
-                <div className="mt-3">
-                  <label htmlFor="nombreVicerrector" className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Nombre completo del Vicerrector/a con título *
+                <div>
+                  <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                    Vicerrector/a (con título) *
                   </label>
                   <input
-                    id="nombreVicerrector"
                     type="text"
                     value={formData.nombreVicerrector}
-                    onChange={(e) => setFormData({ ...formData, nombreVicerrector: e.target.value })}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        nombreVicerrector: e.target.value,
+                      })
+                    }
                     className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: Mgs. María González"
+                    placeholder="Ej: Lic. María González"
                     required
                   />
                 </div>
-                <div className="mt-3">
-                  <label htmlFor="nombreInspectorGeneral" className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Nombre completo del Inspector/a general con título *
-                  </label>
-                  <input
-                    id="nombreInspectorGeneral"
-                    type="text"
-                    value={formData.nombreInspectorGeneral}
-                    onChange={(e) => setFormData({ ...formData, nombreInspectorGeneral: e.target.value })}
-                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: Lic. Carlos Ramírez"
-                    required
-                  />
-                </div>
-                <fieldset className="mt-4 min-w-0 border-t border-[#E4E8EE] pt-3">
-                  <legend className="px-1 text-[11px] font-semibold text-[#273444]">Directores de área</legend>
-                  <p className="mb-2 text-[10px] text-[#64748B]">Nombre completo y título profesional de cada director/a.</p>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="min-w-0">
-                  <label htmlFor="nombreDirectorMatematica" className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Matemática *
-                  </label>
-                  <input
-                    id="nombreDirectorMatematica"
-                    type="text"
-                    value={formData.nombreDirectorMatematica}
-                    onChange={(e) => setFormData({ ...formData, nombreDirectorMatematica: e.target.value })}
-                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: Mgs. Ana López"
-                    required
-                  />
-                </div>
-                <div className="min-w-0">
-                  <label htmlFor="nombreDirectorCienciasNaturales" className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Ciencias Naturales *
-                  </label>
-                  <input
-                    id="nombreDirectorCienciasNaturales"
-                    type="text"
-                    value={formData.nombreDirectorCienciasNaturales}
-                    onChange={(e) => setFormData({ ...formData, nombreDirectorCienciasNaturales: e.target.value })}
-                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: Mgs. Ana López"
-                    required
-                  />
-                </div>
-                <div className="min-w-0">
-                  <label htmlFor="nombreDirectorEstudiosSociales" className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Estudios Sociales *
-                  </label>
-                  <input
-                    id="nombreDirectorEstudiosSociales"
-                    type="text"
-                    value={formData.nombreDirectorEstudiosSociales}
-                    onChange={(e) => setFormData({ ...formData, nombreDirectorEstudiosSociales: e.target.value })}
-                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: Mgs. Ana López"
-                    required
-                  />
-                </div>
-                <div className="min-w-0">
-                  <label htmlFor="nombreDirectorLenguaLiteratura" className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
-                    Lengua y Literatura *
-                  </label>
-                  <input
-                    id="nombreDirectorLenguaLiteratura"
-                    type="text"
-                    value={formData.nombreDirectorLenguaLiteratura}
-                    onChange={(e) => setFormData({ ...formData, nombreDirectorLenguaLiteratura: e.target.value })}
-                    className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
-                    placeholder="Ej: Mgs. Ana López"
-                    required
-                  />
-                </div>
-                  </div>
-                </fieldset>
               </div>
-              {(formData.nombreInstitucion ||
-                formData.codigoAmie ||
-                formData.nombreRector ||
-                formData.nombreVicerrector ||
-                formData.nombreInspectorGeneral ||
-                formData.nombreDirectorMatematica ||
-                formData.nombreDirectorCienciasNaturales ||
-                formData.nombreDirectorEstudiosSociales ||
-                formData.nombreDirectorLenguaLiteratura) && (
-                <div className="bg-[#ECEFF3] border border-[#E4E8EE] rounded-md px-3 py-2.5">
-                  <div className="flex items-center gap-1.5 text-[#64748B] mb-1.5">
-                    <FaCheck className="text-sm" />
-                    <span className="text-[11px] font-semibold">
-                      Vista previa en reportes:
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-[#4B5563] space-y-1 wrap-break-word">
-                    {formData.nombreInstitucion && (
-                      <p>
-                        <strong>Institución:</strong>{" "}
-                        {formData.nombreInstitucion}
-                      </p>
-                    )}
-                    {formData.codigoAmie && (
-                      <p>
-                        <strong>Código AMIE:</strong> {formData.codigoAmie}
-                      </p>
-                    )}
-                    {formData.nombreRector && (
-                      <p>
-                        <strong>Rector/a:</strong> {formData.nombreRector}
-                      </p>
-                    )}
-                    {formData.nombreVicerrector && (
-                      <p><strong>Vicerrector/a:</strong> {formData.nombreVicerrector}</p>
-                    )}
-                    {formData.nombreInspectorGeneral && (
-                      <p><strong>Inspector/a general:</strong> {formData.nombreInspectorGeneral}</p>
-                    )}
-                    {formData.nombreDirectorMatematica && (
-                      <p><strong>Director/a de Matemática:</strong> {formData.nombreDirectorMatematica}</p>
-                    )}
-                    {formData.nombreDirectorCienciasNaturales && (
-                      <p><strong>Director/a de Ciencias Naturales:</strong> {formData.nombreDirectorCienciasNaturales}</p>
-                    )}
-                    {formData.nombreDirectorEstudiosSociales && (
-                      <p><strong>Director/a de Estudios Sociales:</strong> {formData.nombreDirectorEstudiosSociales}</p>
-                    )}
-                    {formData.nombreDirectorLenguaLiteratura && (
-                      <p><strong>Director/a de Lengua y Literatura:</strong> {formData.nombreDirectorLenguaLiteratura}</p>
-                    )}
-                  </div>
-                </div>
-              )}
-              <div className="flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-[#E4E8EE]">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="inline-flex h-8 items-center justify-center gap-1.5 bg-[#244563] hover:bg-[#1B354D] text-[#FFFFFF] px-3 rounded-md transition-colors text-[11px] font-semibold disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                >
-                  <FaSave className="text-xs" />
-                  {saving
-                    ? "Guardando..."
-                    : hasData
-                      ? "Actualizar configuración"
-                      : "Guardar configuración"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => window.history.back()}
-                  className="inline-flex h-8 items-center justify-center gap-1.5 bg-[#FFFFFF] hover:bg-[#ECEFF3] border border-[#BFC9D4] text-[#4B5563] px-3 rounded-md transition-colors text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-                >
-                  <FaTimes className="text-xs" />
-                  Cancelar
-                </button>
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                  Inspector/a General (con título) *
+                </label>
+                <input
+                  type="text"
+                  value={formData.nombreInspectorGeneral}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      nombreInspectorGeneral: e.target.value,
+                    })
+                  }
+                  className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
+                  placeholder="Ej: Lic. Carlos Ramírez"
+                  required
+                />
               </div>
             </div>
-          </form>
-        </div>
+          </section>
+
+          {/* Tarjeta: Directores de Área */}
+          <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
+            <header className="border-b border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2.5">
+              <h3 className="text-xs font-semibold text-[#4B5563] flex items-center gap-2">
+                <FaUserTie className="text-[#244563]" />
+                Directores de Área
+              </h3>
+              <p className="text-[10px] text-[#6B7280] mt-0.5">
+                Nombres completos con título profesional.
+              </p>
+            </header>
+            <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                  Matemática *
+                </label>
+                <input
+                  type="text"
+                  value={formData.nombreDirectorMatematica}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      nombreDirectorMatematica: e.target.value,
+                    })
+                  }
+                  className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
+                  placeholder="Ej: Mgs. Ana López"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                  Ciencias Naturales *
+                </label>
+                <input
+                  type="text"
+                  value={formData.nombreDirectorCienciasNaturales}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      nombreDirectorCienciasNaturales: e.target.value,
+                    })
+                  }
+                  className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
+                  placeholder="Ej: Mgs. Pedro Ruiz"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                  Estudios Sociales *
+                </label>
+                <input
+                  type="text"
+                  value={formData.nombreDirectorEstudiosSociales}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      nombreDirectorEstudiosSociales: e.target.value,
+                    })
+                  }
+                  className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
+                  placeholder="Ej: Lic. Laura Torres"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-1">
+                  Lengua y Literatura *
+                </label>
+                <input
+                  type="text"
+                  value={formData.nombreDirectorLenguaLiteratura}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      nombreDirectorLenguaLiteratura: e.target.value,
+                    })
+                  }
+                  className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors"
+                  placeholder="Ej: Mgs. José Díaz"
+                  required
+                />
+              </div>
+            </div>
+          </section>
+
+          {/* Footer de acciones */}
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => window.history.back()}
+              className="inline-flex h-8 items-center justify-center gap-1.5 bg-[#FFFFFF] hover:bg-[#ECEFF3] border border-[#BFC9D4] text-[#4B5563] px-4 rounded-md transition-colors text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+            >
+              <FaTimes className="text-xs" />
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="inline-flex h-8 items-center justify-center gap-1.5 bg-[#244563] hover:bg-[#1B354D] text-[#FFFFFF] px-4 rounded-md transition-colors text-[11px] font-semibold disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+            >
+              <FaSave className="text-xs" />
+              {saving
+                ? "Guardando..."
+                : hasData
+                  ? "Actualizar configuración"
+                  : "Guardar configuración"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Toasts Flotantes */}
       <div className="pointer-events-none fixed right-3 top-3 z-100 w-full max-w-xs space-y-2">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -495,7 +509,7 @@ export default function InstitutionSettings() {
           return (
             <div
               key={toast.id}
-              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] ${config.bg}`}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}
             >
               <span
                 className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}
@@ -523,7 +537,6 @@ export default function InstitutionSettings() {
           );
         })}
       </div>
-      </Layout>
-    </div>
+    </Layout>
   );
 }

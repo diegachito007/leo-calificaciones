@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
-  getDocs,
+  limit,
   onSnapshot,
+  orderBy,
   query,
   where,
 } from "firebase/firestore";
@@ -24,7 +25,13 @@ import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import { db } from "../lib/firebase";
 import type { Estudiante } from "../types";
-import { cargarCacheNotificaciones } from "../utils/notificacionesCache";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  asegurarEstudiantesCache,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+} from "../utils/estudiantesCache";
 import {
   fechaLimiteISO,
   generarPdfNotificacion,
@@ -118,6 +125,15 @@ export default function Notificaciones() {
   const { user, userData } = useAuth();
   const { anioActivo, periodoActual, periodos, grados } = useData();
   const uid = user?.uid || "";
+
+  // ============================================================
+  // FASE 3.4: ACCESO A LA CACHÉ COMPARTIDA DE ESTUDIANTES
+  // ============================================================
+  const accesoCache = useMemo(
+    () => claveAccesoEstudiantes(user?.uid, userData),
+    [user?.uid, userData],
+  );
+
   const [datos, setDatos] = useState<{
     uid: string;
     notas: NotificacionRegistrada[];
@@ -146,6 +162,9 @@ export default function Notificaciones() {
     uid: "",
     items: [],
   });
+
+  // 3 onSnapshot conservados (historial, atenciones, auditoría).
+  // Fase 4 podría filtrarlos por rango y limitarlos.
   useEffect(() => {
     if (!uid) return;
     const a = onSnapshot(
@@ -193,77 +212,76 @@ export default function Notificaciones() {
       b();
     };
   }, [uid]);
-  useEffect(() => {
-    if (!uid || !anioActivo?.id) return;
-    let vivo = true;
-    const anio = anioActivo.id;
-    const rol = userData?.role || "";
-    const gradosActivos = grados
-      .filter((g) => g.anioLectivoId === anio && g.activo)
-      .map((g) => g.id)
-      .sort();
-    const clave = JSON.stringify([uid, anio, rol, gradosActivos]);
 
-    void cargarCacheNotificaciones(clave, async () => {
-      const asignadas = await getDocs(
-        query(
-          collection(db, "asignaturasDocente"),
-          where("docenteId", "==", uid),
-          where("anioLectivoId", "==", anio),
-          where("activo", "==", true),
-        ),
-      );
-      const ids = new Set<string>(
-        asignadas.docs.map((d) => d.data().gradoId as string),
-      );
-      if (rol === "super_admin") {
-        grados
-          .filter((g) => g.anioLectivoId === anio && g.activo)
-          .forEach((g) => ids.add(g.id));
-      }
-      const gradoIds = Array.from(ids).filter((id) =>
-        grados.some((g) => g.id === id && g.anioLectivoId === anio),
-      );
+  // ============================================================
+  // FASE 3.4: NÓMINA DESDE estudiantesCache
+  // (antes: cargarCacheNotificaciones + getDocs con gradoId in [...])
+  // ============================================================
+  useEffect(() => {
+    if (!uid || !anioActivo?.id || !accesoCache) return;
+    const anio = anioActivo.id;
+
+    // Grados permitidos por el perfil (mismo criterio que estudiantesCache).
+    const gradosPermitidos = [
+      ...new Set([
+        ...(userData?.gradosAsignados ?? []),
+        ...(userData?.tutorDe ?? []),
+      ]),
+    ].filter((id) =>
+      grados.some((g) => g.id === id && g.anioLectivoId === anio),
+    );
+
+    if (gradosPermitidos.length === 0) {
+      void Promise.resolve().then(() => setAlumnos({ uid, anio, items: [] }));
+      return;
+    }
+
+    // 1. Aseguramos la caché de cada grado permitido.
+    gradosPermitidos.forEach((gradoId) => {
+      const clave = claveConsultaEstudiantes(accesoCache, anio, gradoId);
+      if (clave) asegurarEstudiantesCache(clave);
+    });
+
+    // 2. Extraemos estudiantes de la caché (solo activos del año).
+    const actualizarDesdeCache = () => {
       const items: Estudiante[] = [];
-      for (let i = 0; i < gradoIds.length; i += 10) {
-        const snap = await getDocs(
-          query(
-            collection(db, "estudiantes"),
-            where("gradoId", "in", gradoIds.slice(i, i + 10)),
-            where("activo", "==", true),
-          ),
-        );
-        snap.docs.forEach((d) => {
-          const e = { ...d.data(), id: d.id } as Estudiante;
-          if (e.anioLectivoId === anio) items.push(e);
+      gradosPermitidos.forEach((gradoId) => {
+        const clave = claveConsultaEstudiantes(accesoCache, anio, gradoId);
+        if (!clave) return;
+        const estadoCache = leerEstudiantesCache(clave);
+        if (estadoCache.estado !== "listo") return;
+        estadoCache.items.forEach((e) => {
+          if (e.activo !== true) return;
+          if (e.anioLectivoId && e.anioLectivoId !== anio) return;
+          items.push(e);
         });
-      }
-      return items.sort((a, b) =>
+      });
+      items.sort((a, b) =>
         `${a.apellidos} ${a.nombres}`.localeCompare(
           `${b.apellidos} ${b.nombres}`,
         ),
       );
-    })
-      .then((items) => {
-        if (vivo) setAlumnos({ uid, anio, items });
-      })
-      .catch(() => {
-        if (vivo)
-          setError(
-            "No se pudieron cargar los estudiantes para atención sin notificación. Revisa conexión y permisos.",
-          );
-      });
-
-    return () => {
-      vivo = false;
+      setAlumnos({ uid, anio, items });
     };
-  }, [uid, anioActivo?.id, userData?.role, grados]);
+
+    actualizarDesdeCache();
+    const unsubscribe = observarEstudiantesCache(actualizarDesdeCache);
+
+    return () => unsubscribe();
+  }, [uid, anioActivo?.id, userData, grados, accesoCache]);
+
   useEffect(() => {
     if (!uid || !sel || !verCambios) return;
+    // FASE 5: La auditoría solo se consulta cuando el usuario abre el
+    // historial. Limitamos a 50 documentos para evitar traer años de
+    // historial y mantener la carga rápida. El filtro por fecha puede
+    // agregarse en el futuro si es necesario.
     return onSnapshot(
       query(
         collection(db, "notificacionesNotasAuditoria"),
         where("docenteId", "==", uid),
+        orderBy("registradoEn", "desc"),
+        limit(50),
       ),
       (s) =>
         setCambios({
@@ -273,6 +291,7 @@ export default function Notificaciones() {
       () => setError("No se pudo consultar el historial de cambios."),
     );
   }, [uid, sel, verCambios]);
+
   const notas = useMemo(
     () => (datos.uid === uid ? datos.notas : []),
     [datos, uid],
@@ -1044,11 +1063,9 @@ export default function Notificaciones() {
                       )
                       .map((c) => (
                         <p key={c.id}>
-                          {c.registradoEn
-                            ?.toDate()
-                            .toLocaleString("es-EC", {
-                              timeZone: "America/Guayaquil",
-                            }) || "Confirmando…"}{" "}
+                          {c.registradoEn?.toDate().toLocaleString("es-EC", {
+                            timeZone: "America/Guayaquil",
+                          }) || "Confirmando…"}{" "}
                           ·{" "}
                           {(
                             {

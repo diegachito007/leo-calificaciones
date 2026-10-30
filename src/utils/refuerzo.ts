@@ -141,10 +141,29 @@ const leerPorIds = async <T>(
 };
 
 /**
+ * Contexto opcional que el llamador puede pasar para evitar consultas
+ * redundantes cuando ya tiene los datos en memoria.
+ *
+ * Si se omite una de las propiedades, esa parte se consulta como antes.
+ * Si se pasa un Map, se usa como caché: se consulta solo lo que falte.
+ */
+export interface ContextoRecalculoEnMemoria {
+  /** Actividades ya cargadas por el llamador (por id). */
+  actividades?: Map<string, ActividadConsolidable>;
+  /** Calificaciones ya cargadas por el llamador (por id). */
+  calificaciones?: Map<string, CalificacionConRefuerzo>;
+  /** Estudiantes ya cargados por el llamador (por id). */
+  estudiantes?: Map<string, Estudiante>;
+}
+
+/**
  * Recalcula y persiste la nota de los insumos (actividades consolidadas) que
  * agrupan alguna de las actividades indicadas. Se llama tras aplicar, editar o
  * revertir un refuerzo sobre calificaciones individuales para que el promedio
  * del insumo refleje las notas finales con refuerzo.
+ *
+ * Acepta un contexto opcional en memoria para evitar consultas redundantes.
+ * Sin contexto, el comportamiento es idéntico al anterior.
  */
 export interface ResultadoRecalculo {
   ok: boolean;
@@ -155,14 +174,28 @@ export interface ResultadoRecalculo {
 
 export async function recalcularInsumos(
   actividadesAfectadas: string[],
+  contextoEnMemoria?: ContextoRecalculoEnMemoria,
 ): Promise<ResultadoRecalculo> {
   const ids = [...new Set(actividadesAfectadas.filter(Boolean))];
   if (ids.length === 0) return { ok: true, actualizados: 0 };
   try {
-    const afectadas = await leerPorIds<ActividadConsolidable>(
-      "actividades",
-      ids,
-    );
+    // ---- 1. Actividades afectadas: leer solo las que falten en memoria ----
+    const cacheActividades = contextoEnMemoria?.actividades;
+    const faltantesActividades = cacheActividades
+      ? ids.filter((id) => !cacheActividades.has(id))
+      : ids;
+    const afectadasLeidas =
+      faltantesActividades.length > 0
+        ? await leerPorIds<ActividadConsolidable>(
+            "actividades",
+            faltantesActividades,
+          )
+        : [];
+    afectadasLeidas.forEach((a) => cacheActividades?.set(a.id, a));
+    const afectadas: ActividadConsolidable[] = ids
+      .map((id) => cacheActividades?.get(id))
+      .filter((a): a is ActividadConsolidable => !!a);
+
     // Insumos candidatos: consolidados de las mismas destrezas/ámbitos.
     const claves = [
       ...new Set(
@@ -181,14 +214,20 @@ export async function recalcularInsumos(
       );
       snap.docs.forEach((d) => {
         const a = { id: d.id, ...d.data() } as ActividadConsolidable;
-        if (a.esConsolidado) candidatos.set(d.id, a);
+        if (a.esConsolidado) {
+          candidatos.set(d.id, a);
+          cacheActividades?.set(d.id, a);
+        }
       });
       const snap2 = await getDocs(
         query(collection(db, "actividades"), where("ambitoId", "in", lote)),
       );
       snap2.docs.forEach((d) => {
         const a = { id: d.id, ...d.data() } as ActividadConsolidable;
-        if (a.esConsolidado) candidatos.set(d.id, a);
+        if (a.esConsolidado) {
+          candidatos.set(d.id, a);
+          cacheActividades?.set(d.id, a);
+        }
       });
     }
     const afectadasSet = new Set(ids);
@@ -204,53 +243,89 @@ export async function recalcularInsumos(
       );
       if (agrupadasIds.length === 0) continue;
 
-      const [fuentes, estudiantesInsumo, calsAgrupadas, calsInsumoSnap] =
-        await Promise.all([
-          leerPorIds<ActividadConsolidable>("actividades", agrupadasIds),
-          insumo.gradoId
-            ? getDocs(
-                query(
-                  collection(db, "estudiantes"),
-                  where("gradoId", "==", insumo.gradoId),
-                ),
-              )
-            : Promise.resolve(null),
-          (async () => {
-            const arr: CalificacionConRefuerzo[] = [];
-            for (let i = 0; i < agrupadasIds.length; i += CHUNK) {
-              const lote = agrupadasIds.slice(i, i + CHUNK);
-              const snap = await getDocs(
-                query(
-                  collection(db, "calificaciones"),
-                  where("actividadId", "in", lote),
-                ),
-              );
-              snap.docs.forEach((d) =>
-                arr.push({ id: d.id, ...d.data() } as CalificacionConRefuerzo),
-              );
+      // ---- 2. Actividades agrupadas: usar memoria si las hay ----
+      const faltantesAgrupadas = cacheActividades
+        ? agrupadasIds.filter((id) => !cacheActividades.has(id))
+        : agrupadasIds;
+      const agrupadasLeidas =
+        faltantesAgrupadas.length > 0
+          ? await leerPorIds<ActividadConsolidable>(
+              "actividades",
+              faltantesAgrupadas,
+            )
+          : [];
+      agrupadasLeidas.forEach((a) => cacheActividades?.set(a.id, a));
+      const fuentes: ActividadConsolidable[] = agrupadasIds
+        .map((id) => cacheActividades?.get(id))
+        .filter((a): a is ActividadConsolidable => !!a);
+
+      // ---- 3. Estudiantes del grado: usar memoria si los hay ----
+      const cacheEstudiantes = contextoEnMemoria?.estudiantes;
+      const estDe = new Map<string, Estudiante>();
+      if (insumo.gradoId) {
+        if (cacheEstudiantes) {
+          // Filtrar del Map los que pertenezcan al grado
+          for (const [id, est] of cacheEstudiantes.entries()) {
+            if ((est as Estudiante & { gradoId?: string }).gradoId === insumo.gradoId) {
+              estDe.set(id, est);
             }
-            return arr;
-          })(),
-          getDocs(
+          }
+        }
+        if (estDe.size === 0) {
+          const estudiantesInsumo = await getDocs(
+            query(
+              collection(db, "estudiantes"),
+              where("gradoId", "==", insumo.gradoId),
+            ),
+          );
+          estudiantesInsumo.docs.forEach((d) => {
+            const e = { id: d.id, ...d.data() } as Estudiante;
+            estDe.set(e.id, e);
+            cacheEstudiantes?.set(e.id, e);
+          });
+        }
+      }
+
+      // ---- 4. Calificaciones de las actividades agrupadas: usar memoria si las hay ----
+      const cacheCalificaciones = contextoEnMemoria?.calificaciones;
+      const calsAgrupadas: CalificacionConRefuerzo[] = [];
+      // Si el llamador pasó calificaciones en memoria, intentar filtrar por actividadId
+      if (cacheCalificaciones) {
+        const agrupadasSet = new Set(agrupadasIds);
+        for (const cal of cacheCalificaciones.values()) {
+          if (agrupadasSet.has(cal.actividadId)) calsAgrupadas.push(cal);
+        }
+      }
+      // Si no hay suficiente en memoria, consultar solo lo que falte
+      if (calsAgrupadas.length === 0) {
+        for (let i = 0; i < agrupadasIds.length; i += CHUNK) {
+          const lote = agrupadasIds.slice(i, i + CHUNK);
+          const snap = await getDocs(
             query(
               collection(db, "calificaciones"),
-              where("actividadId", "==", insumo.id),
+              where("actividadId", "in", lote),
             ),
-          ),
-        ]);
+          );
+          snap.docs.forEach((d) => {
+            const c = { id: d.id, ...d.data() } as CalificacionConRefuerzo;
+            calsAgrupadas.push(c);
+            cacheCalificaciones?.set(c.id, c);
+          });
+        }
+      }
 
-      // El promedio considera TODAS las actividades agrupadas del insumo
-      // (la afectada trae su refuerzo recién aplicado).
+      // ---- 5. Calificaciones del insumo: siempre consultar (son pocas y específicas) ----
+      const calsInsumoSnap = await getDocs(
+        query(
+          collection(db, "calificaciones"),
+          where("actividadId", "==", insumo.id),
+        ),
+      );
+
+      // ---- 6. Cálculo (sin cambios) ----
       const fuenteDe = new Map(fuentes.map((f) => [f.id, f]));
-      const estDe = new Map<string, Estudiante>();
-      if (estudiantesInsumo) {
-        estudiantesInsumo.docs.forEach((d) => {
-          const e = { id: d.id, ...d.data() } as Estudiante;
-          estDe.set(e.id, e);
-        });
-      } else {
+      if (estDe.size === 0) {
         // Sin gradoId en el insumo: derivar estudiantes de las calificaciones
-        // (sin datos de adaptación) para no descartar a nadie del promedio.
         calsAgrupadas.forEach((c) => {
           if (!estDe.has(c.estudianteId))
             estDe.set(c.estudianteId, {
@@ -259,8 +334,6 @@ export async function recalcularInsumos(
         });
       }
 
-      // Promedio por estudiante con las notas finales (con refuerzo) de las
-      // actividades agrupadas, igual que al crear el insumo.
       const acum: Record<string, { suma: number; conteo: number }> = {};
       calsAgrupadas.forEach((c) => {
         const fuente = fuenteDe.get(c.actividadId);
@@ -298,7 +371,10 @@ export async function recalcularInsumos(
           const notaActual = Number(
             (actual?.data() as CalificacionConRefuerzo | undefined)?.nota,
           );
-          if (Number.isFinite(notaActual) && Math.abs(notaActual - promedio) < 1e-9)
+          if (
+            Number.isFinite(notaActual) &&
+            Math.abs(notaActual - promedio) < 1e-9
+          )
             return;
           batch.update(doc(db, "calificaciones", existenteId), {
             nota: promedio,
