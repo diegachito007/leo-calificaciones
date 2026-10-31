@@ -2551,14 +2551,16 @@ function ContenidoCalificaciones() {
     const modalAbierto = menuChipsAbierto[idClave] || false;
 
     // 🎨 Función para asignar colores sutiles según el texto
-    // 🎨 Función para asignar colores sutiles según el texto
-    const getColorChip = (texto: string) => {
+    const getColorChip = (texto: string, activo: boolean) => {
+      // Si no está activo, siempre es gris neutro
+      if (!activo) {
+        return "bg-[#ECEFF3] border-transparent text-[#4B5563] hover:bg-[#E4E8EE]";
+      }
+
+      // Si está activo, evaluamos el texto para darle su color
       const t = texto.toLowerCase();
 
       // ⚠️ IMPORTANTE: Evaluar primero los casos negativos/intermedios
-      // para evitar que "incompleto" sea capturado por "completo".
-
-      // Ámbar para estados intermedios o de advertencia
       if (
         t.includes("incompleto") ||
         t.includes("parcial") ||
@@ -2567,10 +2569,9 @@ function ContenidoCalificaciones() {
         t.includes("pausada") ||
         t.includes("fuera de plazo")
       ) {
-        return "bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]"; // Ámbar muy suave
+        return "bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]"; // Ámbar
       }
 
-      // Rojo para estados negativos o ausencias
       if (
         t.includes("no presentó") ||
         t.includes("no rindió") ||
@@ -2579,10 +2580,9 @@ function ContenidoCalificaciones() {
         t.includes("ausente") ||
         t.includes("no quiso")
       ) {
-        return "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]"; // Rojo muy suave
+        return "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]"; // Rojo
       }
 
-      // Verde para estados positivos (Evaluado al final)
       if (
         t.includes("completo") ||
         t.includes("entregado") ||
@@ -2590,20 +2590,21 @@ function ContenidoCalificaciones() {
         t.includes("dominio") ||
         t.includes("buena")
       ) {
-        return "bg-[#F0FDF4] border-[#BBF7D0] text-[#166534]"; // Verde muy suave
+        return "bg-[#F0FDF4] border-[#BBF7D0] text-[#166534]"; // Verde
       }
 
-      // Gris neutral por defecto
-      return "bg-[#ECEFF3] border-transparent text-[#4B5563] hover:bg-[#E2E5EA]";
+      // Si no coincide con nada, azul institucional
+      return "bg-[#EAF0F6] border-[#C8D6E5] text-[#244563]";
     };
 
     return (
       <>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Chips Principales con colores sutiles */}
+          {/* Chips Principales con colores sutiles */}
           {chipsPrincipales.map((chip) => {
             const activo = obsActual.includes(chip);
-            const colorBase = getColorChip(chip);
+            const colorBase = getColorChip(chip, activo);
 
             return (
               <button
@@ -2618,10 +2619,8 @@ function ContenidoCalificaciones() {
                         : `${obsActual}. ${chip}`;
                   onUpdate(nuevoTexto);
                 }}
-                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors border ${
-                  activo
-                    ? `${colorBase} shadow-sm ring-1 ring-inset ring-black/5` // Si está activo, se mantiene su color y se le añade un anillo
-                    : `${colorBase} opacity-80 hover:opacity-100` // Si está inactivo, se ve un poco más tenue
+                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors border ${colorBase} ${
+                  activo ? "shadow-sm ring-1 ring-inset ring-black/5" : ""
                 }`}
               >
                 {chip}
@@ -2670,6 +2669,9 @@ function ContenidoCalificaciones() {
               <div className="flex max-h-[50vh] flex-wrap gap-2 overflow-y-auto">
                 {chipsRestantes.map((chip) => {
                   const activo = obsActual.includes(chip);
+                  // 👇 Aquí pasamos el segundo argumento 'activo' a la función
+                  const colorBase = getColorChip(chip, activo);
+
                   return (
                     <button
                       key={chip}
@@ -2687,11 +2689,8 @@ function ContenidoCalificaciones() {
                           [idClave]: false,
                         }));
                       }}
-                      className={`rounded-md px-3 py-2 text-[11px] font-medium transition-colors ${
-                        activo
-                          ? "bg-[#EAF0F6] text-[#244563] ring-1 ring-inset ring-[#C8D6E5]"
-                          : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#E4E8EE]"
-                      }`}
+                      // 👇 Aplicamos las clases del colorBase generado
+                      className={`rounded-md px-3 py-2 text-[11px] font-medium transition-colors border ${colorBase}`}
                     >
                       {chip}
                     </button>
@@ -2725,6 +2724,9 @@ function ContenidoCalificaciones() {
               <div className="flex max-h-[50vh] flex-wrap gap-2 overflow-y-auto">
                 {chipsRestantes.map((chip) => {
                   const activo = obsActual.includes(chip);
+                  // 👇 Aquí pasamos el segundo argumento 'activo' a la función
+                  const colorBase = getColorChip(chip, activo);
+
                   return (
                     <button
                       key={chip}
@@ -2742,11 +2744,8 @@ function ContenidoCalificaciones() {
                           [idClave]: false,
                         }));
                       }}
-                      className={`rounded-md px-3 py-2 text-[11px] font-medium transition-colors ${
-                        activo
-                          ? "bg-[#EAF0F6] text-[#244563] ring-1 ring-inset ring-[#C8D6E5]"
-                          : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#E4E8EE]"
-                      }`}
+                      // 👇 Aplicamos las clases del colorBase generado
+                      className={`rounded-md px-3 py-2 text-[11px] font-medium transition-colors border ${colorBase}`}
                     >
                       {chip}
                     </button>
