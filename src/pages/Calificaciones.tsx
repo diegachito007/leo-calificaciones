@@ -4082,7 +4082,8 @@ function ContenidoCalificaciones() {
           ? "border-amber-200 bg-amber-50/10 hover:bg-amber-50/30 hover:border-amber-400 focus-within:border-amber-400 focus-within:ring-amber-400/20"
           : esConsolidadoSel
             ? "border-[#FDBA74] bg-[#FFF7ED]/10 hover:bg-[#FFF7ED]/30 hover:border-[#C96522] focus-within:border-[#244563] focus-within:ring-[#244563]/20"
-            : "border-[#D8DEE6] bg-white"
+            : // 👇 AQUÍ CAMBIAMOS EL BORDE BASE Y LA SOMBRA
+              "border-[#BFC9D4] bg-white shadow-sm hover:shadow-md"
     } 
     
     ${
@@ -4092,8 +4093,9 @@ function ContenidoCalificaciones() {
           ? "border-l-4 border-l-amber-400"
           : esConsolidadoSel
             ? "border-l-4 border-l-[#FDBA74]"
-            : "border-l-4 border-l-[#C8D6E5] group-hover:border-l-[#244563] group-focus-within:border-l-[#244563]"
-    } shadow-[0_1px_2px_rgba(0,0,0,0.02)]`}
+            : // 👇 AQUÍ CAMBIAMOS EL ACENTO IZQUIERDO A UN AZUL MÁS NOTORIO
+              "border-l-4 border-l-[#6687A5] group-hover:border-l-[#244563] group-focus-within:border-l-[#244563]"
+    }`}
                               >
                                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                                   <div className="min-w-0 flex-1">
