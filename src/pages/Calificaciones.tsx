@@ -4012,7 +4012,7 @@ function ContenidoCalificaciones() {
                             Enter o Tab para avanzar
                           </span>
                         </div>
-                        <div className="divide-y divide-[#E4E8EE]">
+                        <div className="space-y-2.5 p-2 bg-[#FFFFFF]">
                           {estudiantesAplicables.map((est, index) => {
                             const calificacion = calificaciones[est.id];
                             const notaStr = calificacion?.nota || "";
@@ -4066,15 +4066,38 @@ function ContenidoCalificaciones() {
                             return (
                               <div
                                 key={est.id}
-                                className={`border-l-2 px-2.5 py-1.5 transition-colors hover:bg-[#F3F4F6] ${
-                                  bloqueadoPorAusenciaHoy
-                                    ? "border-l-[#C93F45]"
-                                    : ausenteAntiguo
-                                      ? "border-l-amber-400"
-                                      : esConsolidadoSel
-                                        ? "border-l-[#FDBA74]"
-                                        : "border-l-[#D8DEE6]"
-                                }`}
+                                className={`group rounded-lg border p-3 transition-all duration-200 
+    /* Fondo interactivo */
+    hover:bg-[#F8FAFC] focus-within:bg-[#F8FAFC] 
+    
+    /* 👇 Borde AZUL OSCURO para ambos estados. Ya no hay colores distintos */
+    hover:border-[#244563] focus-within:border-[#244563] 
+    
+    /* 👇 Sombra sutil y el anillo de enfoque azul */
+    hover:shadow-[0_4px_12px_rgba(36,69,99,0.08)] 
+    focus-within:shadow-[0_4px_12px_rgba(36,69,99,0.08)] 
+    focus-within:ring-2 focus-within:ring-[#244563]/20
+    
+    ${
+      bloqueadoPorAusenciaHoy
+        ? "border-red-200 bg-red-50/10 hover:bg-red-50/30 hover:border-[#C93F45] focus-within:border-[#C93F45] focus-within:ring-[#C93F45]/20"
+        : ausenteAntiguo
+          ? "border-amber-200 bg-amber-50/10 hover:bg-amber-50/30 hover:border-amber-400 focus-within:border-amber-400 focus-within:ring-amber-400/20"
+          : esConsolidadoSel
+            ? "border-[#FDBA74] bg-[#FFF7ED]/10 hover:bg-[#FFF7ED]/30 hover:border-[#C96522] focus-within:border-[#244563] focus-within:ring-[#244563]/20"
+            : "border-[#D8DEE6] bg-white"
+    } 
+    
+    /* Acento izquierdo AZUL OSCURO en ambos estados */
+    ${
+      bloqueadoPorAusenciaHoy
+        ? "border-l-4 border-l-[#C93F45]"
+        : ausenteAntiguo
+          ? "border-l-4 border-l-amber-400"
+          : esConsolidadoSel
+            ? "border-l-4 border-l-[#FDBA74]"
+            : "border-l-4 border-l-[#C8D6E5] group-hover:border-l-[#244563] group-focus-within:border-l-[#244563]"
+    } shadow-[0_1px_2px_rgba(0,0,0,0.02)]`}
                               >
                                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                                   <div className="min-w-0 flex-1">
@@ -4152,7 +4175,7 @@ function ContenidoCalificaciones() {
                                       onClick={() =>
                                         abrirFichaEstudiante(est.id)
                                       }
-                                      className="inline-flex h-8 items-center gap-1 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2 text-[10px] font-semibold text-[#4B5563] transition-colors hover:border-[#C96522]/40 hover:bg-[#F3F4F6] hover:text-[#273444]"
+                                      className="inline-flex h-9 items-center gap-1 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2.5 text-[10px] font-semibold text-[#4B5563] transition-colors hover:border-[#244563]/30 hover:bg-[#EAF0F6]/50 hover:text-[#244563]"
                                       title="Ver y calificar todas las actividades"
                                     >
                                       <FaListUl className="text-[10px]" />{" "}
@@ -4212,7 +4235,10 @@ function ContenidoCalificaciones() {
                                                 : esConsolidadoSel
                                                   ? "border-[#D8DEE6] bg-[#FFF7ED] text-[#9A3412]"
                                                   : "border-[#BFC9D4] bg-[#FFFFFF] text-[#374151]"
-                                          } ${tieneRefuerzo || esConsolidadoSel ? "cursor-not-allowed" : ""}`}
+                                          } ${tieneRefuerzo || esConsolidadoSel ? "cursor-not-allowed" : ""} ${
+                                            // 👇 AQUÍ EL CAMBIO DE FOCO A GRIS CON SOMBRA
+                                            "focus:border-[#9CA3AF] focus:ring-[#9CA3AF]/20 focus:shadow-sm"
+                                          }`}
                                         />
                                         {letra && (
                                           <span
@@ -4310,11 +4336,13 @@ function ContenidoCalificaciones() {
                                             ? "Observación (sugerido: justificar la nota)"
                                             : "Observación (opcional)..."
                                         }
-                                        // 👇 En PC (lg) el input se estira (flex-1), en móvil ocupa todo (w-full)
-                                        className={`h-8 w-full lg:flex-1 rounded-md border px-2 text-[11px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
+                                        className={`h-9 w-full lg:flex-1 rounded-md border px-2.5 text-xs transition-colors focus:outline-none focus:ring-2 ${
                                           ausenteAntiguo
                                             ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                             : "border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563]"
+                                        } ${
+                                          // 👇 AQUÍ EL CAMBIO DE FOCO A GRIS CON SOMBRA
+                                          "focus:border-[#9CA3AF] focus:ring-[#9CA3AF]/20 focus:shadow-sm"
                                         }`}
                                       />
                                       <div className="flex shrink-0 items-center overflow-x-auto">
@@ -5459,6 +5487,7 @@ function ContenidoCalificaciones() {
       {showFichaModal && fichaEstudianteId && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-3 backdrop-blur-[2px] sm:p-4">
           <div className="flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+            {/* Header del Modal */}
             <div className="flex items-start justify-between gap-3 border-b border-[#E4E8EE] px-4 py-3">
               <div className="flex min-w-0 items-center gap-2.5">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[#EAF0F6] text-[#244563]">
@@ -5492,12 +5521,14 @@ function ContenidoCalificaciones() {
                 <FaTimes className="text-sm" />
               </button>
             </div>
+
+            {/* Contenido del Modal */}
             {fichaLoading ? (
               <div className="flex flex-1 items-center justify-center py-12">
                 <FaSpinner className="animate-spin text-2xl text-[#244563]" />
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto">
+              <div className="flex-1 overflow-y-auto bg-[#FFFFFF] p-2.5 space-y-2">
                 {[...actividadesVisibles]
                   .filter(
                     (a) =>
@@ -5531,18 +5562,25 @@ function ContenidoCalificaciones() {
                           a.estrategiaNota,
                         )
                       : null;
+
                     return (
                       <div
                         key={a.id}
-                        className={`border-b border-[#E4E8EE] px-3 py-2 last:border-0 ${
-                          modificada
-                            ? "bg-[#F3F4F6]"
-                            : bloqueada
-                              ? "bg-red-50/30"
-                              : a.esConsolidado
-                                ? "bg-[#F9FAFB]"
-                                : ""
-                        }`}
+                        className={`group rounded-lg border p-3 transition-all duration-200 
+                          hover:bg-[#F8FAFC] focus-within:bg-[#F8FAFC] 
+                          hover:border-[#244563] focus-within:border-[#244563] 
+                          hover:shadow-[0_4px_12px_rgba(36,69,99,0.08)] 
+                          focus-within:shadow-[0_4px_12px_rgba(36,69,99,0.08)] 
+                          focus-within:ring-2 focus-within:ring-[#244563]/20
+                          ${
+                            modificada
+                              ? "border-[#244563]/30 bg-[#F8FAFC]"
+                              : bloqueada
+                                ? "border-red-200 bg-red-50/20 hover:border-[#C93F45] focus-within:border-[#C93F45] focus-within:ring-[#C93F45]/20"
+                                : a.esConsolidado
+                                  ? "border-[#FDBA74] bg-[#FFF7ED]/20 hover:border-[#C96522] focus-within:border-[#244563]"
+                                  : "border-[#D8DEE6] bg-[#FFFFFF]"
+                          }`}
                       >
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
                           <div className="min-w-0 flex-1">
@@ -5563,11 +5601,6 @@ function ContenidoCalificaciones() {
                                   Modificada
                                 </span>
                               )}
-                              {!modificada && base?.notaGuardada && (
-                                <span className="rounded bg-[#EAF0F6] px-1.5 py-px text-[10px] font-semibold text-[#1B354D] ring-1 ring-inset ring-[#C8D6E5]">
-                                  Guardada
-                                </span>
-                              )}
                               {!modificada && !base?.notaGuardada && (
                                 <span className="rounded bg-[#ECEFF3] px-1.5 py-px text-[10px] font-semibold text-[#64748B]">
                                   Sin nota
@@ -5584,7 +5617,7 @@ function ContenidoCalificaciones() {
                                 </span>
                               )}
                             </div>
-                            <p className="mt-0.5 truncate text-[11px] font-medium text-[#374151]">
+                            <p className="mt-1 truncate text-[11px] font-medium text-[#374151] transition-colors group-focus-within:text-[#244563]">
                               {a.detalle}
                             </p>
                           </div>
@@ -5627,11 +5660,10 @@ function ContenidoCalificaciones() {
                                   }));
                                 }}
                                 placeholder="0-10"
-                                className="h-8 w-16 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-1.5 text-center text-xs font-bold text-[#374151] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20"
+                                className="h-9 w-20 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-1.5 text-center text-sm font-bold text-[#374151] transition-colors focus:border-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#9CA3AF]/20 focus:shadow-sm"
                               />
                             )}
 
-                            {/* 👇 BOTÓN DE REFUERZO EN LA FICHA 👇 */}
                             {!bloqueada &&
                               !a.esConsolidado &&
                               ((notaNumerica !== undefined &&
@@ -5665,7 +5697,7 @@ function ContenidoCalificaciones() {
                                       );
                                     }
                                   }}
-                                  className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md bg-orange-50 px-2 text-[10px] font-semibold text-[#A9501A] ring-1 ring-inset ring-orange-200 transition-colors hover:bg-orange-100"
+                                  className="inline-flex h-9 shrink-0 items-center gap-1 rounded-md bg-orange-50 px-2 text-[10px] font-semibold text-[#A9501A] ring-1 ring-inset ring-orange-200 transition-colors hover:bg-orange-100"
                                   title="Aplicar refuerzo a esta actividad"
                                 >
                                   <FaSyncAlt className="text-[10px]" />{" "}
@@ -5677,9 +5709,7 @@ function ContenidoCalificaciones() {
                         {(valor !== "" || !!base?.notaGuardada) &&
                           !bloqueada &&
                           !a.esConsolidado && (
-                            // 👇 flex-col para que SIEMPRE estén apilados (input arriba, chips abajo)
-                            <div className="mt-1 flex flex-col gap-1.5">
-                              {/* El input ocupa el 100% del ancho en todos los dispositivos */}
+                            <div className="mt-1.5 flex flex-col gap-1.5">
                               <input
                                 type="text"
                                 value={obsActual}
@@ -5694,7 +5724,7 @@ function ContenidoCalificaciones() {
                                     ? "Nota baja: indica el motivo..."
                                     : "Observación (opcional)..."
                                 }
-                                className={`h-8 w-full rounded-md border px-2 text-[10px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
+                                className={`h-9 w-full rounded-md border px-2.5 text-xs transition-colors focus:border-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#9CA3AF]/20 focus:shadow-sm ${
                                   esNotaBaja
                                     ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                     : obsModificada
@@ -5703,7 +5733,6 @@ function ContenidoCalificaciones() {
                                 }`}
                               />
 
-                              {/* Los chips bajan a la siguiente fila. flex-wrap asegura que si no caben, se vayan a otra línea sin desbordarse */}
                               <div className="flex flex-wrap items-center gap-1.5">
                                 {renderizarChipsObservacion(
                                   `ficha-${a.id}`,
@@ -5724,6 +5753,8 @@ function ContenidoCalificaciones() {
                   })}
               </div>
             )}
+
+            {/* Footer del Modal */}
             <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#F3F4F6] px-4 py-3 sm:flex-row sm:justify-end">
               <button
                 onClick={() => {
