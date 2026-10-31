@@ -2551,9 +2551,38 @@ function ContenidoCalificaciones() {
     const modalAbierto = menuChipsAbierto[idClave] || false;
 
     // 🎨 Función para asignar colores sutiles según el texto
+    // 🎨 Función para asignar colores sutiles según el texto
     const getColorChip = (texto: string) => {
       const t = texto.toLowerCase();
-      // Verde para estados positivos
+
+      // ⚠️ IMPORTANTE: Evaluar primero los casos negativos/intermedios
+      // para evitar que "incompleto" sea capturado por "completo".
+
+      // Ámbar para estados intermedios o de advertencia
+      if (
+        t.includes("incompleto") ||
+        t.includes("parcial") ||
+        t.includes("corrección") ||
+        t.includes("dificultad") ||
+        t.includes("pausada") ||
+        t.includes("fuera de plazo")
+      ) {
+        return "bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]"; // Ámbar muy suave
+      }
+
+      // Rojo para estados negativos o ausencias
+      if (
+        t.includes("no presentó") ||
+        t.includes("no rindió") ||
+        t.includes("copiado") ||
+        t.includes("plagio") ||
+        t.includes("ausente") ||
+        t.includes("no quiso")
+      ) {
+        return "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]"; // Rojo muy suave
+      }
+
+      // Verde para estados positivos (Evaluado al final)
       if (
         t.includes("completo") ||
         t.includes("entregado") ||
@@ -2563,26 +2592,7 @@ function ContenidoCalificaciones() {
       ) {
         return "bg-[#F0FDF4] border-[#BBF7D0] text-[#166534]"; // Verde muy suave
       }
-      // Ámbar para estados intermedios
-      if (
-        t.includes("incompleto") ||
-        t.includes("parcial") ||
-        t.includes("corrección") ||
-        t.includes("dificultad") ||
-        t.includes("pausada")
-      ) {
-        return "bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]"; // Ámbar muy suave
-      }
-      // Rojo para estados negativos
-      if (
-        t.includes("no presentó") ||
-        t.includes("no rindió") ||
-        t.includes("copiado") ||
-        t.includes("plagio") ||
-        t.includes("ausente")
-      ) {
-        return "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]"; // Rojo muy suave
-      }
+
       // Gris neutral por defecto
       return "bg-[#ECEFF3] border-transparent text-[#4B5563] hover:bg-[#E2E5EA]";
     };
