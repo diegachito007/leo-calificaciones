@@ -2546,15 +2546,14 @@ function ContenidoCalificaciones() {
     onUpdate: (nuevoTexto: string) => void,
   ) => {
     const todosLosChips = obtenerChips(tipoActividad, materia);
-    // Los primeros 3 son los "principales"
     const chipsPrincipales = todosLosChips.slice(0, 3);
     const chipsRestantes = todosLosChips.slice(3);
     const modalAbierto = menuChipsAbierto[idClave] || false;
 
     return (
       <>
-        <div className="flex flex-wrap items-center gap-1">
-          {/* Chips Principales */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* Chips Principales con colores suaves */}
           {chipsPrincipales.map((chip) => {
             const activo = obsActual.includes(chip);
             return (
@@ -2570,10 +2569,10 @@ function ContenidoCalificaciones() {
                         : `${obsActual}. ${chip}`;
                   onUpdate(nuevoTexto);
                 }}
-                className={`rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors ${
+                className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors border ${
                   activo
-                    ? "bg-[#EAF0F6] text-[#244563] ring-1 ring-inset ring-[#C8D6E5]"
-                    : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#E4E8EE]"
+                    ? "bg-[#EAF0F6] border-[#C8D6E5] text-[#244563] shadow-sm"
+                    : "bg-[#ECEFF3] border-transparent text-[#4B5563] hover:bg-[#E2E5EA]"
                 }`}
               >
                 {chip}
@@ -2581,7 +2580,7 @@ function ContenidoCalificaciones() {
             );
           })}
 
-          {/* Botón para abrir el modal con el resto */}
+          {/* Botón Más Opciones */}
           {chipsRestantes.length > 0 && (
             <button
               type="button"
@@ -2591,7 +2590,7 @@ function ContenidoCalificaciones() {
                   [idClave]: true,
                 }))
               }
-              className="rounded px-1.5 py-0.5 text-[9px] font-medium bg-[#FFFFFF] text-[#244563] border border-[#C8D6E5] hover:bg-[#EAF0F6] flex items-center gap-1 shadow-sm"
+              className="rounded-md px-2 py-1 text-[10px] font-medium bg-[#FFFFFF] text-[#244563] border border-[#D8DEE6] hover:bg-[#EAF0F6] flex items-center gap-1 shadow-sm transition-colors"
             >
               <FaPlus className="text-[8px]" /> Más opciones
             </button>
@@ -4245,7 +4244,8 @@ function ContenidoCalificaciones() {
                                   )}
                                 {!bloqueadoPorAusenciaHoy &&
                                   !esConsolidadoSel && (
-                                    <div className="mt-1 flex flex-col gap-1.5 sm:w-1/2 sm:flex-row sm:items-center">
+                                    // 👇 En PC (lg) ocupa el 50%, en Tablet/Móvil ocupa el 100%
+                                    <div className="mt-1 flex flex-col gap-1.5 lg:flex-row lg:items-center lg:w-1/2">
                                       <input
                                         type="text"
                                         value={calificacion?.observacion || ""}
@@ -4261,13 +4261,14 @@ function ContenidoCalificaciones() {
                                             ? "Observación (sugerido: justificar la nota)"
                                             : "Observación (opcional)..."
                                         }
-                                        className={`h-8 w-full sm:flex-1 rounded-md border px-2 text-[11px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
+                                        // 👇 En PC (lg) el input se estira (flex-1), en móvil ocupa todo (w-full)
+                                        className={`h-8 w-full lg:flex-1 rounded-md border px-2 text-[11px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
                                           ausenteAntiguo
                                             ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                             : "border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563]"
                                         }`}
                                       />
-                                      <div className="flex shrink-0 items-center">
+                                      <div className="flex shrink-0 items-center overflow-x-auto">
                                         {renderizarChipsObservacion(
                                           `lista-${est.id}`,
                                           actividadSeleccionada?.tipo || "",
@@ -5627,8 +5628,9 @@ function ContenidoCalificaciones() {
                         {(valor !== "" || !!base?.notaGuardada) &&
                           !bloqueada &&
                           !a.esConsolidado && (
-                            // 👇 Quitamos el sm:w-1/2 para que el input use todo el ancho disponible en el modal
-                            <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:w-full">
+                              {" "}
+                              {/* 👈 flex-wrap */}
                               <input
                                 type="text"
                                 value={obsActual}
@@ -5643,8 +5645,8 @@ function ContenidoCalificaciones() {
                                     ? "Nota baja: indica el motivo..."
                                     : "Observación (opcional)..."
                                 }
-                                // 👇 sm:flex-1 asegura que el input crezca para llenar el modal
-                                className={`h-8 w-full sm:flex-1 rounded-md border px-2 text-[10px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
+                                // 👇 w-full en móvil, flex-1 en PC
+                                className={`h-9 w-full sm:flex-1 rounded-md border px-3 text-[11px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
                                   esNotaBaja
                                     ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                     : obsModificada
