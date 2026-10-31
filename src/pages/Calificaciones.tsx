@@ -2550,12 +2550,51 @@ function ContenidoCalificaciones() {
     const chipsRestantes = todosLosChips.slice(3);
     const modalAbierto = menuChipsAbierto[idClave] || false;
 
+    // 🎨 Función para asignar colores sutiles según el texto
+    const getColorChip = (texto: string) => {
+      const t = texto.toLowerCase();
+      // Verde para estados positivos
+      if (
+        t.includes("completo") ||
+        t.includes("entregado") ||
+        t.includes("excelente") ||
+        t.includes("dominio") ||
+        t.includes("buena")
+      ) {
+        return "bg-[#F0FDF4] border-[#BBF7D0] text-[#166534]"; // Verde muy suave
+      }
+      // Ámbar para estados intermedios
+      if (
+        t.includes("incompleto") ||
+        t.includes("parcial") ||
+        t.includes("corrección") ||
+        t.includes("dificultad") ||
+        t.includes("pausada")
+      ) {
+        return "bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]"; // Ámbar muy suave
+      }
+      // Rojo para estados negativos
+      if (
+        t.includes("no presentó") ||
+        t.includes("no rindió") ||
+        t.includes("copiado") ||
+        t.includes("plagio") ||
+        t.includes("ausente")
+      ) {
+        return "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]"; // Rojo muy suave
+      }
+      // Gris neutral por defecto
+      return "bg-[#ECEFF3] border-transparent text-[#4B5563] hover:bg-[#E2E5EA]";
+    };
+
     return (
       <>
         <div className="flex flex-wrap items-center gap-1.5">
-          {/* Chips Principales con colores suaves */}
+          {/* Chips Principales con colores sutiles */}
           {chipsPrincipales.map((chip) => {
             const activo = obsActual.includes(chip);
+            const colorBase = getColorChip(chip);
+
             return (
               <button
                 key={chip}
@@ -2571,8 +2610,8 @@ function ContenidoCalificaciones() {
                 }}
                 className={`rounded-md px-2 py-1 text-[10px] font-medium transition-colors border ${
                   activo
-                    ? "bg-[#EAF0F6] border-[#C8D6E5] text-[#244563] shadow-sm"
-                    : "bg-[#ECEFF3] border-transparent text-[#4B5563] hover:bg-[#E2E5EA]"
+                    ? `${colorBase} shadow-sm ring-1 ring-inset ring-black/5` // Si está activo, se mantiene su color y se le añade un anillo
+                    : `${colorBase} opacity-80 hover:opacity-100` // Si está inactivo, se ve un poco más tenue
                 }`}
               >
                 {chip}
@@ -2580,7 +2619,7 @@ function ContenidoCalificaciones() {
             );
           })}
 
-          {/* Botón Más Opciones */}
+          {/* Botón Más Opciones (Mantiene su estilo neutral) */}
           {chipsRestantes.length > 0 && (
             <button
               type="button"
@@ -5628,9 +5667,9 @@ function ContenidoCalificaciones() {
                         {(valor !== "" || !!base?.notaGuardada) &&
                           !bloqueada &&
                           !a.esConsolidado && (
-                            <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:w-full">
-                              {" "}
-                              {/* 👈 flex-wrap */}
+                            // 👇 flex-col para que SIEMPRE estén apilados (input arriba, chips abajo)
+                            <div className="mt-1 flex flex-col gap-1.5">
+                              {/* El input ocupa el 100% del ancho en todos los dispositivos */}
                               <input
                                 type="text"
                                 value={obsActual}
@@ -5645,8 +5684,7 @@ function ContenidoCalificaciones() {
                                     ? "Nota baja: indica el motivo..."
                                     : "Observación (opcional)..."
                                 }
-                                // 👇 w-full en móvil, flex-1 en PC
-                                className={`h-9 w-full sm:flex-1 rounded-md border px-3 text-[11px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
+                                className={`h-8 w-full rounded-md border px-2 text-[10px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
                                   esNotaBaja
                                     ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                     : obsModificada
@@ -5654,7 +5692,9 @@ function ContenidoCalificaciones() {
                                       : "border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563]"
                                 }`}
                               />
-                              <div className="flex shrink-0 items-center">
+
+                              {/* Los chips bajan a la siguiente fila. flex-wrap asegura que si no caben, se vayan a otra línea sin desbordarse */}
+                              <div className="flex flex-wrap items-center gap-1.5">
                                 {renderizarChipsObservacion(
                                   `ficha-${a.id}`,
                                   a.tipo,
