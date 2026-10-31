@@ -4245,7 +4245,7 @@ function ContenidoCalificaciones() {
                                   )}
                                 {!bloqueadoPorAusenciaHoy &&
                                   !esConsolidadoSel && (
-                                    <div className="mt-1 flex flex-col gap-1.5 sm:w-1/2 sm:flex-row sm:items-center">
+                                    <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:w-[60%]">
                                       <input
                                         type="text"
                                         value={calificacion?.observacion || ""}
@@ -4261,13 +4261,13 @@ function ContenidoCalificaciones() {
                                             ? "Observación (sugerido: justificar la nota)"
                                             : "Observación (opcional)..."
                                         }
-                                        className={`h-8 w-full sm:flex-1 rounded-md border px-2 text-[11px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
+                                        className={`h-8 min-w-50 flex-1 rounded-md border px-2 text-[11px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
                                           ausenteAntiguo
                                             ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                             : "border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563]"
                                         }`}
                                       />
-                                      <div className="flex shrink-0 items-center">
+                                      <div className="flex shrink-0 items-center overflow-x-auto">
                                         {renderizarChipsObservacion(
                                           `lista-${est.id}`,
                                           actividadSeleccionada?.tipo || "",
@@ -5627,8 +5627,7 @@ function ContenidoCalificaciones() {
                         {(valor !== "" || !!base?.notaGuardada) &&
                           !bloqueada &&
                           !a.esConsolidado && (
-                            // 👇 Quitamos el sm:w-1/2 para que el input use todo el ancho disponible en el modal
-                            <div className="mt-1 flex flex-col gap-1.5 sm:flex-row sm:items-center">
+                            <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:w-[75%]">
                               <input
                                 type="text"
                                 value={obsActual}
@@ -5643,8 +5642,7 @@ function ContenidoCalificaciones() {
                                     ? "Nota baja: indica el motivo..."
                                     : "Observación (opcional)..."
                                 }
-                                // 👇 sm:flex-1 asegura que el input crezca para llenar el modal
-                                className={`h-8 w-full sm:flex-1 rounded-md border px-2 text-[10px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
+                                className={`h-8 min-w-50 flex-1 rounded-md border px-2 text-[10px] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 ${
                                   esNotaBaja
                                     ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                     : obsModificada
@@ -5652,7 +5650,7 @@ function ContenidoCalificaciones() {
                                       : "border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563]"
                                 }`}
                               />
-                              <div className="flex shrink-0 items-center">
+                              <div className="flex shrink-0 items-center overflow-x-auto">
                                 {renderizarChipsObservacion(
                                   `ficha-${a.id}`,
                                   a.tipo,
