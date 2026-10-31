@@ -25,6 +25,10 @@ import {
   FaInfoCircle,
   FaTimesCircle,
   FaArrowLeft,
+  FaUserCheck,
+  FaUserTimes,
+  FaRunning,
+  FaEdit,
 } from "react-icons/fa";
 import * as XLSX from "xlsx";
 import { useAuth } from "../context/AuthContext";
@@ -42,7 +46,7 @@ import {
 } from "../utils/estudiantesCache";
 
 type EstudiantePPE = Estudiante & { id: string };
-type EstadoPPE = "presente" | "ausente" | "justificado" | "atraso";
+type EstadoPPE = "presente" | "ausente" | "justificado" | "atraso" | "fuga";
 type VistaPPE = "principal" | "reporte";
 
 interface ConfigPPE {
@@ -74,13 +78,72 @@ interface NotaPPE {
   nota: number;
   observacion?: string;
 }
-
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
+
+// ============================================================
+// CHIP DE ASISTENCIA (P / A / I / F) — mismo patrón que Calificaciones
+// ============================================================
+const CHIP_ESTADOS: Array<{
+  value: EstadoPPE;
+  label: string;
+  short: string;
+  colorSel: string;
+  colorIdle: string;
+}> = [
+  {
+    value: "presente",
+    label: "Presente",
+    short: "P",
+    colorSel: "bg-[#244563] text-white ring-1 ring-[#244563]",
+    colorIdle:
+      "bg-[#ECEFF3] text-[#64748B] hover:bg-[#E4E8EE] hover:text-[#4B5563]",
+  },
+  {
+    value: "ausente",
+    label: "Ausente",
+    short: "A",
+    colorSel: "bg-[#C96522] text-white ring-1 ring-[#C96522]",
+    colorIdle:
+      "bg-[#ECEFF3] text-[#64748B] hover:bg-[#E4E8EE] hover:text-[#4B5563]",
+  },
+  {
+    value: "atraso",
+    label: "Atraso",
+    short: "I",
+    colorSel: "bg-[#C93F45] text-white ring-1 ring-[#C93F45]",
+    colorIdle:
+      "bg-[#ECEFF3] text-[#64748B] hover:bg-[#E4E8EE] hover:text-[#4B5563]",
+  },
+  {
+    value: "fuga",
+    label: "Fuga",
+    short: "F",
+    colorSel: "bg-rose-500 text-white ring-1 ring-rose-500",
+    colorIdle:
+      "bg-[#ECEFF3] text-[#64748B] hover:bg-[#E4E8EE] hover:text-[#4B5563]",
+  },
+];
+
+const ETIQUETA_ESTADO: Record<EstadoPPE, string> = {
+  presente: "Presente",
+  ausente: "Ausente",
+  justificado: "Justificado",
+  atraso: "Atraso",
+  fuga: "Fuga",
+};
+
+const COLOR_ESTADO_BADGE: Record<EstadoPPE, string> = {
+  presente: "bg-[#EAF0F6] text-[#1B354D]",
+  ausente: "bg-orange-50 text-[#9A4518]",
+  justificado: "bg-[#1B354D] text-white",
+  atraso: "bg-red-50 text-[#AD3038]",
+  fuga: "bg-rose-50 text-rose-700",
+};
 
 const fechaHoy = () => {
   const d = new Date();
@@ -109,10 +172,8 @@ const MESES = [
   "Noviembre",
   "Diciembre",
 ];
-
 const nombreCompleto = (e: EstudiantePPE) =>
   `${e.apellidos ?? ""} ${e.nombres ?? ""}`.trim();
-
 const formatearFecha = (valor?: string) => {
   if (!valor) return "Sin fecha";
   const partes = valor.split("-");
@@ -128,9 +189,6 @@ export default function PPE() {
   const configId =
     docenteId && anioLectivoId ? `${docenteId}_${anioLectivoId}` : "";
 
-  // ============================================================
-  // FASE 3.3: ACCESO A LA CACHÉ COMPARTIDA DE ESTUDIANTES
-  // ============================================================
   const accesoCache = useMemo(
     () => claveAccesoEstudiantes(user?.uid, userData),
     [user?.uid, userData],
@@ -173,7 +231,6 @@ export default function PPE() {
 
   // SISTEMA DE TOASTS
   const [toasts, setToasts] = useState<Toast[]>([]);
-
   const [filtroReporte, setFiltroReporte] = useState<
     "todo" | "asistencia" | "notas"
   >("todo");
@@ -189,6 +246,22 @@ export default function PPE() {
     String(new Date().getFullYear()),
   );
 
+  // ============================================================
+  // MODAL DE JUSTIFICAR FALTAS
+  // ============================================================
+  const [showJustificarModal, setShowJustificarModal] = useState(false);
+  const [fechaJustificar, setFechaJustificar] = useState(fechaHoy());
+  const [asistenciasJustificar, setAsistenciasJustificar] = useState<
+    AsistenciaPPE[]
+  >([]);
+  const [loadingJustificar, setLoadingJustificar] = useState(false);
+  const [observacionesJustificar, setObservacionesJustificar] = useState<
+    Record<string, string>
+  >({});
+  const [seleccionadosJustificar, setSeleccionadosJustificar] = useState<
+    Set<string>
+  >(new Set());
+
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -201,13 +274,11 @@ export default function PPE() {
     },
     [],
   );
-
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const gradosPermitidos = useMemo(() => {
-    // 1. Partimos de todos los grados a los que tiene acceso el docente
     let base = grados;
     if (
       userData?.role === "docente" &&
@@ -217,23 +288,19 @@ export default function PPE() {
       const asignados = new Set(userData.gradosAsignados);
       base = grados.filter((g) => asignados.has(g.id));
     }
-
-    // 2. Filtramos ESTRICTAMENTE para que solo queden los de Bachillerato
     const gradosBachillerato = base.filter((g) => {
       const nombre = g.nombre.toUpperCase();
-      // Buscamos explícitamente BGU, BC o Bachillerato, o los números de curso de bachillerato
       return (
         nombre.includes("BGU") ||
-        nombre.includes(" BC ") || // Con espacios para evitar falsos positivos
+        nombre.includes(" BC ") ||
         nombre.includes("BACHILLERATO") ||
         nombre.includes("1RO") ||
         nombre.includes("2DO") ||
         nombre.includes("3RO")
       );
     });
-
     return gradosBachillerato;
-  }, [grados, userData]); // <-- CORREGIDO AQUÍ
+  }, [grados, userData]);
 
   const gradoNombre = useCallback(
     (gradoId?: string) => {
@@ -247,19 +314,14 @@ export default function PPE() {
   );
 
   // ============================================================
-  // FASE 3.3: LECTURA DE ESTUDIANTES DESDE CACHÉ COMPARTIDA
-  // + configuración y actividades del PPE (siguen usando ppeCache)
+  // CARGA INICIAL
   // ============================================================
   useEffect(() => {
     if (!docenteId || !anioLectivoId || !ready) {
-      // Diferimos el setState para no ejecutarlo sincrónicamente en el efecto.
       void Promise.resolve().then(() => setLoading(false));
       return;
     }
-
     let cancelled = false;
-
-    // 1. Aseguramos la caché de los grados permitidos
     const gradosIds = gradosPermitidos.map((g) => g.id);
     gradosIds.forEach((gradoId) => {
       const clave = claveConsultaEstudiantes(
@@ -270,7 +332,6 @@ export default function PPE() {
       if (clave) asegurarEstudiantesCache(clave);
     });
 
-    // 2. Extraemos estudiantes de la caché (solo activos del año)
     const actualizarEstudiantes = () => {
       if (cancelled) return;
       const todos: EstudiantePPE[] = [];
@@ -295,11 +356,9 @@ export default function PPE() {
       );
       setEstudiantesDisponibles(todos);
     };
-
     const unsubscribeCache = observarEstudiantesCache(actualizarEstudiantes);
     actualizarEstudiantes();
 
-    // 3. Cargamos configuración y actividades (pocas lecturas reales)
     const cargarConfigYActividades = async () => {
       try {
         const [configSnap, actSnap] = await Promise.all([
@@ -322,9 +381,7 @@ export default function PPE() {
             ),
           ),
         ]);
-
         if (cancelled) return;
-
         const config = configSnap.docs[0]?.data() as ConfigPPE | undefined;
         setEstudianteIds(config?.estudianteIds ?? []);
         setActividades(
@@ -345,14 +402,19 @@ export default function PPE() {
         if (!cancelled) setLoading(false);
       }
     };
-
     void cargarConfigYActividades();
-
     return () => {
       cancelled = true;
       unsubscribeCache();
     };
-  }, [docenteId, anioLectivoId, ready, gradosPermitidos, accesoCache, mostrarToast]);
+  }, [
+    docenteId,
+    anioLectivoId,
+    ready,
+    gradosPermitidos,
+    accesoCache,
+    mostrarToast,
+  ]);
 
   const estudiantesPPE = useMemo(
     () =>
@@ -388,18 +450,17 @@ export default function PPE() {
     );
   }, [estudiantesFiltrados, gradoNombre]);
 
-  // NUEVA LISTA DINÁMICA (Agrupada o Alfabética)
   const listaEstudiantesRender = useMemo(() => {
     if (vistaLista === "alfabetico") {
-      // Ya vienen ordenados alfabéticamente desde estudiantesPPE
-      return estudiantesPPE.map((e) => ({
+      const ordenadosAlfabeticamente = [...estudiantesPPE].sort((a, b) =>
+        nombreCompleto(a).localeCompare(nombreCompleto(b), "es"),
+      );
+      return ordenadosAlfabeticamente.map((e) => ({
         ...e,
         mostrarCabecera: false,
         nombreGrado: "",
       }));
     }
-
-    // Ordenar por grado y luego por nombre
     const ordenados = [...estudiantesPPE].sort((a, b) => {
       const gradoA = gradoNombre(a.gradoId);
       const gradoB = gradoNombre(b.gradoId);
@@ -408,7 +469,6 @@ export default function PPE() {
         nombreCompleto(a).localeCompare(nombreCompleto(b), "es")
       );
     });
-
     let gradoAnterior = "";
     return ordenados.map((e) => {
       const gradoActual = gradoNombre(e.gradoId);
@@ -420,7 +480,6 @@ export default function PPE() {
 
   useEffect(() => {
     let cancelled = false;
-
     const cargarDatosFecha = async () => {
       if (!docenteId || !anioLectivoId || estudianteIds.length === 0) {
         await Promise.resolve();
@@ -430,7 +489,6 @@ export default function PPE() {
         }
         return;
       }
-
       try {
         const [asisSnap, notasSnap] = await Promise.all([
           getPPECached(
@@ -455,9 +513,7 @@ export default function PPE() {
             ),
           ),
         ]);
-
         if (cancelled) return;
-
         const asisMap: Record<string, EstadoPPE> = {};
         asisSnap.docs.forEach((d) => {
           const row = d.data() as AsistenciaPPE;
@@ -474,7 +530,6 @@ export default function PPE() {
             notaMap[row.estudianteId] = String(row.nota);
           }
         });
-
         setAsistencias(asisMap);
         setNotas(notaMap);
       } catch (e) {
@@ -488,12 +543,18 @@ export default function PPE() {
         }
       }
     };
-
     void cargarDatosFecha();
     return () => {
       cancelled = true;
     };
-  }, [docenteId, anioLectivoId, estudianteIds, fecha, actividadSeleccionada, mostrarToast]);
+  }, [
+    docenteId,
+    anioLectivoId,
+    estudianteIds,
+    fecha,
+    actividadSeleccionada,
+    mostrarToast,
+  ]);
 
   const guardarSeleccion = async () => {
     if (!docenteId || !anioLectivoId) return;
@@ -530,6 +591,9 @@ export default function PPE() {
     }
   };
 
+  // ============================================================
+  // GUARDAR ASISTENCIAS (con merge:true, incluye "fuga")
+  // ============================================================
   const guardarAsistencias = async () => {
     if (!docenteId || !anioLectivoId || estudiantesPPE.length === 0) return;
     setSaving(true);
@@ -624,11 +688,7 @@ export default function PPE() {
       );
     } catch (e) {
       console.error("Error creando actividad PPE:", e);
-      mostrarToast(
-        "error",
-        "Error al crear",
-        "No se pudo crear la actividad.",
-      );
+      mostrarToast("error", "Error al crear", "No se pudo crear la actividad.");
     } finally {
       setSaving(false);
     }
@@ -732,17 +792,194 @@ export default function PPE() {
       );
     } catch (e) {
       console.error("Error cargando reporte PPE:", e);
-      mostrarToast(
-        "error",
-        "Error de carga",
-        "No se pudo cargar el reporte.",
-      );
+      mostrarToast("error", "Error de carga", "No se pudo cargar el reporte.");
     }
   }, [docenteId, anioLectivoId, mostrarToast]);
 
   useEffect(() => {
     if (vista === "reporte") void cargarReporte();
   }, [vista, cargarReporte]);
+
+  // ============================================================
+  // CARGAR ASISTENCIAS DE UNA FECHA (para el modal de justificar)
+  // ============================================================
+  const cargarAsistenciasParaJustificar = useCallback(
+    async (fechaObjetivo: string) => {
+      if (!docenteId || !anioLectivoId) return;
+      setLoadingJustificar(true);
+      try {
+        const snap = await getDocs(
+          query(
+            collection(db, "ppeAsistencias"),
+            where("docenteId", "==", docenteId),
+            where("anioLectivoId", "==", anioLectivoId),
+            where("fecha", "==", fechaObjetivo),
+          ),
+        );
+        const regs = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() }) as AsistenciaPPE)
+          .filter((r) => estudianteIds.includes(r.estudianteId));
+        setAsistenciasJustificar(regs);
+        // Pre-llenar observaciones para los ya justificados
+        const obs: Record<string, string> = {};
+        regs.forEach((r) => {
+          if (r.estado === "justificado")
+            obs[r.estudianteId] = r.observacion ?? "";
+        });
+        setObservacionesJustificar(obs);
+        setSeleccionadosJustificar(new Set());
+      } catch (e) {
+        console.error(e);
+        mostrarToast(
+          "error",
+          "Error",
+          "No se pudieron cargar las asistencias de esa fecha.",
+        );
+      } finally {
+        setLoadingJustificar(false);
+      }
+    },
+    [docenteId, anioLectivoId, estudianteIds, mostrarToast],
+  );
+
+  useEffect(() => {
+    if (!showJustificarModal) return;
+
+    // Envolver la llamada en una función asíncrona interna satisface
+    // al linter de React Hooks, ya que garantiza que cualquier setState
+    // dentro de cargarAsistenciasParaJustificar ocurra después de
+    // una operación asíncrona (await) y no de forma sincrónica.
+    const cargar = async () => {
+      await cargarAsistenciasParaJustificar(fechaJustificar);
+    };
+    void cargar();
+  }, [showJustificarModal, fechaJustificar, cargarAsistenciasParaJustificar]);
+
+  // Filtrar solo los que tienen A / I / F (candidatos a justificar)
+  const registrosJustificables = useMemo(() => {
+    const estadosCandidatos: EstadoPPE[] = ["ausente", "atraso", "fuga"];
+    return asistenciasJustificar.filter((r) =>
+      estadosCandidatos.includes(r.estado),
+    );
+  }, [asistenciasJustificar]);
+
+  // ============================================================
+  // JUSTIFICAR (merge:true, no duplica)
+  // ============================================================
+  const justificarEstudiante = async (registro: AsistenciaPPE) => {
+    if (!docenteId || !anioLectivoId || !registro.id) return;
+    const obs = observacionesJustificar[registro.estudianteId]?.trim() ?? "";
+    if (!obs) {
+      mostrarToast(
+        "warning",
+        "Observación requerida",
+        "Agrega una observación justificando la falta antes de guardar.",
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      await setDoc(
+        doc(db, "ppeAsistencias", registro.id),
+        {
+          estado: "justificado",
+          observacion: obs,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
+      invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:`);
+      mostrarToast(
+        "success",
+        "Falta justificada",
+        "Se actualizó el estado a Justificado.",
+      );
+      await cargarAsistenciasParaJustificar(fechaJustificar);
+      // Si la fecha de justificación coincide con la fecha activa, refrescar la vista principal
+      if (fechaJustificar === fecha) {
+        setAsistencias((prev) => ({
+          ...prev,
+          [registro.estudianteId]: "justificado",
+        }));
+        setObservacionesAsistencia((prev) => ({
+          ...prev,
+          [registro.estudianteId]: obs,
+        }));
+      }
+      await cargarReporte();
+    } catch (e) {
+      console.error(e);
+      mostrarToast("error", "Error", "No se pudo justificar la falta.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const justificarSeleccionados = async () => {
+    if (seleccionadosJustificar.size === 0) {
+      mostrarToast("warning", "Sin selección", "Marca al menos un estudiante.");
+      return;
+    }
+    const obsFaltantes: string[] = [];
+    seleccionadosJustificar.forEach((estId) => {
+      const obs = observacionesJustificar[estId]?.trim();
+      if (!obs) obsFaltantes.push(estId);
+    });
+    if (obsFaltantes.length > 0) {
+      mostrarToast(
+        "warning",
+        "Observaciones faltantes",
+        `${obsFaltantes.length} estudiante(s) no tienen observación de justificación.`,
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      const batch = writeBatch(db);
+      registrosJustificables.forEach((r) => {
+        if (!seleccionadosJustificar.has(r.estudianteId) || !r.id) return;
+        batch.set(
+          doc(db, "ppeAsistencias", r.id),
+          {
+            estado: "justificado",
+            observacion: observacionesJustificar[r.estudianteId]?.trim() ?? "",
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true },
+        );
+      });
+      await batch.commit();
+      invalidatePPECache(`ppe:${docenteId}:${anioLectivoId}:`);
+      mostrarToast(
+        "success",
+        "Justificaciones guardadas",
+        `Se justificaron ${seleccionadosJustificar.size} falta(s).`,
+      );
+      await cargarAsistenciasParaJustificar(fechaJustificar);
+      if (fechaJustificar === fecha) {
+        setAsistencias((prev) => {
+          const nuevo = { ...prev };
+          seleccionadosJustificar.forEach((estId) => {
+            nuevo[estId] = "justificado";
+          });
+          return nuevo;
+        });
+        setObservacionesAsistencia((prev) => {
+          const nuevo = { ...prev };
+          seleccionadosJustificar.forEach((estId) => {
+            nuevo[estId] = observacionesJustificar[estId]?.trim() ?? "";
+          });
+          return nuevo;
+        });
+      }
+      await cargarReporte();
+    } catch (e) {
+      console.error(e);
+      mostrarToast("error", "Error", "No se pudieron justificar las faltas.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const periodoReporteEfectivo = periodos.some((p) => p.id === periodoReporteId)
     ? periodoReporteId
@@ -789,7 +1026,6 @@ export default function PPE() {
 
   const fechaInicioReporte = rangoFechasReporte.inicio;
   const fechaFinReporte = rangoFechasReporte.fin;
-
   const rangoReporteValido = Boolean(
     fechaInicioReporte &&
     fechaFinReporte &&
@@ -840,6 +1076,9 @@ export default function PPE() {
     [reporteNotas, estudianteIds, actividadIdsTrimestre],
   );
 
+  // ============================================================
+  // RESUMEN (incluye FUGAS aparte)
+  // ============================================================
   const resumenReporte = useMemo(() => {
     const porEstudiante = new Map<
       string,
@@ -848,6 +1087,7 @@ export default function PPE() {
         atrasos: number;
         ausencias: number;
         justificadas: number;
+        fugas: number;
         notas: number[];
       }
     >();
@@ -857,6 +1097,7 @@ export default function PPE() {
         atrasos: 0,
         ausencias: 0,
         justificadas: 0,
+        fugas: 0,
         notas: [],
       }),
     );
@@ -867,6 +1108,7 @@ export default function PPE() {
       else if (a.estado === "atraso") row.atrasos++;
       else if (a.estado === "ausente") row.ausencias++;
       else if (a.estado === "justificado") row.justificadas++;
+      else if (a.estado === "fuga") row.fugas++;
     });
     notasTrimestre.forEach((n) => {
       const row = porEstudiante.get(n.estudianteId);
@@ -880,7 +1122,8 @@ export default function PPE() {
           datos.presentes +
           datos.atrasos +
           datos.ausencias +
-          datos.justificadas,
+          datos.justificadas +
+          datos.fugas,
         promedio: datos.notas.length
           ? Math.round(
               (datos.notas.reduce((a, b) => a + b, 0) / datos.notas.length) *
@@ -906,7 +1149,6 @@ export default function PPE() {
       );
       return;
     }
-
     const resumenExcel = resumenReporte.map((r, index) => ({
       "N°": index + 1,
       Estudiante: nombreCompleto(r.estudiante),
@@ -914,12 +1156,12 @@ export default function PPE() {
       Presentes: r.presentes,
       Atrasos: r.atrasos,
       Ausencias: r.ausencias,
+      Fugas: r.fugas,
       Justificadas: r.justificadas,
       "Total registros de asistencia": r.totalSesiones,
       "Actividades calificadas": r.notas.length,
       "Promedio / 10": r.promedio ?? "",
     }));
-
     const asistenciasExcel = asistenciasTrimestre
       .map((a) => {
         const estudiante = estudiantesPPE.find((e) => e.id === a.estudianteId);
@@ -933,7 +1175,7 @@ export default function PPE() {
             : (registroConNombre.estudianteNombre ??
               "Estudiante no disponible"),
           Grado: gradoNombre(estudiante?.gradoId),
-          Estado: a.estado,
+          Estado: ETIQUETA_ESTADO[a.estado] ?? a.estado,
           Observación: a.observacion ?? "",
         };
       })
@@ -942,7 +1184,6 @@ export default function PPE() {
           a.Fecha.localeCompare(b.Fecha) ||
           a.Estudiante.localeCompare(b.Estudiante, "es"),
       );
-
     const notasExcel = notasTrimestre
       .map((n) => {
         const estudiante = estudiantesPPE.find((e) => e.id === n.estudianteId);
@@ -965,12 +1206,10 @@ export default function PPE() {
           a.Fecha.localeCompare(b.Fecha) ||
           a.Estudiante.localeCompare(b.Estudiante, "es"),
       );
-
     const wb = XLSX.utils.book_new();
     const resumenWs = XLSX.utils.json_to_sheet(resumenExcel);
     const asistenciaWs = XLSX.utils.json_to_sheet(asistenciasExcel);
     const notasWs = XLSX.utils.json_to_sheet(notasExcel);
-
     const ajustarColumnas = (
       ws: XLSX.WorkSheet,
       rows: Array<Record<string, string | number>>,
@@ -990,11 +1229,9 @@ export default function PPE() {
     ajustarColumnas(resumenWs, resumenExcel);
     ajustarColumnas(asistenciaWs, asistenciasExcel);
     ajustarColumnas(notasWs, notasExcel);
-
     XLSX.utils.book_append_sheet(wb, resumenWs, "Resumen del periodo");
     XLSX.utils.book_append_sheet(wb, asistenciaWs, "Detalle asistencias");
     XLSX.utils.book_append_sheet(wb, notasWs, "Detalle notas");
-
     const safe = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, "_");
     XLSX.writeFile(
       wb,
@@ -1007,7 +1244,6 @@ export default function PPE() {
     );
   };
 
-  // CONFIGURACIÓN VISUAL DE LOS TOASTS
   const toastConfig = {
     success: {
       bg: "border-l-[#6687A5]",
@@ -1056,9 +1292,8 @@ export default function PPE() {
       <div className="space-y-3">
         {vista === "principal" ? (
           <>
-            {/* ============ 3 TARJETAS EN UNA SOLA FILA ============ */}
+            {/* ============ 3 TARJETAS ============ */}
             <div className="grid gap-3 md:grid-cols-3">
-              {/* Card 1: Asistencia y actividades */}
               <button
                 onClick={() =>
                   setSeccionActiva((prev) =>
@@ -1073,12 +1308,16 @@ export default function PPE() {
               >
                 <div className="flex items-center justify-between">
                   <span
-                    className={`flex h-8 w-8 items-center justify-center rounded-lg ${seccionActiva === "asistencia" ? "bg-[#FED7AA] text-[#9A4518]" : "bg-sky-100 text-sky-700"}`}
+                    className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+                      seccionActiva === "asistencia"
+                        ? "bg-[#FED7AA] text-[#9A4518]"
+                        : "bg-sky-100 text-sky-700"
+                    }`}
                   >
                     <FaClipboardCheck className="text-sm" />
                   </span>
                   <span className="text-[10px] text-[#6B7280] transition-transform group-hover:translate-x-1">
-                    {seccionActiva === "asistencia" ? "Cerrar" : "Abrir →"}
+                    {seccionActiva === "asistencia" ? "Cerrar " : "Abrir →"}
                   </span>
                 </div>
                 <h2 className="mt-2 text-xs font-semibold text-[#273444]">
@@ -1089,7 +1328,6 @@ export default function PPE() {
                 </p>
               </button>
 
-              {/* Card 2: Reporte de asistencias y notas */}
               <button
                 onClick={() => setVista("reporte")}
                 className="group relative overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] p-3 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-[#C96522]/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C96522]/50"
@@ -1110,7 +1348,6 @@ export default function PPE() {
                 </p>
               </button>
 
-              {/* Card 3: Seleccionar estudiantes */}
               <button
                 onClick={() => {
                   setSeleccionTemporal(estudianteIds);
@@ -1135,7 +1372,7 @@ export default function PPE() {
               </button>
             </div>
 
-            {/* ============ TABLA (SOLO SE MUESTRA SI HAY SECCIÓN ACTIVA) ============ */}
+            {/* ============ TABLA ============ */}
             {seccionActiva !== "ninguna" && (
               <section className="mt-3 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)]">
                 <div className="flex flex-col gap-3 border-b border-[#ECEFF3] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1158,13 +1395,21 @@ export default function PPE() {
                   <div className="inline-flex rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-0.5">
                     <button
                       onClick={() => setSeccionActiva("asistencia")}
-                      className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${seccionActiva === "asistencia" ? "bg-[#244563] text-white shadow-sm" : "text-[#4B5563] hover:text-[#273444]"}`}
+                      className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${
+                        seccionActiva === "asistencia"
+                          ? "bg-[#244563] text-white shadow-sm"
+                          : "text-[#4B5563] hover:text-[#273444]"
+                      }`}
                     >
                       Asistencia
                     </button>
                     <button
                       onClick={() => setSeccionActiva("actividades")}
-                      className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${seccionActiva === "actividades" ? "bg-[#273444] text-white shadow-sm" : "text-[#4B5563] hover:text-[#273444]"}`}
+                      className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${
+                        seccionActiva === "actividades"
+                          ? "bg-[#273444] text-white shadow-sm"
+                          : "text-[#4B5563] hover:text-[#273444]"
+                      }`}
                     >
                       Actividades y notas
                     </button>
@@ -1196,14 +1441,14 @@ export default function PPE() {
                   </div>
                 ) : seccionActiva === "asistencia" ? (
                   <>
-                    <div className="flex flex-wrap items-end gap-3 p-3 border-b border-[#ECEFF3]">
+                    <div className="flex flex-wrap items-end gap-3 border-b border-[#ECEFF3] p-3">
                       <label className="text-[11px] font-medium text-[#4B5563]">
                         Fecha de sesión
                         <input
                           type="date"
                           value={fecha}
                           onChange={(e) => setFecha(e.target.value)}
-                          className="h-8 mt-1 block rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                          className="mt-1 block h-8 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                         />
                       </label>
                       <button
@@ -1224,36 +1469,56 @@ export default function PPE() {
                           );
                         }}
                         disabled={saving || estudiantesPPE.length === 0}
-                        className="min-h-8 inline-flex items-center gap-2 rounded-md border border-[#A8BDD2] bg-[#EAF0F6] px-2.5  text-[11px] font-semibold text-[#1B354D] hover:bg-[#E2EAF3] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                        className="inline-flex min-h-8 items-center gap-2 rounded-md border border-[#A8BDD2] bg-[#EAF0F6] px-2.5 text-[11px] font-semibold text-[#1B354D] hover:bg-[#E2EAF3] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                       >
                         <FaCheckCircle /> Todos presentes
                       </button>
                       <button
                         onClick={guardarAsistencias}
                         disabled={saving || !Object.keys(asistencias).length}
-                        className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                        className="inline-flex min-h-8 items-center gap-2 rounded-md bg-[#244563] px-2.5 text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                       >
                         <FaSave /> Guardar asistencia
                       </button>
+                      {/* ✅ NUEVO: Botón Justificar faltas */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFechaJustificar(fecha);
+                          setShowJustificarModal(true);
+                        }}
+                        className="inline-flex min-h-8 items-center gap-2 rounded-md border border-[#FED7AA] bg-[#FFF7ED] px-2.5 text-[11px] font-semibold text-[#9A4518] hover:bg-[#FFEDD5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C96522]/40"
+                        title="Justificar faltas de una fecha específica"
+                      >
+                        <FaEdit /> Justificar faltas
+                      </button>
 
-                      {/* NUEVO TOGGLE DE VISTA */}
                       <div className="ml-auto inline-flex rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-0.5">
                         <button
                           onClick={() => setVistaLista("grados")}
-                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "grados" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${
+                            vistaLista === "grados"
+                              ? "bg-white shadow-sm text-[#273444]"
+                              : "text-[#6B7280]"
+                          }`}
                         >
                           Por Grados
                         </button>
                         <button
                           onClick={() => setVistaLista("alfabetico")}
-                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "alfabetico" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${
+                            vistaLista === "alfabetico"
+                              ? "bg-white shadow-sm text-[#273444]"
+                              : "text-[#6B7280]"
+                          }`}
                         >
                           Alfabético
                         </button>
                       </div>
                     </div>
+
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-160 text-[11px] border-collapse">
+                      <table className="w-full min-w-160 border-collapse text-[11px]">
                         <thead className="bg-[#ECEFF3] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
                           <tr>
                             <th className="px-2.5 py-1.5">Estudiante</th>
@@ -1265,62 +1530,124 @@ export default function PPE() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {listaEstudiantesRender.map((e) => (
-                            <Fragment key={e.id}>
-                              {/* CABECERA DE GRADO (solo si está agrupado) */}
-                              {e.mostrarCabecera && vistaLista === "grados" && (
-                                <tr className="bg-[#F8FAFC]">
-                                  <td
-                                    colSpan={4}
-                                    className="px-2.5 py-2 font-bold text-[#244563] uppercase tracking-wider text-[10px]"
-                                  >
-                                    {e.nombreGrado}
+                          {listaEstudiantesRender.map((e) => {
+                            const estadoActual = asistencias[e.id];
+                            return (
+                              <Fragment key={e.id}>
+                                {e.mostrarCabecera &&
+                                  vistaLista === "grados" && (
+                                    <tr className="bg-[#F8FAFC]">
+                                      <td
+                                        colSpan={4}
+                                        className="px-2.5 py-2 text-[10px] font-bold uppercase tracking-wider text-[#244563]"
+                                      >
+                                        {e.nombreGrado}
+                                      </td>
+                                    </tr>
+                                  )}
+                                <tr
+                                  className={`hover:bg-[#ECEFF3] ${
+                                    estadoActual === "justificado"
+                                      ? "border-l-4 border-l-[#1B354D]"
+                                      : estadoActual === "fuga"
+                                        ? "border-l-4 border-l-rose-500"
+                                        : estadoActual === "atraso"
+                                          ? "border-l-4 border-l-[#C93F45]"
+                                          : estadoActual === "ausente"
+                                            ? "border-l-4 border-l-[#C96522]"
+                                            : estadoActual === "presente"
+                                              ? "border-l-4 border-l-[#244563]"
+                                              : ""
+                                  }`}
+                                >
+                                  <td className="px-2.5 py-1.5 font-medium text-[#374151]">
+                                    <div className="flex items-center gap-1.5">
+                                      {nombreCompleto(e)}
+                                      {estadoActual === "justificado" && (
+                                        <span className="rounded bg-[#1B354D] px-1.5 py-px text-[9px] font-bold text-white">
+                                          J
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-1.5 text-[#6B7280]">
+                                    {gradoNombre(e.gradoId)}
+                                  </td>
+                                  <td className="px-2.5 py-1.5">
+                                    <div className="flex flex-wrap items-center gap-1">
+                                      {CHIP_ESTADOS.map((chip) => {
+                                        const seleccionado =
+                                          estadoActual === chip.value;
+                                        const deshabilitado =
+                                          estadoActual === "justificado";
+                                        return (
+                                          <button
+                                            key={chip.value}
+                                            type="button"
+                                            onClick={() =>
+                                              !deshabilitado &&
+                                              setAsistencias((p) => ({
+                                                ...p,
+                                                [e.id]: chip.value,
+                                              }))
+                                            }
+                                            title={
+                                              deshabilitado
+                                                ? "Estudiante justificado - Use el botón 'Justificar faltas' para modificar"
+                                                : chip.label
+                                            }
+                                            disabled={deshabilitado}
+                                            className={`flex h-8 min-w-8 items-center justify-center gap-0.5 rounded-md px-2 text-[10px] font-bold transition-colors ${
+                                              deshabilitado
+                                                ? "bg-[#F1F5F9] text-[#94A3B8] cursor-not-allowed opacity-50"
+                                                : seleccionado
+                                                  ? chip.colorSel
+                                                  : chip.colorIdle
+                                            }`}
+                                          >
+                                            {chip.short}
+                                          </button>
+                                        );
+                                      })}
+                                      {estadoActual === "justificado" && (
+                                        <span
+                                          className="ml-1 inline-flex items-center gap-1 rounded-md bg-[#1B354D] px-2 py-1 text-[10px] font-semibold text-white"
+                                          title={
+                                            observacionesAsistencia[e.id] ||
+                                            "Justificado"
+                                          }
+                                        >
+                                          <FaUserCheck className="text-[9px]" />
+                                          Justificado
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      value={
+                                        observacionesAsistencia[e.id] ?? ""
+                                      }
+                                      onChange={(ev) =>
+                                        estadoActual !== "justificado" &&
+                                        setObservacionesAsistencia((p) => ({
+                                          ...p,
+                                          [e.id]: ev.target.value,
+                                        }))
+                                      }
+                                      placeholder="Opcional"
+                                      readOnly={estadoActual === "justificado"}
+                                      className={`h-8 w-full min-w-36 rounded-md border px-3 focus:outline-none ${
+                                        estadoActual === "justificado"
+                                          ? "bg-[#F1F5F9] border-[#E2E8F0] text-[#64748B] cursor-not-allowed"
+                                          : "bg-[#FFFFFF] border-[#BFC9D4] text-[#374151] focus:border-[#244563]"
+                                      }`}
+                                    />
                                   </td>
                                 </tr>
-                              )}
-                              <tr className="hover:bg-[#ECEFF3]">
-                                <td className="px-2.5 py-1.5 font-medium text-[#374151]">
-                                  {nombreCompleto(e)}
-                                </td>
-                                <td className="px-2.5 py-1.5 text-[#6B7280]">
-                                  {gradoNombre(e.gradoId)}
-                                </td>
-                                <td className="px-2.5 py-1.5">
-                                  <select
-                                    value={asistencias[e.id] ?? ""}
-                                    onChange={(ev) =>
-                                      setAsistencias((p) => ({
-                                        ...p,
-                                        [e.id]: ev.target.value as EstadoPPE,
-                                      }))
-                                    }
-                                    className="h-8 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                                  >
-                                    <option value="">Seleccionar…</option>
-                                    <option value="presente">Presente</option>
-                                    <option value="ausente">Ausente</option>
-                                    <option value="justificado">
-                                      Justificado
-                                    </option>
-                                    <option value="atraso">Atraso</option>
-                                  </select>
-                                </td>
-                                <td className="px-2.5 py-1.5">
-                                  <input
-                                    value={observacionesAsistencia[e.id] ?? ""}
-                                    onChange={(ev) =>
-                                      setObservacionesAsistencia((p) => ({
-                                        ...p,
-                                        [e.id]: ev.target.value,
-                                      }))
-                                    }
-                                    placeholder="Opcional"
-                                    className="h-8 w-full min-w-36 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                                  />
-                                </td>
-                              </tr>
-                            </Fragment>
-                          ))}
+                              </Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -1334,7 +1661,7 @@ export default function PPE() {
                           value={tituloActividad}
                           onChange={(e) => setTituloActividad(e.target.value)}
                           placeholder="Ej. Proyecto comunitario"
-                          className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                          className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                         />
                       </label>
                       <label className="text-[11px] font-medium text-[#4B5563]">
@@ -1343,14 +1670,14 @@ export default function PPE() {
                           type="date"
                           value={fechaActividad}
                           onChange={(e) => setFechaActividad(e.target.value)}
-                          className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                          className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                         />
                       </label>
                       <div className="flex items-end">
                         <button
                           onClick={crearActividad}
                           disabled={saving || !tituloActividad.trim()}
-                          className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                          className="inline-flex min-h-8 items-center gap-2 rounded-md bg-[#244563] px-2.5 text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                         >
                           <FaPlus /> Crear actividad
                         </button>
@@ -1363,7 +1690,7 @@ export default function PPE() {
                             setDescripcionActividad(e.target.value)
                           }
                           placeholder="Detalle breve"
-                          className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                          className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                         />
                       </label>
                     </div>
@@ -1375,7 +1702,7 @@ export default function PPE() {
                           onChange={(e) =>
                             setActividadSeleccionada(e.target.value)
                           }
-                          className="h-8 mt-1 block min-w-64 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                          className="mt-1 block h-8 min-w-64 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                         >
                           <option value="">Seleccionar actividad…</option>
                           {actividades.map((a) => (
@@ -1388,32 +1715,38 @@ export default function PPE() {
                       <button
                         onClick={guardarNotas}
                         disabled={saving || !actividadSeleccionada}
-                        className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-2.5  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                        className="inline-flex min-h-8 items-center gap-2 rounded-md bg-[#244563] px-2.5 text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                       >
                         <FaSave /> Guardar notas
                       </button>
                       <p className="text-[10px] text-[#6B7280]">
                         Calificación de 0 a 10. Deja vacío si no corresponde.
                       </p>
-
-                      {/* NUEVO TOGGLE DE VISTA (ACTIVIDADES) */}
                       <div className="ml-auto inline-flex rounded-md border border-[#D8DEE6] bg-[#F3F4F6] p-0.5">
                         <button
                           onClick={() => setVistaLista("grados")}
-                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "grados" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${
+                            vistaLista === "grados"
+                              ? "bg-white shadow-sm text-[#273444]"
+                              : "text-[#6B7280]"
+                          }`}
                         >
                           Por Grados
                         </button>
                         <button
                           onClick={() => setVistaLista("alfabetico")}
-                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${vistaLista === "alfabetico" ? "bg-white shadow-sm text-[#273444]" : "text-[#6B7280]"}`}
+                          className={`min-h-8 rounded px-3 text-[11px] font-semibold transition-colors ${
+                            vistaLista === "alfabetico"
+                              ? "bg-white shadow-sm text-[#273444]"
+                              : "text-[#6B7280]"
+                          }`}
                         >
                           Alfabético
                         </button>
                       </div>
                     </div>
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-130 text-[11px] border-collapse">
+                      <table className="w-full min-w-130 border-collapse text-[11px]">
                         <thead className="bg-[#ECEFF3] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
                           <tr>
                             <th className="px-2.5 py-1.5">Estudiante</th>
@@ -1424,12 +1757,11 @@ export default function PPE() {
                         <tbody className="divide-y divide-slate-100">
                           {listaEstudiantesRender.map((e) => (
                             <Fragment key={e.id}>
-                              {/* CABECERA DE GRADO (solo si está agrupado) */}
                               {e.mostrarCabecera && vistaLista === "grados" && (
                                 <tr className="bg-[#F8FAFC]">
                                   <td
                                     colSpan={3}
-                                    className="px-2.5 py-2 font-bold text-[#244563] uppercase tracking-wider text-[10px]"
+                                    className="px-2.5 py-2 text-[10px] font-bold uppercase tracking-wider text-[#244563]"
                                   >
                                     {e.nombreGrado}
                                   </td>
@@ -1455,7 +1787,7 @@ export default function PPE() {
                                         [e.id]: ev.target.value,
                                       }))
                                     }
-                                    className="h-8 w-28 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                                    className="h-8 w-28 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                                     placeholder="0–10"
                                   />
                                 </td>
@@ -1486,28 +1818,27 @@ export default function PPE() {
                     Reporte de asistencias y notas
                   </h2>
                   <p className="text-[11px] text-[#6B7280]">
-                    Cuenta asistencias, actividades calificadas y promedio dentro
-                    del rango semanal, mensual o trimestral seleccionado.
+                    Cuenta asistencias, actividades calificadas y promedio
+                    dentro del rango semanal, mensual o trimestral seleccionado.
                   </p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => void cargarReporte()}
-                  className="min-h-8 rounded-md border px-3  text-[11px] font-semibold text-[#4B5563] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                  className="min-h-8 rounded-md border px-3 text-[11px] font-semibold text-[#4B5563] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                 >
                   Actualizar
                 </button>
                 <button
                   onClick={exportarReporteExcel}
                   disabled={!rangoReporteValido}
-                  className="min-h-8 inline-flex items-center gap-2 rounded-md bg-[#244563] px-3  text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                  className="inline-flex min-h-8 items-center gap-2 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                 >
                   <FaFileExcel /> Exportar Excel
                 </button>
               </div>
             </div>
-
             <div className="grid gap-3 border-b border-[#ECEFF3] bg-[#ECEFF3]/70 p-3 sm:grid-cols-2 lg:grid-cols-4">
               <label className="text-[11px] font-medium text-[#4B5563]">
                 Tipo de reporte
@@ -1518,7 +1849,7 @@ export default function PPE() {
                       e.target.value as "semanal" | "mensual" | "trimestral",
                     )
                   }
-                  className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3  focus:border-[#244563] focus:outline-none text-[#374151]"
+                  className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                 >
                   <option value="semanal">Semanal</option>
                   <option value="mensual">Mensual</option>
@@ -1532,7 +1863,7 @@ export default function PPE() {
                     type="date"
                     value={semanaReporte}
                     onChange={(e) => setSemanaReporte(e.target.value)}
-                    className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3  focus:border-[#244563] focus:outline-none text-[#374151]"
+                    className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                   />
                   <span className="mt-1 block text-[10px] font-normal text-[#6B7280]">
                     Se toma de lunes a viernes.
@@ -1546,7 +1877,7 @@ export default function PPE() {
                     <select
                       value={mesReporte}
                       onChange={(e) => setMesReporte(e.target.value)}
-                      className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3  focus:border-[#244563] focus:outline-none text-[#374151]"
+                      className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                     >
                       {MESES.map((mes, i) => (
                         <option key={mes} value={String(i)}>
@@ -1563,7 +1894,7 @@ export default function PPE() {
                       max="2100"
                       value={anioReporte}
                       onChange={(e) => setAnioReporte(e.target.value)}
-                      className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3  focus:border-[#244563] focus:outline-none text-[#374151]"
+                      className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                     />
                   </label>
                 </>
@@ -1574,7 +1905,7 @@ export default function PPE() {
                   <select
                     value={periodoReporteEfectivo}
                     onChange={(e) => setPeriodoReporteId(e.target.value)}
-                    className="h-8 mt-1 block w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3  focus:border-[#244563] focus:outline-none text-[#374151]"
+                    className="mt-1 block h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                   >
                     <option value="">Seleccionar periodo…</option>
                     {periodos.map((p) => (
@@ -1588,18 +1919,30 @@ export default function PPE() {
               <div className="flex items-end">
                 <p className="w-full rounded-lg border border-violet-100 bg-violet-50 px-3 py-2 text-[10px] text-violet-800">
                   {rangoReporteValido
-                    ? `${tipoPeriodoReporte === "trimestral" ? (periodos.find((p) => p.id === periodoReporteEfectivo)?.nombre ?? `Trimestre ${Math.max(1, periodos.findIndex((p) => p.id === periodoReporteEfectivo) + 1)}`) : tipoPeriodoReporte === "mensual" ? `${MESES[Number(mesReporte)]} de ${anioReporte}` : "Semana seleccionada"}: ${formatearFecha(fechaInicioReporte)} – ${formatearFecha(fechaFinReporte)}`
+                    ? `${
+                        tipoPeriodoReporte === "trimestral"
+                          ? (periodos.find(
+                              (p) => p.id === periodoReporteEfectivo,
+                            )?.nombre ??
+                            `Trimestre ${Math.max(1, periodos.findIndex((p) => p.id === periodoReporteEfectivo) + 1)}`)
+                          : tipoPeriodoReporte === "mensual"
+                            ? `${MESES[Number(mesReporte)]} de ${anioReporte}`
+                            : "Semana seleccionada"
+                      }: ${formatearFecha(fechaInicioReporte)} – ${formatearFecha(fechaFinReporte)}`
                     : "No hay fechas configuradas para el periodo seleccionado."}
                 </p>
               </div>
             </div>
-
             <div className="flex flex-wrap gap-2 p-3">
               {(["todo", "asistencia", "notas"] as const).map((f) => (
                 <button
                   key={f}
                   onClick={() => setFiltroReporte(f)}
-                  className={`min-h-8 rounded-full px-3  text-[11px] font-semibold ${filtroReporte === f ? "bg-violet-700 text-white" : "border text-[#64748B]"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
+                  className={`min-h-8 rounded-full px-3 text-[11px] font-semibold ${
+                    filtroReporte === f
+                      ? "bg-violet-700 text-white"
+                      : "border text-[#64748B]"
+                  } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
                 >
                   {f === "todo"
                     ? "Todo"
@@ -1609,7 +1952,6 @@ export default function PPE() {
                 </button>
               ))}
             </div>
-
             {!rangoReporteValido ? (
               <div className="m-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-[11px] text-amber-800">
                 Define el rango de fechas correspondiente al trimestre. Los
@@ -1618,7 +1960,8 @@ export default function PPE() {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-2 gap-3 px-2.5 pb-4 lg:grid-cols-4">
+                {/* ✅ KPIs con FUGAS aparte */}
+                <div className="grid grid-cols-2 gap-3 px-2.5 pb-4 lg:grid-cols-5">
                   <div className="rounded-lg border border-[#E2EAF3] bg-[#EAF0F6] p-3">
                     <p className="text-[10px] font-medium text-[#244563]">
                       Presentes
@@ -1635,12 +1978,20 @@ export default function PPE() {
                       {resumenReporte.reduce((s, r) => s + r.atrasos, 0)}
                     </p>
                   </div>
-                  <div className="rounded-lg border border-rose-100 bg-rose-50 p-3">
-                    <p className="text-[10px] font-medium text-rose-700">
+                  <div className="rounded-lg border border-orange-100 bg-orange-50 p-3">
+                    <p className="text-[10px] font-medium text-[#9A4518]">
                       Ausencias
                     </p>
-                    <p className="mt-1 text-2xl font-bold text-rose-800">
+                    <p className="mt-1 text-2xl font-bold text-[#9A4518]">
                       {resumenReporte.reduce((s, r) => s + r.ausencias, 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-rose-100 bg-rose-50 p-3">
+                    <p className="text-[10px] font-medium text-rose-700">
+                      Fugas
+                    </p>
+                    <p className="mt-1 text-2xl font-bold text-rose-800">
+                      {resumenReporte.reduce((s, r) => s + r.fugas, 0)}
                     </p>
                   </div>
                   <div className="rounded-lg border border-violet-100 bg-violet-50 p-3">
@@ -1653,7 +2004,7 @@ export default function PPE() {
                   </div>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-262.5 text-[11px] border-collapse">
+                  <table className="w-full min-w-262.5 border-collapse text-[11px]">
                     <thead className="bg-[#ECEFF3] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
                       <tr>
                         <th className="px-2.5 py-1.5">Estudiante</th>
@@ -1663,6 +2014,7 @@ export default function PPE() {
                             <th className="px-2.5 py-1.5">Presentes</th>
                             <th className="px-2.5 py-1.5">Atrasos</th>
                             <th className="px-2.5 py-1.5">Ausencias</th>
+                            <th className="px-2.5 py-1.5">Fugas</th>
                             <th className="px-2.5 py-1.5">Justificadas</th>
                             <th className="px-2.5 py-1.5">Total registros</th>
                           </>
@@ -1687,7 +2039,7 @@ export default function PPE() {
                             <button
                               type="button"
                               onClick={() => setEstudianteDetalle(r.estudiante)}
-                              className="min-h-8 mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold text-violet-700 hover:text-violet-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                              className="mt-1 inline-flex min-h-8 items-center gap-1.5 text-[10px] font-semibold text-violet-700 hover:text-violet-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                               aria-label={`Ver historial de ${nombreCompleto(r.estudiante)}`}
                             >
                               <FaEye /> Ver detalle
@@ -1701,6 +2053,9 @@ export default function PPE() {
                               <td className="px-2.5 py-1.5">{r.presentes}</td>
                               <td className="px-2.5 py-1.5">{r.atrasos}</td>
                               <td className="px-2.5 py-1.5">{r.ausencias}</td>
+                              <td className="px-2.5 py-1.5 font-semibold text-rose-700">
+                                {r.fugas}
+                              </td>
                               <td className="px-2.5 py-1.5">
                                 {r.justificadas}
                               </td>
@@ -1732,6 +2087,9 @@ export default function PPE() {
         )}
       </div>
 
+      {/* ============================================================
+          MODAL DE DETALLE DEL ESTUDIANTE (con FUGAS)
+          ============================================================ */}
       {estudianteDetalle &&
         (() => {
           const estudianteId = estudianteDetalle.id;
@@ -1763,29 +2121,18 @@ export default function PPE() {
           const justificadas = asistenciasEstudiante.filter(
             (a) => a.estado === "justificado",
           ).length;
+          const fugas = asistenciasEstudiante.filter(
+            (a) => a.estado === "fuga",
+          ).length;
           const promedio = notasEstudiante.length
             ? notasEstudiante.reduce(
                 (total, registro) => total + registro.nota,
                 0,
               ) / notasEstudiante.length
             : null;
-
-          const etiquetaEstado: Record<EstadoPPE, string> = {
-            presente: "Presente",
-            ausente: "Ausente",
-            justificado: "Justificado",
-            atraso: "Atraso",
-          };
-          const colorEstado: Record<EstadoPPE, string> = {
-            presente: "bg-[#EAF0F6] text-[#1B354D]",
-            ausente: "bg-rose-50 text-rose-700",
-            justificado: "bg-amber-50 text-amber-700",
-            atraso: "bg-sky-50 text-sky-700",
-          };
-
           return (
             <div
-              className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-2 sm:p-3"
+              className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-2 backdrop-blur-[2px] sm:p-3"
               role="dialog"
               aria-modal="true"
               aria-labelledby="ppe-detalle-title"
@@ -1794,7 +2141,7 @@ export default function PPE() {
                   setEstudianteDetalle(null);
               }}
             >
-              <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)] border border-[#D8DEE6]">
+              <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
                 <header className="flex items-start justify-between border-b border-[#D8DEE6] px-3 py-4">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-wider text-violet-700">
@@ -1826,9 +2173,8 @@ export default function PPE() {
                     <FaTimes />
                   </button>
                 </header>
-
                 <div className="overflow-y-auto p-3 sm:p-3">
-                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                     <div className="rounded-lg border border-[#E2EAF3] bg-[#EAF0F6] p-3">
                       <p className="text-[10px] font-medium text-[#244563]">
                         Presentes
@@ -1845,24 +2191,31 @@ export default function PPE() {
                         {atrasos}
                       </p>
                     </div>
-                    <div className="rounded-lg border border-rose-100 bg-rose-50 p-3">
-                      <p className="text-[10px] font-medium text-rose-700">
+                    <div className="rounded-lg border border-orange-100 bg-orange-50 p-3">
+                      <p className="text-[10px] font-medium text-[#9A4518]">
                         Ausencias
                       </p>
-                      <p className="mt-1 text-2xl font-bold text-rose-800">
+                      <p className="mt-1 text-2xl font-bold text-[#9A4518]">
                         {ausencias}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-rose-100 bg-rose-50 p-3">
+                      <p className="text-[10px] font-medium text-rose-700">
+                        Fugas
+                      </p>
+                      <p className="mt-1 text-2xl font-bold text-rose-800">
+                        {fugas}
                       </p>
                     </div>
                     <div className="rounded-lg border border-violet-100 bg-violet-50 p-3">
                       <p className="text-[10px] font-medium text-violet-700">
-                        Promedio de notas
+                        Promedio
                       </p>
                       <p className="mt-1 text-2xl font-bold text-violet-800">
                         {promedio === null ? "—" : promedio.toFixed(2)}
                       </p>
                     </div>
                   </div>
-
                   <div className="mt-3 grid gap-3 lg:grid-cols-2">
                     <section className="overflow-hidden rounded-lg border border-[#D8DEE6]">
                       <div className="border-b border-[#ECEFF3] bg-[#ECEFF3] px-2.5 py-3">
@@ -1872,6 +2225,7 @@ export default function PPE() {
                         <p className="text-[10px] text-[#6B7280]">
                           {asistenciasEstudiante.length} registro(s) ·{" "}
                           {justificadas} justificada(s)
+                          {fugas > 0 && <> · {fugas} fuga(s)</>}
                         </p>
                       </div>
                       {asistenciasEstudiante.length === 0 ? (
@@ -1880,7 +2234,7 @@ export default function PPE() {
                         </p>
                       ) : (
                         <div className="max-h-80 overflow-y-auto">
-                          <table className="w-full text-[11px] border-collapse">
+                          <table className="w-full border-collapse text-[11px]">
                             <thead className="sticky top-0 bg-[#FFFFFF] text-left text-[10px] uppercase text-[#6B7280]">
                               <tr>
                                 <th className="px-2.5 py-2">Fecha</th>
@@ -1902,9 +2256,9 @@ export default function PPE() {
                                   </td>
                                   <td className="px-2.5 py-1.5">
                                     <span
-                                      className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${colorEstado[registro.estado]}`}
+                                      className={`inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${COLOR_ESTADO_BADGE[registro.estado]}`}
                                     >
-                                      {etiquetaEstado[registro.estado]}
+                                      {ETIQUETA_ESTADO[registro.estado]}
                                     </span>
                                     {registro.observacion?.trim() && (
                                       <p className="mt-1 text-[10px] text-[#6B7280]">
@@ -1919,7 +2273,6 @@ export default function PPE() {
                         </div>
                       )}
                     </section>
-
                     <section className="overflow-hidden rounded-lg border border-[#D8DEE6]">
                       <div className="border-b border-[#ECEFF3] bg-[#ECEFF3] px-2.5 py-3">
                         <h3 className="font-semibold text-[#374151]">
@@ -1935,7 +2288,7 @@ export default function PPE() {
                         </p>
                       ) : (
                         <div className="max-h-80 overflow-y-auto">
-                          <table className="w-full text-[11px] border-collapse">
+                          <table className="w-full border-collapse text-[11px]">
                             <thead className="sticky top-0 bg-[#FFFFFF] text-left text-[10px] uppercase text-[#6B7280]">
                               <tr>
                                 <th className="px-2.5 py-2">
@@ -1970,7 +2323,11 @@ export default function PPE() {
                                   </td>
                                   <td className="whitespace-nowrap px-2.5 py-1.5 text-right">
                                     <span
-                                      className={`inline-flex rounded-lg px-2.5 py-1 font-bold ${registro.nota >= 7 ? "bg-[#EAF0F6] text-[#244563]" : "bg-amber-50 text-amber-700"}`}
+                                      className={`inline-flex rounded-lg px-2.5 py-1 font-bold ${
+                                        registro.nota >= 7
+                                          ? "bg-[#EAF0F6] text-[#244563]"
+                                          : "bg-amber-50 text-amber-700"
+                                      }`}
                                     >
                                       {registro.nota.toFixed(2)}/10
                                     </span>
@@ -1984,12 +2341,11 @@ export default function PPE() {
                     </section>
                   </div>
                 </div>
-
                 <footer className="flex justify-end border-t border-[#D8DEE6] bg-[#ECEFF3] px-3 py-3">
                   <button
                     type="button"
                     onClick={() => setEstudianteDetalle(null)}
-                    className="min-h-8 rounded-md bg-[#273444] px-2.5  text-[11px] font-semibold text-white hover:bg-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                    className="min-h-8 rounded-md bg-[#273444] px-2.5 text-[11px] font-semibold text-white hover:bg-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                   >
                     Cerrar detalle
                   </button>
@@ -1999,14 +2355,210 @@ export default function PPE() {
           );
         })()}
 
+      {/* ============================================================
+          MODAL: JUSTIFICAR FALTAS
+          ============================================================ */}
+      {showJustificarModal && (
+        <div
+          className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-2 backdrop-blur-[2px] sm:p-3"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ppe-justificar-title"
+        >
+          <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
+            <header className="flex items-start justify-between border-b border-[#D8DEE6] px-3 py-3">
+              <div className="flex items-start gap-2.5">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[#FFF7ED] text-[#9A4518]">
+                  <FaEdit className="text-sm" />
+                </span>
+                <div>
+                  <h2
+                    id="ppe-justificar-title"
+                    className="text-sm font-semibold text-[#273444]"
+                  >
+                    Justificar faltas
+                  </h2>
+                  <p className="mt-0.5 text-[11px] text-[#6B7280]">
+                    Cambia el estado de Ausente / Atraso / Fuga a{" "}
+                    <strong>Justificado</strong> y agrega una observación.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowJustificarModal(false)}
+                className="min-h-8 rounded-md p-2 text-[#6B7280] hover:bg-[#ECEFF3] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                aria-label="Cerrar"
+              >
+                <FaTimes />
+              </button>
+            </header>
+
+            <div className="flex flex-wrap items-center gap-3 border-b border-[#ECEFF3] bg-[#F3F4F6] px-3 py-2">
+              <label className="text-[11px] font-medium text-[#4B5563]">
+                Fecha
+                <input
+                  type="date"
+                  value={fechaJustificar}
+                  onChange={(e) => setFechaJustificar(e.target.value)}
+                  className="ml-2 h-8 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-[11px] text-[#374151] focus:border-[#244563] focus:outline-none"
+                />
+              </label>
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const nuevos = new Set(seleccionadosJustificar);
+                    if (nuevos.size === registrosJustificables.length) {
+                      nuevos.clear();
+                    } else {
+                      registrosJustificables.forEach((r) =>
+                        nuevos.add(r.estudianteId),
+                      );
+                    }
+                    setSeleccionadosJustificar(nuevos);
+                  }}
+                  disabled={registrosJustificables.length === 0}
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2.5 text-[11px] font-semibold text-[#4B5563] hover:bg-[#F3F4F6] disabled:opacity-50"
+                >
+                  {seleccionadosJustificar.size ===
+                    registrosJustificables.length &&
+                  registrosJustificables.length > 0
+                    ? "Deseleccionar todos"
+                    : "Seleccionar todos"}
+                </button>
+                <button
+                  onClick={justificarSeleccionados}
+                  disabled={saving || seleccionadosJustificar.size === 0}
+                  className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white disabled:opacity-50"
+                >
+                  {saving
+                    ? "Guardando…"
+                    : `Justificar (${seleccionadosJustificar.size})`}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-3">
+              {loadingJustificar ? (
+                <div className="flex items-center justify-center py-10 text-[#6B7280]">
+                  Cargando asistencias de la fecha…
+                </div>
+              ) : registrosJustificables.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center">
+                  <FaUserCheck className="mb-2 text-3xl text-[#9CA3AF]" />
+                  <p className="text-sm font-semibold text-[#374151]">
+                    Sin faltas por justificar
+                  </p>
+                  <p className="mt-1 max-w-sm text-[11px] text-[#6B7280]">
+                    En la fecha{" "}
+                    <strong>{formatearFecha(fechaJustificar)}</strong> no hay
+                    estudiantes con estado Ausente, Atraso o Fuga en tu lista
+                    PPE.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {registrosJustificables.map((r) => {
+                    const estudiante = estudiantesPPE.find(
+                      (e) => e.id === r.estudianteId,
+                    );
+                    if (!estudiante) return null;
+                    const obs = observacionesJustificar[r.estudianteId] ?? "";
+                    const checked = seleccionadosJustificar.has(r.estudianteId);
+                    return (
+                      <div
+                        key={r.id ?? r.estudianteId}
+                        className={`rounded-lg border p-2.5 transition-colors ${
+                          checked
+                            ? "border-[#C96522] bg-[#FFF7ED]"
+                            : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const nuevos = new Set(seleccionadosJustificar);
+                              if (e.target.checked) nuevos.add(r.estudianteId);
+                              else nuevos.delete(r.estudianteId);
+                              setSeleccionadosJustificar(nuevos);
+                            }}
+                            className="h-4 w-4 accent-[#C96522]"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[12px] font-semibold text-[#273444]">
+                              {nombreCompleto(estudiante)}
+                            </p>
+                            <p className="text-[10px] text-[#6B7280]">
+                              {gradoNombre(estudiante.gradoId)}
+                            </p>
+                          </div>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold ${COLOR_ESTADO_BADGE[r.estado]}`}
+                          >
+                            {r.estado === "ausente" && (
+                              <FaUserTimes className="text-[9px]" />
+                            )}
+                            {r.estado === "fuga" && (
+                              <FaRunning className="text-[9px]" />
+                            )}
+                            {r.estado === "atraso" && (
+                              <FaUserCheck className="text-[9px]" />
+                            )}
+                            {ETIQUETA_ESTADO[r.estado]}
+                          </span>
+                          <button
+                            onClick={() => justificarEstudiante(r)}
+                            disabled={saving}
+                            className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-[#244563] px-2.5 text-[11px] font-semibold text-white hover:bg-[#1B354D] disabled:opacity-50"
+                          >
+                            <FaCheckCircle className="text-[10px]" /> Justificar
+                          </button>
+                        </div>
+                        <div className="mt-2">
+                          <input
+                            type="text"
+                            value={obs}
+                            onChange={(e) =>
+                              setObservacionesJustificar((p) => ({
+                                ...p,
+                                [r.estudianteId]: e.target.value,
+                              }))
+                            }
+                            placeholder="Motivo de la justificación (obligatorio)…"
+                            className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2.5 text-[11px] text-[#374151] focus:border-[#244563] focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <footer className="flex justify-end border-t border-[#D8DEE6] bg-[#F3F4F6] px-3 py-2.5">
+              <button
+                onClick={() => setShowJustificarModal(false)}
+                className="min-h-8 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] hover:bg-[#ECEFF3]"
+              >
+                Cerrar
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================
+          MODAL: SELECTOR DE ESTUDIANTES
+          ============================================================ */}
       {showSelector && (
         <div
-          className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-2 sm:p-3"
+          className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 p-2 backdrop-blur-[2px] sm:p-3"
           role="dialog"
           aria-modal="true"
           aria-labelledby="ppe-selector-title"
         >
-          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)] border border-[#D8DEE6]">
+          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
             <div className="flex items-start justify-between border-b border-[#D8DEE6] p-3 sm:p-3">
               <div>
                 <h2
@@ -2038,13 +2590,13 @@ export default function PPE() {
                   value={busqueda}
                   onChange={(e) => setBusqueda(e.target.value)}
                   placeholder="Buscar estudiante o código…"
-                  className="h-8 w-full rounded-md border border-[#BFC9D4]  pl-9 pr-3 focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                  className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] pl-9 pr-3 text-[#374151] focus:border-[#244563] focus:outline-none"
                 />
               </label>
               <select
                 value={filtroGrado}
                 onChange={(e) => setFiltroGrado(e.target.value)}
-                className="h-8 rounded-md border border-[#BFC9D4] px-3  focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                className="h-8 rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[#374151] focus:border-[#244563] focus:outline-none"
               >
                 <option value="todos">Todos mis grados</option>
                 {gradosPermitidos.map((g) => (
@@ -2062,7 +2614,7 @@ export default function PPE() {
                     ]),
                   ])
                 }
-                className="min-h-8 rounded-md border border-[#C8D6E5] bg-[#EAF0F6] px-3  text-[11px] font-semibold text-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                className="min-h-8 rounded-md border border-[#C8D6E5] bg-[#EAF0F6] px-3 text-[11px] font-semibold text-[#1B354D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 Seleccionar visibles
               </button>
@@ -2074,7 +2626,7 @@ export default function PPE() {
                     ),
                   )
                 }
-                className="min-h-8 rounded-md border border-[#D8DEE6] px-3  text-[11px] font-semibold text-[#64748B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                className="min-h-8 rounded-md border border-[#D8DEE6] px-3 text-[11px] font-semibold text-[#64748B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 Quitar visibles
               </button>
@@ -2122,7 +2674,7 @@ export default function PPE() {
                                   : prev.filter((id) => id !== e.id),
                               )
                             }
-                            className="h-8 w-4 accent-emerald-700 focus:border-[#244563] focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                            className="h-4 w-4 accent-emerald-700"
                           />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-[11px] font-semibold text-[#374151]">
@@ -2152,14 +2704,14 @@ export default function PPE() {
                     setSeleccionTemporal(estudianteIds);
                     setShowSelector(false);
                   }}
-                  className="min-h-8 rounded-md border px-2.5  text-[11px] font-semibold text-[#64748B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                  className="min-h-8 rounded-md border px-2.5 text-[11px] font-semibold text-[#64748B] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                 >
                   Cancelar
                 </button>
                 <button
                   onClick={guardarSeleccion}
                   disabled={saving}
-                  className="min-h-8 rounded-md bg-[#244563] px-3  text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                  className="min-h-8 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                 >
                   {saving ? "Guardando…" : "Guardar selección"}
                 </button>
@@ -2169,7 +2721,7 @@ export default function PPE() {
         </div>
       )}
 
-      {/* SISTEMA DE TOASTS FLOTANTES */}
+      {/* SISTEMA DE TOASTS */}
       <div className="pointer-events-none fixed right-3 top-3 z-100 w-full max-w-xs space-y-2">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -2177,7 +2729,7 @@ export default function PPE() {
           return (
             <div
               key={toast.id}
-              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] ${config.bg}`}
             >
               <span
                 className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}

@@ -30,10 +30,9 @@ import MigracionAsistencia from "./pages/MigracionAsistencia";
 import EnMantenimiento from "./pages/EnMantenimiento";
 import GestionMateriasDocentes from "./pages/GestionMateriasDocentes";
 
-
-
 function PrivateRoute({ children }: { children: ReactNode }) {
-  const { user, userData, loading, authError, retryProfile, logout } = useAuth();
+  const { user, userData, loading, authError, retryProfile, logout } =
+    useAuth();
 
   // Configuración de mantenimiento, sincronizada en tiempo real desde Firestore.
   const [mantenimiento, setMantenimiento] = useState(false);
@@ -84,14 +83,36 @@ function PrivateRoute({ children }: { children: ReactNode }) {
   if (authError || !userData) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-        <div role="alert" className="max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm">
-          <h1 className="font-semibold text-slate-900">No se pudo verificar tu cuenta</h1>
+        <div
+          role="alert"
+          className="max-w-md rounded-xl border border-slate-200 bg-white p-6 text-center shadow-sm"
+        >
+          <h1 className="font-semibold text-slate-900">
+            No se pudo verificar tu cuenta
+          </h1>
           <p className="mt-2 text-sm text-slate-600">
-            {authError || "No se pudo obtener tu perfil. Reintenta o contacta al administrador."}
+            {authError ||
+              "No se pudo obtener tu perfil. Reintenta o contacta al administrador."}
           </p>
           <div className="mt-4 flex justify-center gap-3">
-            <button type="button" onClick={retryProfile} className="rounded-lg bg-green-800 px-4 py-2 text-sm font-semibold text-white">Reintentar</button>
-            <button type="button" onClick={() => { void logout().catch(() => window.alert("No se pudo cerrar sesión. Intenta nuevamente.")); }} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">Cerrar sesión</button>
+            <button
+              type="button"
+              onClick={retryProfile}
+              className="rounded-lg bg-green-800 px-4 py-2 text-sm font-semibold text-white"
+            >
+              Reintentar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void logout().catch(() =>
+                  window.alert("No se pudo cerrar sesión. Intenta nuevamente."),
+                );
+              }}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm"
+            >
+              Cerrar sesión
+            </button>
           </div>
         </div>
       </div>
@@ -106,8 +127,20 @@ function PrivateRoute({ children }: { children: ReactNode }) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4">
         <div role="alert" className="text-center">
-          <p className="text-slate-700">Tu cuenta está bloqueada o rechazada. Contacta al administrador.</p>
-          <button type="button" onClick={() => { void logout().catch(() => window.alert("No se pudo cerrar sesión.")); }} className="mt-4 rounded-lg bg-green-800 px-4 py-2 text-white">Cerrar sesión</button>
+          <p className="text-slate-700">
+            Tu cuenta está bloqueada o rechazada. Contacta al administrador.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              void logout().catch(() =>
+                window.alert("No se pudo cerrar sesión."),
+              );
+            }}
+            className="mt-4 rounded-lg bg-green-800 px-4 py-2 text-white"
+          >
+            Cerrar sesión
+          </button>
         </div>
       </div>
     );
@@ -264,7 +297,14 @@ function AppRoutes() {
         }
       />
 
-      <Route path="/notificaciones" element={<PrivateRoute><Notificaciones /></PrivateRoute>} />
+      <Route
+        path="/notificaciones"
+        element={
+          <PrivateRoute>
+            <Notificaciones />
+          </PrivateRoute>
+        }
+      />
 
       {/* Perfil personal */}
       <Route
