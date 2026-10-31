@@ -3824,6 +3824,7 @@ function ContenidoCalificaciones() {
           )}
 
           {/* ============ PANEL 2: CALIFICACIONES ============ */}
+          {/* ============ PANEL 2: CALIFICACIONES ============ */}
           {panel === 2 && (
             <section
               className={mostrarBarraStickyCalificaciones ? "pb-28" : ""}
@@ -4066,13 +4067,10 @@ function ContenidoCalificaciones() {
                               <div
                                 key={est.id}
                                 className={`group rounded-lg border p-3 transition-all duration-200 
-    /* Fondo interactivo */
     hover:bg-[#F8FAFC] focus-within:bg-[#F8FAFC] 
     
-    /* 👇 Borde AZUL OSCURO para ambos estados. Ya no hay colores distintos */
     hover:border-[#244563] focus-within:border-[#244563] 
     
-    /* 👇 Sombra sutil y el anillo de enfoque azul */
     hover:shadow-[0_4px_12px_rgba(36,69,99,0.08)] 
     focus-within:shadow-[0_4px_12px_rgba(36,69,99,0.08)] 
     focus-within:ring-2 focus-within:ring-[#244563]/20
@@ -4087,7 +4085,6 @@ function ContenidoCalificaciones() {
             : "border-[#D8DEE6] bg-white"
     } 
     
-    /* Acento izquierdo AZUL OSCURO en ambos estados */
     ${
       bloqueadoPorAusenciaHoy
         ? "border-l-4 border-l-[#C93F45]"
@@ -4109,11 +4106,32 @@ function ContenidoCalificaciones() {
                                           Adaptación
                                         </span>
                                       )}
+
+                                      {/* 👇 ETIQUETA CON VER DETALLE ARRIBA 👇 */}
                                       {tieneRefuerzo && (
-                                        <span className="rounded bg-orange-50 px-1.5 py-px text-[10px] font-semibold text-[#A9501A] ring-1 ring-inset ring-orange-200">
-                                          Refuerzo
-                                        </span>
+                                        <div className="flex items-center gap-1">
+                                          <span className="rounded bg-orange-50 px-1.5 py-px text-[10px] font-semibold text-[#A9501A] ring-1 ring-inset ring-orange-200">
+                                            Refuerzo
+                                          </span>
+                                          <button
+                                            type="button"
+                                            title={`Fecha: ${calificacion?.refuerzo?.fecha}\nEstrategia: ${
+                                              ESTRATEGIAS_NOTA.find(
+                                                (estr) =>
+                                                  estr.value ===
+                                                  (calificacion?.refuerzo
+                                                    ?.estrategiaElegida ||
+                                                    "promediar"),
+                                              )?.label
+                                            }\nDetalle: ${calificacion?.refuerzo?.detalle}`}
+                                            className="text-[9px] text-[#A9501A] underline decoration-dotted underline-offset-2 hover:text-[#C96522] cursor-help transition-colors"
+                                          >
+                                            Ver detalle
+                                          </button>
+                                        </div>
                                       )}
+                                      {/* 👆 FIN DE LA ETIQUETA CON DETALLE 👆 */}
+
                                       {esConsolidadoSel && (
                                         <span className="rounded bg-[#FFF7ED] px-1.5 py-px text-[10px] font-semibold text-[#9A3412] ring-1 ring-inset ring-[#FED7AA]">
                                           Insumo
@@ -4283,43 +4301,11 @@ function ContenidoCalificaciones() {
                                     )}
                                   </div>
                                 </div>
-                                {calificacion?.refuerzo &&
-                                  !bloqueadoPorAusenciaHoy && (
-                                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded border border-orange-100 bg-orange-50/50 px-2 py-1 text-[10px] text-[#A9501A]">
-                                      <span className="font-semibold">
-                                        Refuerzo {calificacion.refuerzo.fecha}
-                                      </span>
-                                      <span className="rounded bg-[#FFFFFF] px-1 py-px font-semibold text-[#A9501A] ring-1 ring-inset ring-orange-200">
-                                        {ESTRATEGIAS_NOTA.find(
-                                          (e) =>
-                                            e.value ===
-                                            (calificacion.refuerzo
-                                              ?.estrategiaElegida ||
-                                              actividadSeleccionada?.estrategiaNota ||
-                                              "promediar"),
-                                        )?.label.split(" ")[0] || "Estrategia"}
-                                      </span>
-                                      <span>
-                                        Original{" "}
-                                        <strong>
-                                          {round2(notaOriginal ?? 0)}
-                                        </strong>{" "}
-                                        → Refuerzo{" "}
-                                        <strong>
-                                          {round2(calificacion.refuerzo.nota)}
-                                        </strong>{" "}
-                                        → Final{" "}
-                                        <strong>{round2(notaFinal)}</strong>
-                                      </span>
-                                      <span className="truncate text-[#C96522]">
-                                        · {calificacion.refuerzo.detalle}
-                                      </span>
-                                    </div>
-                                  )}
+
+                                {/* 👇 INPUT DE OBSERVACIÓN AL 80% CON FOCO GRIS 👇 */}
                                 {!bloqueadoPorAusenciaHoy &&
                                   !esConsolidadoSel && (
-                                    // 👇 En PC (lg) ocupa el 50%, en Tablet/Móvil ocupa el 100%
-                                    <div className="mt-1 flex flex-col gap-1.5 lg:flex-row lg:items-center lg:w-1/2">
+                                    <div className="mt-1.5 flex flex-col gap-2 lg:flex-row lg:items-center lg:w-[80%]">
                                       <input
                                         type="text"
                                         value={calificacion?.observacion || ""}
@@ -4335,14 +4321,12 @@ function ContenidoCalificaciones() {
                                             ? "Observación (sugerido: justificar la nota)"
                                             : "Observación (opcional)..."
                                         }
-                                        className={`h-9 w-full lg:flex-1 rounded-md border px-2.5 text-xs transition-colors focus:outline-none focus:ring-2 ${
+                                        // 👇 Cambiamos h-9 por h-8 y text-xs por text-[11px] para igualar a los chips
+                                        className={`h-8 w-full lg:flex-1 rounded-md border px-2 text-[11px] transition-colors focus:outline-none focus:ring-2 ${
                                           ausenteAntiguo
                                             ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                             : "border-[#D8DEE6] bg-[#FFFFFF] text-[#4B5563]"
-                                        } ${
-                                          // 👇 AQUÍ EL CAMBIO DE FOCO A GRIS CON SOMBRA
-                                          "focus:border-[#9CA3AF] focus:ring-[#9CA3AF]/20 focus:shadow-sm"
-                                        }`}
+                                        } ${"focus:border-[#9CA3AF] focus:ring-[#9CA3AF]/20 focus:shadow-sm"}`}
                                       />
                                       <div className="flex shrink-0 items-center overflow-x-auto">
                                         {renderizarChipsObservacion(
@@ -4361,6 +4345,8 @@ function ContenidoCalificaciones() {
                                       </div>
                                     </div>
                                   )}
+                                {/* 👆 FIN DEL INPUT DE OBSERVACIÓN 👆 */}
+
                                 {esConsolidadoSel &&
                                   calificacion?.observacion && (
                                     <div className="mt-1 text-[10px] text-[#9A3412]">
@@ -5723,7 +5709,8 @@ function ContenidoCalificaciones() {
                                     ? "Nota baja: indica el motivo..."
                                     : "Observación (opcional)..."
                                 }
-                                className={`h-9 w-full rounded-md border px-2.5 text-xs transition-colors focus:border-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#9CA3AF]/20 focus:shadow-sm ${
+                                // 👇 CAMBIO: h-8, px-2 y text-[11px] para igualar a los chips
+                                className={`h-8 w-full rounded-md border px-2 text-[11px] transition-colors focus:border-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#9CA3AF]/20 focus:shadow-sm ${
                                   esNotaBaja
                                     ? "border-amber-300 bg-amber-50 text-[#4B5563]"
                                     : obsModificada
