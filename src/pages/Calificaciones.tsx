@@ -91,6 +91,10 @@ import {
   estadoEsTutorOnly,
   estadoConfig,
 } from "../utils/asistencia";
+import {
+  CHIPS_PRINCIPALES_POR_TIPO,
+  CHIPS_GENERICOS_DETALLADOS,
+} from "../utils/chipsActividades";
 
 interface AsistenciaData {
   estudianteId: string;
@@ -215,169 +219,6 @@ const ESTRATEGIAS_NOTA = [
 ];
 const NOMBRES_DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie"];
 const HORAS_DIA = [1, 2, 3, 4, 5, 6, 7];
-
-// ============================================================
-// 🏷️ CHIPS DE OBSERVACIÓN INTELIGENTES
-// ============================================================
-
-// 1. Chips Universales (Para cualquier materia, cualquier actividad)
-const CHIPS_GENERALES = [
-  "Trabajo completo",
-  "Trabajo incompleto",
-  "No presentó",
-  "Presentación deficiente",
-  "Excelente presentación",
-  "Requiere corrección",
-  "Presentado fuera de plazo",
-  "Copiado / Plagio",
-];
-
-// 2. Chips por Tipo de Actividad (Independiente de la materia)
-const CHIPS_POR_TIPO: Record<string, string[]> = {
-  Lección: [
-    "Dominio del tema",
-    "Dificultad al explicar",
-    "No rindió",
-    "Leyó sin explicar",
-  ],
-  Exposición: [
-    "Dominio del tema",
-    "Dificultad al explicar",
-    "No rindió",
-    "Leyó sin explicar",
-  ],
-  "Proyecto Grupal": [
-    "Participación activa",
-    "No participó",
-    "Incumplió su rol",
-  ],
-  "Evaluación Trimestral": [
-    "Requiere recuperación",
-    "No alcanzó los aprendizajes",
-  ],
-};
-
-// 3. Chips por Materia (Se activan según el nombre de la asignatura)
-const CHIPS_POR_MATERIA: Record<string, string[]> = {
-  // 🧮 Exactas y Ciencias
-  Matemática: [
-    "Resolvió bien en el pizarrón",
-    "Error en el pizarrón",
-    "No quiso pasar al pizarrón",
-    "Procedimiento correcto",
-    "Falta desarrollo del ejercicio",
-  ],
-  Física: [
-    "Resolvió bien en el pizarrón",
-    "Error en el pizarrón",
-    "No quiso pasar al pizarrón",
-    "Procedimiento correcto",
-    "Falta desarrollo del ejercicio",
-  ],
-  Química: [
-    "Resolvió bien en el pizarrón",
-    "Error en el pizarrón",
-    "No quiso pasar al pizarrón",
-    "Procedimiento correcto",
-    "Falta desarrollo del ejercicio",
-  ],
-  Biología: ["Uso correcto de términos", "Falta fundamento científico"],
-
-  // 📖 Lengua y Sociales
-  "Lengua y Literatura": [
-    "Buena ortografía",
-    "Errores ortográficos",
-    "Falta coherencia",
-    "Lectura fluida",
-    "Lectura pausada",
-  ],
-  "Animación a la Lectura": [
-    "Lectura fluida",
-    "Lectura pausada",
-    "Participación activa",
-    "No leyó",
-  ],
-  "Lectura Crítica": [
-    "Buena argumentación",
-    "Argumentación débil",
-    "Falta análisis del texto",
-  ],
-  Historia: ["Manejo de fechas", "Confunde épocas", "Buena síntesis"],
-  Filosofía: [
-    "Argumentación lógica",
-    "Falta profundidad",
-    "Reflexión superficial",
-  ],
-  "Educación para la Ciudadanía": [
-    "Conoce sus derechos",
-    "Falta civismo",
-    "Buena participación",
-  ],
-
-  // 🎨 Arte y Deporte
-  "Educación Física": [
-    "Participación activa",
-    "Uniforme adecuado",
-    "Uniforme inadecuado",
-    "Se le dificulta el ejercicio",
-    "Excelente desempeño físico",
-  ],
-  ECA: [
-    "Creatividad",
-    "Falta de materiales",
-    "Trabajo limpio",
-    "Trabajo desordenado",
-  ],
-  "Emprendimiento y Gestión": [
-    "Idea innovadora",
-    "Falta plan de negocio",
-    "Buena presentación del proyecto",
-  ],
-
-  // 🎯 Orientación / Acompañamiento
-  "Acompañamiento Integral en el Aula": [
-    "Participación activa",
-    "Actitud positiva",
-    "Falta de interés",
-  ],
-  "Orientación Vocacional y Profesional (OVP)": [
-    "Reflexión clara",
-    "Falta de participación",
-    "Interés en su futuro",
-  ],
-  Investigación: [
-    "Buena búsqueda de fuentes",
-    "Falta metodología",
-    "Citas correctas",
-  ],
-  "Razonamiento Lógico": [
-    "Razonamiento rápido",
-    "Dificultad en el razonamiento",
-    "Falta secuencia lógica",
-  ],
-};
-
-// 4. Función maestra para obtener los chips
-const obtenerChips = (tipoActividad: string, nombreMateria: string) => {
-  const materiaNormalizada = (nombreMateria || "")
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  const chipsMateria =
-    Object.entries(CHIPS_POR_MATERIA).find(([key]) => {
-      const keyNormalizada = key
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "");
-      return materiaNormalizada
-        .toLowerCase()
-        .includes(keyNormalizada.toLowerCase());
-    })?.[1] || [];
-
-  const chipsTipo = CHIPS_POR_TIPO[tipoActividad] || [];
-
-  return [...new Set([...CHIPS_GENERALES, ...chipsTipo, ...chipsMateria])];
-};
 
 // ============================================================
 
@@ -2545,63 +2386,80 @@ function ContenidoCalificaciones() {
     obsActual: string,
     onUpdate: (nuevoTexto: string) => void,
   ) => {
-    const todosLosChips = obtenerChips(tipoActividad, materia);
-    const chipsPrincipales = todosLosChips.slice(0, 3);
-    const chipsRestantes = todosLosChips.slice(3);
+    // 1. Obtenemos la lista completa de chips para este tipo de actividad (o los genéricos si no existe)
+    const listaCompleta =
+      CHIPS_PRINCIPALES_POR_TIPO[tipoActividad] || CHIPS_GENERICOS_DETALLADOS;
+
+    // 2. Extraemos los primeros 3 para la vista principal
+    const chipsPrincipales = listaCompleta.slice(0, 3);
+
+    // 3. El resto (del 4to en adelante) van al modal de más opciones
+    const chipsRestantes = listaCompleta.slice(3);
+
     const modalAbierto = menuChipsAbierto[idClave] || false;
 
-    // 🎨 Función para asignar colores sutiles según el texto
+    // 🎨 Función de colores adaptada a los nuevos textos
     const getColorChip = (texto: string, activo: boolean) => {
       // Si no está activo, siempre es gris neutro
       if (!activo) {
         return "bg-[#ECEFF3] border-transparent text-[#4B5563] hover:bg-[#E4E8EE]";
       }
 
-      // Si está activo, evaluamos el texto para darle su color
       const t = texto.toLowerCase();
 
-      // ⚠️ IMPORTANTE: Evaluar primero los casos negativos/intermedios
+      // Ámbar / Naranja para estados intermedios o de advertencia
       if (
-        t.includes("incompleto") ||
         t.includes("parcial") ||
-        t.includes("corrección") ||
+        t.includes("proceso") ||
+        t.includes("requiere") ||
+        t.includes("superficial") ||
         t.includes("dificultad") ||
-        t.includes("pausada") ||
-        t.includes("fuera de plazo")
+        t.includes("mínimo") ||
+        t.includes("ayuda") ||
+        t.includes("revisión") ||
+        t.includes("acompañamiento") ||
+        t.includes("seguimiento")
       ) {
-        return "bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]"; // Ámbar
+        return "bg-[#FFFBEB] border-[#FDE68A] text-[#92400E]";
       }
 
+      // Rojo para estados negativos, ausencias o incumplimiento
       if (
-        t.includes("no presentó") ||
-        t.includes("no rindió") ||
-        t.includes("copiado") ||
-        t.includes("plagio") ||
-        t.includes("ausente") ||
-        t.includes("no quiso")
+        t.includes("no ") ||
+        t.includes("falta") ||
+        t.includes("conflicto") ||
+        t.includes("desordenada") ||
+        t.includes("incompleto") ||
+        t.includes("inicial")
       ) {
-        return "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]"; // Rojo
+        return "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]";
       }
 
+      // Verde para estados positivos, destacados o completos
       if (
-        t.includes("completo") ||
-        t.includes("entregado") ||
-        t.includes("excelente") ||
-        t.includes("dominio") ||
-        t.includes("buena")
+        t.includes("destacad") ||
+        t.includes("sobresaliente") ||
+        t.includes("completó") ||
+        t.includes("domina") ||
+        t.includes("efectiv") ||
+        t.includes("seguridad") ||
+        t.includes("profund") ||
+        t.includes("activo") ||
+        t.includes("notable") ||
+        t.includes("adecuado") ||
+        t.includes("logro")
       ) {
-        return "bg-[#F0FDF4] border-[#BBF7D0] text-[#166534]"; // Verde
+        return "bg-[#F0FDF4] border-[#BBF7D0] text-[#166534]";
       }
 
-      // Si no coincide con nada, azul institucional
+      // Azul institucional por defecto para lo demás
       return "bg-[#EAF0F6] border-[#C8D6E5] text-[#244563]";
     };
 
     return (
       <>
         <div className="flex flex-wrap items-center gap-1.5">
-          {/* Chips Principales con colores sutiles */}
-          {/* Chips Principales con colores sutiles */}
+          {/* Chips Principales (Los 3 primeros de la lista) */}
           {chipsPrincipales.map((chip) => {
             const activo = obsActual.includes(chip);
             const colorBase = getColorChip(chip, activo);
@@ -2628,7 +2486,7 @@ function ContenidoCalificaciones() {
             );
           })}
 
-          {/* Botón Más Opciones (Mantiene su estilo neutral) */}
+          {/* Botón Más Opciones */}
           {chipsRestantes.length > 0 && (
             <button
               type="button"
@@ -2669,7 +2527,6 @@ function ContenidoCalificaciones() {
               <div className="flex max-h-[50vh] flex-wrap gap-2 overflow-y-auto">
                 {chipsRestantes.map((chip) => {
                   const activo = obsActual.includes(chip);
-                  // 👇 Aquí pasamos el segundo argumento 'activo' a la función
                   const colorBase = getColorChip(chip, activo);
 
                   return (
@@ -2689,7 +2546,6 @@ function ContenidoCalificaciones() {
                           [idClave]: false,
                         }));
                       }}
-                      // 👇 Aplicamos las clases del colorBase generado
                       className={`rounded-md px-3 py-2 text-[11px] font-medium transition-colors border ${colorBase}`}
                     >
                       {chip}
@@ -2724,7 +2580,6 @@ function ContenidoCalificaciones() {
               <div className="flex max-h-[50vh] flex-wrap gap-2 overflow-y-auto">
                 {chipsRestantes.map((chip) => {
                   const activo = obsActual.includes(chip);
-                  // 👇 Aquí pasamos el segundo argumento 'activo' a la función
                   const colorBase = getColorChip(chip, activo);
 
                   return (
@@ -2744,7 +2599,6 @@ function ContenidoCalificaciones() {
                           [idClave]: false,
                         }));
                       }}
-                      // 👇 Aplicamos las clases del colorBase generado
                       className={`rounded-md px-3 py-2 text-[11px] font-medium transition-colors border ${colorBase}`}
                     >
                       {chip}
