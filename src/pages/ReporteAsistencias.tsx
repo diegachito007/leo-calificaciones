@@ -48,10 +48,10 @@ import {
   FaPrint,
   FaTimesCircle,
   FaSignOutAlt,
-  FaClipboardList,
   FaLock,
   FaSync,
   FaEye,
+  FaFileExcel,
 } from "react-icons/fa";
 import {
   type EstadoAsistencia,
@@ -1274,6 +1274,177 @@ export default function ReporteAsistencias() {
     }
   }
 
+  // ==================== DESCARGAR EXCEL (CSV) ====================
+  const handleDescargarExcel = () => {
+    // 1. Determinar qué días mostrar según el tipo de reporte
+    const diasParaExcel =
+      tipoReporte === "semanal"
+        ? diasSemana
+        : tipoReporte === "mensual"
+          ? diasMes
+          : diasPeriodo;
+
+    const fechasBase = diasParaExcel.map(formatFechaISO);
+
+    // 2. Construir el encabezado (Días de la semana)
+    // Usamos \t (tabulador) para separar columnas en Excel
+    let csvContent = "Estudiante\t";
+    fechasBase.forEach((fecha) => {
+      const d = parseFechaLocal(fecha);
+      csvContent += `${nombreDia(d)} ${formatFechaCorta(d)}\t`;
+    });
+    csvContent += "Total Inas.\tTotal Fugas\tTotal Atrasos\tTotal Justif.\n";
+
+    // 3. Construir las filas de estudiantes
+    const estudiantesLista =
+      vistaEfectiva === "tutor"
+        ? estudiantesGradoTutor
+        : estudiantesGradoDocente;
+
+    estudiantesLista.forEach((est) => {
+      csvContent += `"${est.apellidos} ${est.nombres}"\t`;
+
+      let totalI = 0,
+        totalF = 0,
+        totalA = 0,
+        totalJ = 0;
+
+      fechasBase.forEach((fechaISO) => {
+        let celdasDia: string; // 👈 Declaramos sin inicializar para evitar el warning
+
+        if (vistaEfectiva === "tutor") {
+          // Lógica para VISTA TUTOR (usa matrizTutor)
+          const regsDelDia = matrizTutor[est.id]?.[fechaISO] || {};
+          const registrosMaterias = Object.values(regsDelDia).sort(
+            (a, b) => (a.hora ?? 99) - (b.hora ?? 99),
+          );
+
+          if (registrosMaterias.length === 0) {
+            celdasDia = "Sin registro";
+          } else {
+            // Agrupamos por hora para que se vea bonito en la celda: "1ª: LL (A) | 2ª: M (P)"
+            celdasDia = registrosMaterias
+              .map((r) => {
+                const mat = abrevMateria(nombreMateria(r.ambitoId || ""));
+                const h = r.hora ? `${r.hora}ª` : "S/H";
+                if (r.estado === "I") totalI++;
+                if (r.estado === "F") totalF++;
+                if (r.estado === "A") totalA++;
+                if (r.estado === "J") totalJ++;
+                return `${h}: ${mat} (${r.estado})`;
+              })
+              .join(" | ");
+          }
+        } else {
+          // Lógica para VISTA DOCENTE (usa matrizDocente, recorre materias)
+          const regsMaterias: string[] = [];
+          materiasDocenteEnGrado.forEach((materia) => {
+            const regs = matrizDocente[materia.id]?.[fechaISO]?.[est.id] || [];
+            regs
+              .sort((a, b) => (a.hora ?? 99) - (b.hora ?? 99))
+              .forEach((r) => {
+                const h = r.hora ? `${r.hora}ª` : "S/H";
+                const mat = abrevMateria(materia.nombre);
+                if (r.estado === "I") totalI++;
+                if (r.estado === "F") totalF++;
+                if (r.estado === "A") totalA++;
+                if (r.estado === "J") totalJ++;
+                regsMaterias.push(`${h}: ${mat} (${r.estado})`);
+              });
+          });
+          celdasDia =
+            regsMaterias.length > 0 ? regsMaterias.join(" | ") : "Sin novedad";
+        }
+
+        // Limpiamos comillas dobles para no romper el CSV
+        csvContent += `"${celdasDia.replace(/"/g, '""')}"\t`;
+      });
+
+      // Agregamos los totales al final de la fila
+      csvContent += `${totalI}\t${totalF}\t${totalA}\t${totalJ}\n`;
+    });
+
+    // 4. Agregar Consolidados (Solo para mensual y trimestral)
+    if (tipoReporte !== "semanal") {
+      csvContent += "\n\n--- CONSOLIDADO POR MATERIA ---\n";
+      csvContent += "Materia\tInasistencias\tFugas\tAtrasos\tJustificados\n";
+
+      if (vistaEfectiva === "tutor") {
+        // Consolidado por materia para el tutor
+        materiasGradoTutor.forEach((materia) => {
+          let mI = 0,
+            mF = 0,
+            mA = 0,
+            mJ = 0;
+          estudiantesLista.forEach((est) => {
+            fechasBase.forEach((fechaISO) => {
+              const regs = matrizTutor[est.id]?.[fechaISO] || {};
+              Object.values(regs).forEach((r) => {
+                if (r.ambitoId === materia.id) {
+                  if (r.estado === "I") mI++;
+                  if (r.estado === "F") mF++;
+                  if (r.estado === "A") mA++;
+                  if (r.estado === "J") mJ++;
+                }
+              });
+            });
+          });
+          csvContent += `"${materia.nombre}"\t${mI}\t${mF}\t${mA}\t${mJ}\n`;
+        });
+      } else {
+        // Consolidado por materia para el docente
+        materiasDocenteEnGrado.forEach((materia) => {
+          let mI = 0,
+            mF = 0,
+            mA = 0,
+            mJ = 0;
+          estudiantesLista.forEach((est) => {
+            fechasBase.forEach((fechaISO) => {
+              const regs =
+                matrizDocente[materia.id]?.[fechaISO]?.[est.id] || [];
+              regs.forEach((r) => {
+                if (r.estado === "I") mI++;
+                if (r.estado === "F") mF++;
+                if (r.estado === "A") mA++;
+                if (r.estado === "J") mJ++;
+              });
+            });
+          });
+          csvContent += `"${materia.nombre}"\t${mI}\t${mF}\t${mA}\t${mJ}\n`;
+        });
+      }
+    }
+
+    // 5. Crear el archivo y forzar la descarga
+    const blob = new Blob(["\uFEFF" + csvContent], {
+      type: "text/csv;charset=utf-8;",
+    }); // \uFEFF es el BOM para que Excel reconozca tildes y ñ
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+
+    // Nombre del archivo
+    const gradoActual =
+      vistaEfectiva === "tutor" ? gradoTutorActual : gradoDocenteActual;
+    const nombreGrado = gradoActual
+      ? `${gradoActual.nombre}_${gradoActual.paralelo}`
+      : "Grado";
+    const fechaArchivo = new Date().toISOString().split("T")[0];
+    link.download = `Reporte_Asistencia_${nombreGrado}_${tipoReporte}_${fechaArchivo}.csv`;
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    mostrarToast(
+      "success",
+      "Excel generado",
+      "El archivo se ha descargado correctamente.",
+      3000,
+    );
+  };
+
   // ==================== IMPRESIÓN (SOLO VISTA DOCENTE) ====================
 
   const generarHTMLImpresion = (): string => {
@@ -1470,188 +1641,6 @@ export default function ReporteAsistencias() {
   };
 
   // ==================== DETALLE GLOBAL (TUTOR) ====================
-
-  const generarHTMLDetalle = (): string => {
-    const grado = gradoTutorActual;
-    const nombreResponsable =
-      userData?.nombreDocumento || user?.displayName || "";
-
-    let rangoLabel: string;
-    if (tipoReporte === "semanal")
-      rangoLabel = `Semana del ${formatFechaLarga(diasSemana[0])} al ${formatFechaLarga(diasSemana[4])}`;
-    else if (tipoReporte === "mensual")
-      rangoLabel = `${NOMBRES_MESES[mesActual]} de ${anioActual}`;
-    else {
-      const periodo = periodos.find((p) => p.id === periodoSeleccionado);
-      rangoLabel = periodo
-        ? `Del ${formatFechaLarga(parseFechaLocal(periodo.fechaInicio))} al ${formatFechaLarga(parseFechaLocal(periodo.fechaFin))}`
-        : "";
-    }
-
-    const fechaGeneracion = new Date().toLocaleDateString("es-EC", {
-      day: "2-digit",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    type FilaDetalle = {
-      estudiante: string;
-      fecha: string;
-      materia: string;
-      estado: EstadoAsistencia;
-      observacion?: string;
-      acta?: boolean;
-      actaNumero?: string;
-    };
-    const filas: FilaDetalle[] = [];
-
-    Object.entries(matrizTutor).forEach(([estId, fechas]) => {
-      const est = estudiantesGradoTutor.find((e) => e.id === estId);
-      const nombreEst = est ? `${est.apellidos} ${est.nombres}` : estId;
-      Object.entries(fechas).forEach(([fecha, materias]) => {
-        Object.entries(materias).forEach(([, reg]) => {
-          if (reg.estado === "P") return;
-          filas.push({
-            estudiante: nombreEst,
-            fecha,
-            materia: `${nombreMateria(reg.ambitoId || "sin_materia")} · ${reg.hora == null ? "Sin hora" : `${reg.hora}ª hora`}`,
-            estado: reg.estado,
-            observacion: reg.observacion,
-            acta: reg.representanteAsistio,
-            actaNumero: reg.actaNumero,
-          });
-        });
-      });
-    });
-
-    filas.sort(
-      (a, b) =>
-        a.fecha.localeCompare(b.fecha) ||
-        a.estudiante.localeCompare(b.estudiante),
-    );
-
-    const filasResumen = estudiantesGradoTutor
-      .map((est, idx) => {
-        let P = 0,
-          A = 0,
-          I = 0,
-          F = 0,
-          J = 0;
-        Object.values(matrizTutor[est.id] || {}).forEach((mats) =>
-          Object.values(mats).forEach((r) => {
-            if (r.estado === "P") P++;
-            else if (r.estado === "A") A++;
-            else if (r.estado === "I") I++;
-            else if (r.estado === "F") F++;
-            else if (r.estado === "J") J++;
-          }),
-        );
-        const total = P + A + I + F + J;
-        const pct = total > 0 ? Math.round(((P + A + J) / total) * 100) : 0;
-        return `<tr><td class="num">${idx + 1}</td><td class="name">${est.apellidos} ${est.nombres}</td><td>${P}</td><td>${A}</td><td class="st-I">${I}</td><td class="st-F">${F}</td><td>${J}</td><td><strong>${pct}%</strong></td></tr>`;
-      })
-      .join("");
-    const tablaResumen = `<h2>Resumen por estudiante</h2><table class="grid"><thead><tr><th class="num">#</th><th class="name">Estudiante</th><th>Pres.</th><th>Atrasos</th><th>Inas.</th><th>Fugas</th><th>Justif.</th><th>% Asist.</th></tr></thead><tbody>${filasResumen}</tbody></table>`;
-
-    const estadoLabel = (e: EstadoAsistencia) =>
-      e === "I"
-        ? "Inasistencia"
-        : e === "F"
-          ? "Fuga"
-          : e === "A"
-            ? "Atraso"
-            : e === "J"
-              ? "Justificado"
-              : e;
-
-    const filasDetalle =
-      filas.length === 0
-        ? `<tr><td colspan="6" class="sin">Sin registros de inasistencias, atrasos, fugas o justificados en el período.</td></tr>`
-        : filas
-            .map((f, idx) => {
-              const actaTxt =
-                f.estado === "F"
-                  ? f.acta
-                    ? ` • Acta N° ${f.actaNumero || "s/n"}`
-                    : " • Sin acta"
-                  : "";
-              const obs = f.observacion ? ` • ${f.observacion}` : "";
-              return `<tr><td class="num">${idx + 1}</td><td class="name">${f.estudiante}</td><td>${f.fecha}</td><td class="name">${f.materia}</td><td class="st-${f.estado}">${estadoLabel(f.estado)}</td><td class="name">${obs || "—"}${actaTxt}</td></tr>`;
-            })
-            .join("");
-
-    return `<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8" />
-<title>Detalle de Asistencia</title>
-<style>
-  @page { size: letter portrait; margin: 2cm 1.5cm; }
-  * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #1f2937; font-size: 10px; margin: 0; }
-  .report-header { text-align: center; margin-bottom: 12px; }
-  .report-title { font-size: 14px; font-weight: bold; letter-spacing: 1.2px; }
-  .report-subtitle { font-size: 10.5px; margin-top: 3px; font-weight: bold; }
-  .report-range { font-size: 10px; margin-top: 2px; color: #374151; }
-  h2 { font-size: 11px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-  table.grid { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
-  th, td { border: 1px solid #6b7280; padding: 3px 5px; text-align: center; vertical-align: top; }
-  th { background: #f3f4f6; font-size: 9px; text-transform: uppercase; }
-  td.name { text-align: left; }
-  td.num, th.num { width: 22px; color: #6b7280; }
-  td.sin { color: #9ca3af; text-align: center; }
-  tr { page-break-inside: avoid; }
-  .st-I { color: #C93F45; font-weight: bold; }
-  .st-F { color: #64748B; font-weight: bold; }
-  .st-A { color: #C96522; font-weight: bold; }
-  .st-J { color: #244563; font-weight: bold; }
-  .footer { margin-top: 14px; font-size: 8.5px; color: #6b7280; text-align: right; }
-</style>
-</head>
-<body>
-  <div class="report-header">
-    <div class="report-title">REPORTE DETALLADO DE ASISTENCIA</div>
-    <div class="report-subtitle">${grado ? `Grado: ${grado.nombre} \u201C${grado.paralelo}\u201D` : "Todos los grados"}</div>
-    <div class="report-range">${rangoLabel}</div>
-  </div>
-  ${tablaResumen}
-  <h2>Detalle por materia (inasistencias, atrasos, fugas y justificados)</h2>
-  <table class="grid">
-    <thead>
-      <tr>
-        <th class="num">#</th>
-        <th class="name">Estudiante</th>
-        <th>Fecha</th>
-        <th class="name">Materia</th>
-        <th>Estado</th>
-        <th class="name">Observación / Acta</th>
-      </tr>
-    </thead>
-    <tbody>${filasDetalle}</tbody>
-  </table>
-  <div class="footer">Generado el ${fechaGeneracion} por ${nombreResponsable || "Sistema"}</div>
-  <script>window.onload = function () { setTimeout(function () { window.print(); }, 400); };</script>
-</body>
-</html>`;
-  };
-
-  const handlePrintDetalle = () => {
-    const html = generarHTMLDetalle();
-    const win = window.open("", "_blank");
-    if (!win) {
-      mostrarToast(
-        "warning",
-        "Ventana emergente bloqueada",
-        "Permite ventanas emergentes para imprimir el detalle.",
-      );
-      return;
-    }
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-  };
 
   // ==================== IMPRESIÓN DETALLE INDIVIDUAL ====================
 
@@ -1988,13 +1977,13 @@ export default function ReporteAsistencias() {
             )}
             {vistaEfectiva === "tutor" && (
               <button
-                onClick={handlePrintDetalle}
+                onClick={handleDescargarExcel}
                 disabled={!puedeImprimirDetalle}
                 className="inline-flex h-8 items-center gap-1 rounded-md border border-[#D8DEE6] bg-[#FFFFFF] px-2.5 text-[11px] font-semibold text-[#4B5563] transition-colors hover:border-[#C96522]/40 hover:bg-[#ECEFF3] hover:text-[#273444] disabled:cursor-not-allowed disabled:opacity-50"
-                title="Imprimir detalle lineal de todo el grado"
+                title="Descargar reporte en Excel"
               >
-                <FaClipboardList className="text-[10px]" />
-                <span className="hidden sm:inline">Detalle</span>
+                <FaFileExcel className="text-[10px] text-green-600" />
+                <span className="hidden sm:inline">Excel</span>
               </button>
             )}
           </div>
