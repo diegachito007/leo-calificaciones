@@ -233,7 +233,10 @@ function ReporteNotasContenido() {
       ? [
           {
             coleccion: "notificacionesNotas",
-            filtros: [["docenteId", "==", user.uid]],
+            filtros: [
+              ["docenteId", "==", user.uid],
+              ["anioId", "==", anio], // ✅ NUEVO: Evita leer historial de años anteriores
+            ],
           },
         ]
       : [],
@@ -411,35 +414,49 @@ function ReporteNotasContenido() {
   const estudiantesFiltrados = estudiantesLocales;
 
   // ============================================================
-  // ACTIVIDADES Y CALIFICACIONES
+  // ACTIVIDADES: Optimizado para evitar lecturas duplicadas
   // ============================================================
   const consultasActividades: ConsultaReporte[] = [];
   if (shouldLoadData) {
-    const tutorIds = new Set(userData?.tutorDe || []);
-    const gradosConsulta = esAdmin
-      ? gradosIds
-      : gradosIds.filter((id) => tutorIds.has(id));
-    const agregarActividades = (
-      campo: string,
-      ids: string[],
-      tamano: number,
-    ) => {
-      for (let i = 0; i < ids.length; i += tamano) {
+    if (esAdmin) {
+      // Admin: consulta por todos los grados
+      for (let i = 0; i < gradosIds.length; i += 10) {
         const filtros: ConsultaReporte["filtros"] = [
-          [campo, "in", ids.slice(i, i + tamano)],
+          ["gradoId", "in", gradosIds.slice(i, i + 10)],
         ];
         if (periodoActual?.id)
           filtros.push(["periodoId", "==", periodoActual.id]);
         consultasActividades.push({ coleccion: "actividades", filtros });
       }
-    };
-    agregarActividades("gradoId", gradosConsulta, 10);
-    if (!esAdmin) {
-      agregarActividades(
-        "destrezaId",
-        [...new Set(asignaturasDocente.map((a) => a.destrezaId))].sort(),
-        30,
-      );
+    } else {
+      // No Admin:
+      const destrezasUnicas = [
+        ...new Set(asignaturasDocente.map((a) => a.destrezaId)),
+      ].sort();
+      const tutorIds = new Set(userData?.tutorDe || []);
+      const gradosTutor = gradosIds.filter((id) => tutorIds.has(id));
+
+      if (destrezasUnicas.length > 0) {
+        // ✅ Es docente: Consultar por destreza (cubre sus grados y evita duplicar con la consulta de tutor)
+        for (let i = 0; i < destrezasUnicas.length; i += 30) {
+          const filtros: ConsultaReporte["filtros"] = [
+            ["destrezaId", "in", destrezasUnicas.slice(i, i + 30)],
+          ];
+          if (periodoActual?.id)
+            filtros.push(["periodoId", "==", periodoActual.id]);
+          consultasActividades.push({ coleccion: "actividades", filtros });
+        }
+      } else if (gradosTutor.length > 0) {
+        // ✅ Es SOLO tutor (no tiene materias asignadas): Consultar por grado
+        for (let i = 0; i < gradosTutor.length; i += 10) {
+          const filtros: ConsultaReporte["filtros"] = [
+            ["gradoId", "in", gradosTutor.slice(i, i + 10)],
+          ];
+          if (periodoActual?.id)
+            filtros.push(["periodoId", "==", periodoActual.id]);
+          consultasActividades.push({ coleccion: "actividades", filtros });
+        }
+      }
     }
   }
 
@@ -478,6 +495,9 @@ function ReporteNotasContenido() {
       .map((a) => a.id);
   }, [actividades, shouldLoadData]);
 
+  // ============================================================
+  // CALIFICACIONES: Optimizado con operador 'in' en lotes de 30
+  // ============================================================
   const consultasNotas: ConsultaReporte[] = useMemo(() => {
     if (
       !shouldLoadData ||
@@ -486,11 +506,20 @@ function ReporteNotasContenido() {
     ) {
       return [];
     }
-    // Una consulta por cada actividad visible (target estable y compartido).
-    return actividadIdsParaConsultar.map((id) => ({
-      coleccion: "calificaciones",
-      filtros: [["actividadId", "==", id]] as ConsultaReporte["filtros"],
-    }));
+    if (actividadIdsParaConsultar.length === 0) return [];
+
+    const consultas: ConsultaReporte[] = [];
+    const CHUNK_SIZE = 30; // Límite máximo de Firestore para el operador 'in'
+
+    for (let i = 0; i < actividadIdsParaConsultar.length; i += CHUNK_SIZE) {
+      const chunk = actividadIdsParaConsultar.slice(i, i + CHUNK_SIZE);
+      consultas.push({
+        coleccion: "calificaciones",
+        filtros: [["actividadId", "in", chunk]],
+      });
+    }
+
+    return consultas;
   }, [
     shouldLoadData,
     datosActividades.cargando,

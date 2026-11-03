@@ -59,6 +59,7 @@ import {
   normalizarEstado,
   estadoConfig,
 } from "../utils/asistencia";
+import * as XLSX from "xlsx-js-style";
 
 interface AsistenciaData {
   id: string;
@@ -488,8 +489,7 @@ export default function ReporteAsistencias() {
     return () => unsubscribe();
   }, [ready, accesoCache, anioCache, gradosPermitidos]);
 
-  // Carga histórica con caché compartida entre montajes, deduplicación de promesas
-  // y clave aislada por cuenta, permisos, año, vista, grado, fechas y tipo de reporte.
+  // Carga optimizada con consulta por rango de fechas
   useEffect(() => {
     const gradoEfectivo =
       vistaEfectiva === "tutor" ? gradoTutorEfectivo : gradoDocenteEfectivo;
@@ -531,6 +531,7 @@ export default function ReporteAsistencias() {
         grado: vistaEfectiva === "tutor" ? gradoEfectivo : "todos-del-docente",
         fechas: fechasAFiltrar,
       });
+
       const normalizarDocs = (
         docs: { id: string; data: () => Record<string, unknown> }[],
       ): AsistenciaData[] =>
@@ -551,32 +552,26 @@ export default function ReporteAsistencias() {
         const todas = await cargarCacheReporteAsistencias<AsistenciaData>(
           cacheKey,
           async () => {
-            const resultado: AsistenciaData[] = [];
-            // FASE 4.3: Consulta por día (fecha == dia) en lotes paralelos.
-            // Procesamos 5 días en paralelo para acelerar trimestres.
-            const LOTES_PARALELOS = 5;
-            for (let i = 0; i < fechasAFiltrar.length; i += LOTES_PARALELOS) {
-              const lote = fechasAFiltrar.slice(i, i + LOTES_PARALELOS);
-              const resultadosLote = await Promise.all(
-                lote.map(async (dia) => {
-                  const filtros =
-                    vistaEfectiva === "docente"
-                      ? [
-                          where("registradoPor", "==", userUid),
-                          where("fecha", "==", dia),
-                        ]
-                      : [
-                          where("gradoId", "==", gradoEfectivo),
-                          where("fecha", "==", dia),
-                        ];
-                  const q = query(collection(db, "asistencias"), ...filtros);
-                  const snap = await getDocs(q);
-                  return normalizarDocs(snap.docs);
-                }),
-              );
-              resultadosLote.forEach((docs) => resultado.push(...docs));
-            }
-            return resultado;
+            // ✅ OPTIMIZACIÓN: UNA SOLA CONSULTA POR RANGO
+            const fechaInicio = fechasAFiltrar[0];
+            const fechaFin = fechasAFiltrar[fechasAFiltrar.length - 1];
+
+            const filtros =
+              vistaEfectiva === "docente"
+                ? [
+                    where("registradoPor", "==", userUid),
+                    where("fecha", ">=", fechaInicio),
+                    where("fecha", "<=", fechaFin),
+                  ]
+                : [
+                    where("gradoId", "==", gradoEfectivo),
+                    where("fecha", ">=", fechaInicio),
+                    where("fecha", "<=", fechaFin),
+                  ];
+
+            const q = query(collection(db, "asistencias"), ...filtros);
+            const snap = await getDocs(q);
+            return normalizarDocs(snap.docs);
           },
         );
         if (isMounted) setAsistencias(todas);
@@ -1274,175 +1269,446 @@ export default function ReporteAsistencias() {
     }
   }
 
-  // ==================== DESCARGAR EXCEL (CSV) ====================
+  // ==================== DESCARGAR EXCEL (3 FORMATOS: SEMANAL / MENSUAL / TRIMESTRAL) ====================
   const handleDescargarExcel = () => {
-    // 1. Determinar qué días mostrar según el tipo de reporte
-    const diasParaExcel =
-      tipoReporte === "semanal"
-        ? diasSemana
-        : tipoReporte === "mensual"
-          ? diasMes
-          : diasPeriodo;
+    try {
+      const estudiantesLista =
+        vistaEfectiva === "tutor"
+          ? estudiantesGradoTutor
+          : estudiantesGradoDocente;
 
-    const fechasBase = diasParaExcel.map(formatFechaISO);
+      const data: (string | number)[][] = [];
 
-    // 2. Construir el encabezado (Días de la semana)
-    // Usamos \t (tabulador) para separar columnas en Excel
-    let csvContent = "Estudiante\t";
-    fechasBase.forEach((fecha) => {
-      const d = parseFechaLocal(fecha);
-      csvContent += `${nombreDia(d)} ${formatFechaCorta(d)}\t`;
-    });
-    csvContent += "Total Inas.\tTotal Fugas\tTotal Atrasos\tTotal Justif.\n";
-
-    // 3. Construir las filas de estudiantes
-    const estudiantesLista =
-      vistaEfectiva === "tutor"
-        ? estudiantesGradoTutor
-        : estudiantesGradoDocente;
-
-    estudiantesLista.forEach((est) => {
-      csvContent += `"${est.apellidos} ${est.nombres}"\t`;
-
-      let totalI = 0,
-        totalF = 0,
-        totalA = 0,
-        totalJ = 0;
-
-      fechasBase.forEach((fechaISO) => {
-        let celdasDia: string; // 👈 Declaramos sin inicializar para evitar el warning
-
-        if (vistaEfectiva === "tutor") {
-          // Lógica para VISTA TUTOR (usa matrizTutor)
-          const regsDelDia = matrizTutor[est.id]?.[fechaISO] || {};
-          const registrosMaterias = Object.values(regsDelDia).sort(
-            (a, b) => (a.hora ?? 99) - (b.hora ?? 99),
-          );
-
-          if (registrosMaterias.length === 0) {
-            celdasDia = "Sin registro";
+      // ✅ CALCULAR SEMANAS DEL MES (disponible para todo el bloque)
+      const semanasDelMes: Date[][] = [];
+      if (tipoReporte === "mensual") {
+        let semanaActual: Date[] = [];
+        diasMes.forEach((dia) => {
+          const diaSemana = dia.getDay();
+          if (diaSemana === 1 || semanaActual.length === 0) {
+            if (semanaActual.length > 0) semanasDelMes.push(semanaActual);
+            semanaActual = [dia];
           } else {
-            // Agrupamos por hora para que se vea bonito en la celda: "1ª: LL (A) | 2ª: M (P)"
-            celdasDia = registrosMaterias
-              .map((r) => {
-                const mat = abrevMateria(nombreMateria(r.ambitoId || ""));
-                const h = r.hora ? `${r.hora}ª` : "S/H";
-                if (r.estado === "I") totalI++;
-                if (r.estado === "F") totalF++;
-                if (r.estado === "A") totalA++;
-                if (r.estado === "J") totalJ++;
-                return `${h}: ${mat} (${r.estado})`;
-              })
-              .join(" | ");
+            semanaActual.push(dia);
           }
-        } else {
-          // Lógica para VISTA DOCENTE (usa matrizDocente, recorre materias)
-          const regsMaterias: string[] = [];
-          materiasDocenteEnGrado.forEach((materia) => {
-            const regs = matrizDocente[materia.id]?.[fechaISO]?.[est.id] || [];
-            regs
-              .sort((a, b) => (a.hora ?? 99) - (b.hora ?? 99))
-              .forEach((r) => {
-                const h = r.hora ? `${r.hora}ª` : "S/H";
-                const mat = abrevMateria(materia.nombre);
-                if (r.estado === "I") totalI++;
-                if (r.estado === "F") totalF++;
-                if (r.estado === "A") totalA++;
-                if (r.estado === "J") totalJ++;
-                regsMaterias.push(`${h}: ${mat} (${r.estado})`);
-              });
-          });
-          celdasDia =
-            regsMaterias.length > 0 ? regsMaterias.join(" | ") : "Sin novedad";
-        }
-
-        // Limpiamos comillas dobles para no romper el CSV
-        csvContent += `"${celdasDia.replace(/"/g, '""')}"\t`;
-      });
-
-      // Agregamos los totales al final de la fila
-      csvContent += `${totalI}\t${totalF}\t${totalA}\t${totalJ}\n`;
-    });
-
-    // 4. Agregar Consolidados (Solo para mensual y trimestral)
-    if (tipoReporte !== "semanal") {
-      csvContent += "\n\n--- CONSOLIDADO POR MATERIA ---\n";
-      csvContent += "Materia\tInasistencias\tFugas\tAtrasos\tJustificados\n";
-
-      if (vistaEfectiva === "tutor") {
-        // Consolidado por materia para el tutor
-        materiasGradoTutor.forEach((materia) => {
-          let mI = 0,
-            mF = 0,
-            mA = 0,
-            mJ = 0;
-          estudiantesLista.forEach((est) => {
-            fechasBase.forEach((fechaISO) => {
-              const regs = matrizTutor[est.id]?.[fechaISO] || {};
-              Object.values(regs).forEach((r) => {
-                if (r.ambitoId === materia.id) {
-                  if (r.estado === "I") mI++;
-                  if (r.estado === "F") mF++;
-                  if (r.estado === "A") mA++;
-                  if (r.estado === "J") mJ++;
-                }
-              });
-            });
-          });
-          csvContent += `"${materia.nombre}"\t${mI}\t${mF}\t${mA}\t${mJ}\n`;
         });
+        if (semanaActual.length > 0) semanasDelMes.push(semanaActual);
+      }
+
+      // ✅ ENCABEZADO INFORMATIVO (común a los 3 formatos)
+      const anioLectivo = anioActivo?.nombre || "Año Lectivo";
+      const gradoActual =
+        vistaEfectiva === "tutor" ? gradoTutorActual : gradoDocenteActual;
+      const nombreGrado = gradoActual
+        ? `${gradoActual.nombre} "${gradoActual.paralelo}"`
+        : "Grado";
+
+      data.push(["REPORTE DE ASISTENCIA"]);
+      data.push([`Año Lectivo: ${anioLectivo}`]);
+      data.push([`Grado: ${nombreGrado}`]);
+
+      let tipoReporteLabel = "";
+      if (tipoReporte === "semanal") {
+        tipoReporteLabel = `Vista Semanal: Del ${formatFechaLarga(diasSemana[0])} al ${formatFechaLarga(diasSemana[4])}`;
+      } else if (tipoReporte === "mensual") {
+        tipoReporteLabel = `Vista Mensual: ${NOMBRES_MESES[mesActual]} de ${anioActual}`;
       } else {
-        // Consolidado por materia para el docente
-        materiasDocenteEnGrado.forEach((materia) => {
-          let mI = 0,
-            mF = 0,
-            mA = 0,
-            mJ = 0;
-          estudiantesLista.forEach((est) => {
-            fechasBase.forEach((fechaISO) => {
-              const regs =
-                matrizDocente[materia.id]?.[fechaISO]?.[est.id] || [];
-              regs.forEach((r) => {
-                if (r.estado === "I") mI++;
-                if (r.estado === "F") mF++;
-                if (r.estado === "A") mA++;
-                if (r.estado === "J") mJ++;
+        const periodo = periodos.find((p) => p.id === periodoSeleccionado);
+        tipoReporteLabel = periodo
+          ? `Vista Trimestral: Del ${formatFechaLarga(parseFechaLocal(periodo.fechaInicio))} al ${formatFechaLarga(parseFechaLocal(periodo.fechaFin))}`
+          : "Vista Trimestral";
+      }
+      data.push([tipoReporteLabel]);
+      data.push([]); // Fila vacía de separación
+
+      // ============================================================
+      // ✅ FORMATO SEMANAL: Detalle por horas y materias
+      // ============================================================
+      if (tipoReporte === "semanal") {
+        const fechasBase = diasSemana.map(formatFechaISO);
+        const headers = [
+          "Estudiante",
+          ...fechasBase.map((fecha) => {
+            const d = parseFechaLocal(fecha);
+            return `${nombreDia(d)} ${formatFechaCorta(d)}`;
+          }),
+          "Total Inas.",
+          "Total Fugas",
+          "Total Atrasos",
+          "Total Justif.",
+        ];
+        data.push(headers);
+
+        estudiantesLista.forEach((est) => {
+          const row: (string | number)[] = [`${est.apellidos} ${est.nombres}`];
+          let totalI = 0,
+            totalF = 0,
+            totalA = 0,
+            totalJ = 0;
+
+          fechasBase.forEach((fechaISO) => {
+            let celdasDia: string;
+            if (vistaEfectiva === "tutor") {
+              const regsDelDia = matrizTutor[est.id]?.[fechaISO] || {};
+              const registrosMaterias = Object.values(regsDelDia).sort(
+                (a, b) => (a.hora ?? 99) - (b.hora ?? 99),
+              );
+              if (registrosMaterias.length === 0) {
+                celdasDia = "Sin registro";
+              } else {
+                celdasDia = registrosMaterias
+                  .map((r) => {
+                    const mat = abrevMateria(nombreMateria(r.ambitoId || ""));
+                    const h = r.hora ? `${r.hora}ª` : "S/H";
+                    if (r.estado === "I") totalI++;
+                    if (r.estado === "F") totalF++;
+                    if (r.estado === "A") totalA++;
+                    if (r.estado === "J") totalJ++;
+                    return `${h}: ${mat} (${r.estado})`;
+                  })
+                  .join("\n");
+              }
+            } else {
+              const regsMaterias: string[] = [];
+              materiasDocenteEnGrado.forEach((materia) => {
+                const regs =
+                  matrizDocente[materia.id]?.[fechaISO]?.[est.id] || [];
+                regs
+                  .sort((a, b) => (a.hora ?? 99) - (b.hora ?? 99))
+                  .forEach((r) => {
+                    const h = r.hora ? `${r.hora}ª` : "S/H";
+                    const mat = abrevMateria(materia.nombre);
+                    if (r.estado === "I") totalI++;
+                    if (r.estado === "F") totalF++;
+                    if (r.estado === "A") totalA++;
+                    if (r.estado === "J") totalJ++;
+                    regsMaterias.push(`${h}: ${mat} (${r.estado})`);
+                  });
               });
-            });
+              celdasDia =
+                regsMaterias.length > 0
+                  ? regsMaterias.join("\n")
+                  : "Sin novedad";
+            }
+            row.push(celdasDia);
           });
-          csvContent += `"${materia.nombre}"\t${mI}\t${mF}\t${mA}\t${mJ}\n`;
+          row.push(totalI, totalF, totalA, totalJ);
+          data.push(row);
         });
       }
+      // ============================================================
+      // ✅ FORMATO MENSUAL: Consolidado por semanas
+      // ============================================================
+      else if (tipoReporte === "mensual") {
+        const headers = [
+          "Estudiante",
+          ...semanasDelMes.map((semana, idx) => {
+            const inicio = semana[0];
+            const fin = semana[semana.length - 1];
+            return `Semana ${idx + 1}\n${formatFechaCorta(inicio)} - ${formatFechaCorta(fin)}`;
+          }),
+          "% Asist. Mes",
+          "Total Inas.",
+          "Total Fugas",
+          "Total Atrasos",
+          "Total Justif.",
+        ];
+        data.push(headers);
+
+        estudiantesLista.forEach((est) => {
+          const row: (string | number)[] = [`${est.apellidos} ${est.nombres}`];
+          let mesP = 0,
+            mesI = 0,
+            mesF = 0,
+            mesA = 0,
+            mesJ = 0;
+
+          semanasDelMes.forEach((semana) => {
+            let semanaP = 0,
+              semanaI = 0,
+              semanaF = 0,
+              semanaA = 0,
+              semanaJ = 0;
+
+            semana.forEach((dia) => {
+              const fechaISO = formatFechaISO(dia);
+              if (vistaEfectiva === "tutor") {
+                const regs = matrizTutor[est.id]?.[fechaISO] || {};
+                Object.values(regs).forEach((r) => {
+                  if (r.estado === "P") semanaP++;
+                  if (r.estado === "I") semanaI++;
+                  if (r.estado === "F") semanaF++;
+                  if (r.estado === "A") semanaA++;
+                  if (r.estado === "J") semanaJ++;
+                });
+              } else {
+                materiasDocenteEnGrado.forEach((materia) => {
+                  const regs =
+                    matrizDocente[materia.id]?.[fechaISO]?.[est.id] || [];
+                  regs.forEach((r) => {
+                    if (r.estado === "P") semanaP++;
+                    if (r.estado === "I") semanaI++;
+                    if (r.estado === "F") semanaF++;
+                    if (r.estado === "A") semanaA++;
+                    if (r.estado === "J") semanaJ++;
+                  });
+                });
+              }
+            });
+
+            const totalSemana = semanaP + semanaI + semanaF + semanaA + semanaJ;
+            const pctSemana =
+              totalSemana > 0
+                ? Math.round(
+                    ((semanaP + semanaA + semanaJ) / totalSemana) * 100,
+                  )
+                : 0;
+
+            const novedades = [];
+            if (semanaI > 0) novedades.push(`I:${semanaI}`);
+            if (semanaF > 0) novedades.push(`F:${semanaF}`);
+            if (semanaA > 0) novedades.push(`A:${semanaA}`);
+            if (semanaJ > 0) novedades.push(`J:${semanaJ}`);
+
+            const celdaSemana =
+              novedades.length > 0
+                ? `${pctSemana}%\n${novedades.join(" ")}`
+                : `${pctSemana}%`;
+
+            row.push(celdaSemana);
+
+            mesP += semanaP;
+            mesI += semanaI;
+            mesF += semanaF;
+            mesA += semanaA;
+            mesJ += semanaJ;
+          });
+
+          const totalMes = mesP + mesI + mesF + mesA + mesJ;
+          const pctMes =
+            totalMes > 0
+              ? Math.round(((mesP + mesA + mesJ) / totalMes) * 100)
+              : 0;
+
+          row.push(`${pctMes}%`, mesI, mesF, mesA, mesJ);
+          data.push(row);
+        });
+      }
+      // ============================================================
+      // ✅ FORMATO TRIMESTRAL: Consolidado final por estudiante
+      // ============================================================
+      else {
+        const fechasBase = diasPeriodo.map(formatFechaISO);
+        const headers = [
+          "Estudiante",
+          "Total Presentes",
+          "Total Atrasos",
+          "Total Inasist.",
+          "Total Fugas",
+          "Total Justif.",
+          "% Asistencia",
+        ];
+        data.push(headers);
+
+        estudiantesLista.forEach((est) => {
+          let eP = 0,
+            eI = 0,
+            eF = 0,
+            eA = 0,
+            eJ = 0;
+
+          fechasBase.forEach((fechaISO) => {
+            if (vistaEfectiva === "tutor") {
+              const regs = matrizTutor[est.id]?.[fechaISO] || {};
+              Object.values(regs).forEach((r) => {
+                if (r.estado === "P") eP++;
+                if (r.estado === "I") eI++;
+                if (r.estado === "F") eF++;
+                if (r.estado === "A") eA++;
+                if (r.estado === "J") eJ++;
+              });
+            } else {
+              materiasDocenteEnGrado.forEach((materia) => {
+                const regs =
+                  matrizDocente[materia.id]?.[fechaISO]?.[est.id] || [];
+                regs.forEach((r) => {
+                  if (r.estado === "P") eP++;
+                  if (r.estado === "I") eI++;
+                  if (r.estado === "F") eF++;
+                  if (r.estado === "A") eA++;
+                  if (r.estado === "J") eJ++;
+                });
+              });
+            }
+          });
+
+          const total = eP + eI + eF + eA + eJ;
+          const pctAsistencia =
+            total > 0 ? Math.round(((eP + eA + eJ) / total) * 100) : 0;
+
+          data.push([
+            `${est.apellidos} ${est.nombres}`,
+            eP,
+            eA,
+            eI,
+            eF,
+            eJ,
+            `${pctAsistencia}%`,
+          ]);
+        });
+
+        // Total general
+        data.push([]);
+        data.push(["TOTAL GENERAL"]);
+        let totalP = 0,
+          totalI = 0,
+          totalF = 0,
+          totalA = 0,
+          totalJ = 0;
+        for (let i = 5; i < data.length - 1; i++) {
+          totalP += Number(data[i][1]) || 0;
+          totalA += Number(data[i][2]) || 0;
+          totalI += Number(data[i][3]) || 0;
+          totalF += Number(data[i][4]) || 0;
+          totalJ += Number(data[i][5]) || 0;
+        }
+        const totalGeneral = totalP + totalI + totalF + totalA + totalJ;
+        const pctGeneral =
+          totalGeneral > 0
+            ? Math.round(((totalP + totalA + totalJ) / totalGeneral) * 100)
+            : 0;
+        data.push([
+          "",
+          totalP,
+          totalA,
+          totalI,
+          totalF,
+          totalJ,
+          `${pctGeneral}%`,
+        ]);
+      }
+
+      // ============================================================
+      // CREAR HOJA Y APLICAR ESTILOS
+      // ============================================================
+      const ws = XLSX.utils.aoa_to_sheet(data);
+
+      // Ancho de columnas según tipo
+      if (tipoReporte === "trimestral") {
+        ws["!cols"] = [
+          { wch: 40 }, // Estudiante
+          { wch: 15 }, // Presentes
+          { wch: 12 }, // Atrasos
+          { wch: 12 }, // Inasistencias
+          { wch: 12 }, // Fugas
+          { wch: 12 }, // Justificados
+          { wch: 12 }, // % Asistencia
+        ];
+      } else if (tipoReporte === "mensual") {
+        ws["!cols"] = [
+          { wch: 40 }, // Estudiante
+          ...semanasDelMes.map(() => ({ wch: 18 })), // Semanas
+          { wch: 12 },
+          { wch: 10 },
+          { wch: 10 },
+          { wch: 10 },
+          { wch: 10 },
+        ];
+      } else {
+        const fechasBase = diasSemana.map(formatFechaISO);
+        ws["!cols"] = [
+          { wch: 35 },
+          ...fechasBase.map(() => ({ wch: 25 })),
+          { wch: 10 },
+          { wch: 10 },
+          { wch: 10 },
+          { wch: 10 },
+        ];
+      }
+
+      // Altura de filas
+      ws["!rows"] = data.map((_, index) => ({
+        hpt:
+          index < 4
+            ? 20
+            : tipoReporte === "trimestral"
+              ? 20
+              : tipoReporte === "mensual"
+                ? 35
+                : 80,
+      }));
+
+      // Aplicar estilos celda por celda
+      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+      for (let R = range.s.r; R <= range.e.r; ++R) {
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+          if (!ws[cellAddress]) continue;
+
+          const isTitle = R === 0;
+          const isInfoRow = R >= 1 && R <= 3;
+          const headerRow = 4;
+          const isHeader = R === headerRow;
+          const isTotalRow =
+            tipoReporte === "trimestral" && data[R][0] === "TOTAL GENERAL";
+
+          const style: Partial<XLSX.CellStyle> = {
+            font: { name: "Calibri", sz: 11, color: { rgb: "273444" } },
+            alignment: {
+              vertical: "center",
+              horizontal: C === 0 ? "left" : "center",
+              wrapText: true,
+            },
+            border: {
+              bottom: { style: "thin", color: { rgb: "D8DEE6" } },
+              right: { style: "thin", color: { rgb: "D8DEE6" } },
+            },
+          };
+
+          if (isTitle) {
+            style.font!.bold = true;
+            style.font!.sz = 14;
+            style.fill = { patternType: "solid", fgColor: { rgb: "244563" } };
+            style.font!.color = { rgb: "FFFFFF" };
+          } else if (isInfoRow) {
+            style.font!.bold = true;
+            style.font!.sz = 11;
+            style.fill = { patternType: "solid", fgColor: { rgb: "EAF0F6" } };
+          } else if (isHeader || isTotalRow) {
+            style.font!.bold = true;
+            style.fill = { patternType: "solid", fgColor: { rgb: "ECEFF3" } };
+          }
+
+          ws[cellAddress].s = style;
+        }
+      }
+
+      // Exportar
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Asistencias");
+      const nombreGradoArchivo = gradoActual
+        ? `${gradoActual.nombre}_${gradoActual.paralelo}`
+        : "Grado";
+      const fechaArchivo = new Date().toISOString().split("T")[0];
+      XLSX.writeFile(
+        wb,
+        `Reporte_Asistencia_${nombreGradoArchivo}_${tipoReporte}_${fechaArchivo}.xlsx`,
+      );
+      mostrarToast(
+        "success",
+        "Excel generado",
+        `El archivo .xlsx se ha descargado correctamente (${tipoReporte}).`,
+        3000,
+      );
+    } catch (error) {
+      console.error("Error al exportar Excel:", error);
+      mostrarToast(
+        "error",
+        "Error",
+        "No se pudo generar el archivo Excel.",
+        3000,
+      );
     }
-
-    // 5. Crear el archivo y forzar la descarga
-    const blob = new Blob(["\uFEFF" + csvContent], {
-      type: "text/csv;charset=utf-8;",
-    }); // \uFEFF es el BOM para que Excel reconozca tildes y ñ
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-
-    // Nombre del archivo
-    const gradoActual =
-      vistaEfectiva === "tutor" ? gradoTutorActual : gradoDocenteActual;
-    const nombreGrado = gradoActual
-      ? `${gradoActual.nombre}_${gradoActual.paralelo}`
-      : "Grado";
-    const fechaArchivo = new Date().toISOString().split("T")[0];
-    link.download = `Reporte_Asistencia_${nombreGrado}_${tipoReporte}_${fechaArchivo}.csv`;
-
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    mostrarToast(
-      "success",
-      "Excel generado",
-      "El archivo se ha descargado correctamente.",
-      3000,
-    );
   };
 
   // ==================== IMPRESIÓN (SOLO VISTA DOCENTE) ====================

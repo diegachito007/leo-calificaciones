@@ -1,4 +1,10 @@
-import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  useSyncExternalStore,
+} from "react";
 import {
   collection,
   updateDoc,
@@ -11,8 +17,17 @@ import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { Estudiante } from "../types";
 import Layout from "../components/Layout";
-import { configurarDiagnostico, medirEscritura } from "../utils/diagnosticoConsultas";
-import { claveAccesoEstudiantes, claveConsultaEstudiantes, leerEstudiantesCache, observarEstudiantesCache, asegurarEstudiantesCache } from "../utils/estudiantesCache";
+import {
+  configurarDiagnostico,
+  medirEscritura,
+} from "../utils/diagnosticoConsultas";
+import {
+  claveAccesoEstudiantes,
+  claveConsultaEstudiantes,
+  leerEstudiantesCache,
+  observarEstudiantesCache,
+  asegurarEstudiantesCache,
+} from "../utils/estudiantesCache";
 configurarDiagnostico(false);
 import {
   FaEdit,
@@ -36,6 +51,7 @@ import {
   FaIdCard,
 } from "react-icons/fa";
 import * as XLSX from "xlsx";
+
 const formatText = (text: string): string => {
   if (!text) return "";
   return text
@@ -44,12 +60,14 @@ const formatText = (text: string): string => {
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase();
 };
+
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
+
 interface ConfirmModalState {
   isOpen: boolean;
   title: string;
@@ -61,20 +79,24 @@ interface ConfirmModalState {
   onConfirm: () => void;
   onCancel: () => void;
 }
+
 interface EstudianteParseado {
   cedula: string;
   apellidos: string;
   nombres: string;
 }
+
 // ✅ Extensión temporal para manejar los nuevos campos hasta que actualices src/types/index.ts
 type EstudianteConRepresentante = Estudiante & {
   cedulaRepresentante?: string;
   nombreRepresentante?: string;
   celularRepresentante?: string;
 };
+
 export default function Estudiantes() {
   const { user, userData } = useAuth();
   const { grados, anioActivo, ready } = useData();
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [mostrarInactivos, setMostrarInactivos] = useState(false);
@@ -102,6 +124,9 @@ export default function Estudiantes() {
     onConfirm: () => {},
     onCancel: () => {},
   });
+
+  const modalRef = useRef<HTMLDivElement>(null);
+
   const gradosFiltrados = (() => {
     if (
       userData?.role === "docente" &&
@@ -113,19 +138,25 @@ export default function Estudiantes() {
     }
     return grados;
   })();
+
   const gradoEfectivoId =
-    (selectedGradoId && gradosFiltrados.some(g => g.id === selectedGradoId) ? selectedGradoId : null) ||
-    (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : null);
+    (selectedGradoId && gradosFiltrados.some((g) => g.id === selectedGradoId)
+      ? selectedGradoId
+      : null) || (gradosFiltrados.length > 0 ? gradosFiltrados[0].id : null);
+
   const docenteSinGrados =
     userData?.role === "docente" &&
     (!userData?.gradosAsignados || userData.gradosAsignados.length === 0);
+
   const esAdmin = userData?.role === "super_admin";
+
   const tutorDeAnioActivo = (() => {
     if (!userData?.tutorDe) return [];
     return gradosFiltrados
       .filter((g) => userData.tutorDe?.includes(g.id))
       .map((g) => g.id);
   })();
+
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
       const id = `toast-${Date.now()}-${Math.random()}`;
@@ -137,9 +168,11 @@ export default function Estudiantes() {
     },
     [],
   );
+
   const cerrarToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
   const confirmar = useCallback(
     (
       title: string,
@@ -158,7 +191,8 @@ export default function Estudiantes() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
+          confirmColor:
+            options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -173,6 +207,7 @@ export default function Estudiantes() {
     },
     [],
   );
+
   const puedeGestionarEstudiantes = (gradoId: string): boolean => {
     if (esAdmin) return true;
     if (userData?.role === "docente") {
@@ -180,12 +215,14 @@ export default function Estudiantes() {
     }
     return false;
   };
+
   const puedeRegistrar =
     (esAdmin ||
       (userData?.role === "docente" &&
         gradoEfectivoId &&
         tutorDeAnioActivo.includes(gradoEfectivoId))) &&
     !!gradoEfectivoId;
+
   const resetForm = () => {
     setFormData({
       apellidos: "",
@@ -201,24 +238,69 @@ export default function Estudiantes() {
     setEditingId(null);
     setValidationErrors([]);
   };
+
+  // ✅ Modal de edición: cerrar con Escape y bloquear scroll del body
+  useEffect(() => {
+    if (!editingId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        resetForm();
+        setEditingId(null);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    // Foco al primer campo del modal
+    requestAnimationFrame(() => {
+      const first = modalRef.current?.querySelector<HTMLElement>(
+        "input, select, textarea, button",
+      );
+      first?.focus();
+    });
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [editingId]);
+
   const accesoCache = claveAccesoEstudiantes(user?.uid, userData);
-  const claveCache = ready && !docenteSinGrados
-    ? claveConsultaEstudiantes(accesoCache, anioActivo?.id || "", gradoEfectivoId)
-    : "";
+  const claveCache =
+    ready && !docenteSinGrados
+      ? claveConsultaEstudiantes(
+          accesoCache,
+          anioActivo?.id || "",
+          gradoEfectivoId,
+        )
+      : "";
   const leerCache = () => leerEstudiantesCache(claveCache);
-  const nomina = useSyncExternalStore(observarEstudiantesCache, leerCache, leerCache);
+  const nomina = useSyncExternalStore(
+    observarEstudiantesCache,
+    leerCache,
+    leerCache,
+  );
   const estudiantes = nomina.items;
+
   useEffect(() => {
     asegurarEstudiantesCache(claveCache);
     // La caché es dueña del listener; navegar solo desconecta el observador React.
   }, [claveCache]);
-  const cargandoLista = !!claveCache && (nomina.estado === "inicial" || nomina.estado === "cargando");
+
+  const cargandoLista =
+    !!claveCache &&
+    (nomina.estado === "inicial" || nomina.estado === "cargando");
   const nominaVerificada = nomina.estado === "listo" && !nomina.desdeCacheSDK;
+
   const comprobarNomina = () => {
     if (nominaVerificada) return true;
-    mostrarToast("warning", "Espera la sincronización", "La nómina debe estar sincronizada antes de guardar para comprobar duplicados y estados.");
+    mostrarToast(
+      "warning",
+      "Espera la sincronización",
+      "La nómina debe estar sincronizada antes de guardar para comprobar duplicados y estados.",
+    );
     return false;
   };
+
   const handleExportExcel = () => {
     if (estudiantesAMostrar.length === 0) {
       mostrarToast("warning", "Sin datos", "No hay estudiantes para exportar.");
@@ -295,6 +377,7 @@ export default function Estudiantes() {
       );
     }
   };
+
   const parsearListaMasiva = (
     data: string,
   ): { students: EstudianteParseado[]; errors: string[] } => {
@@ -352,6 +435,7 @@ export default function Estudiantes() {
     });
     return { students, errors };
   };
+
   async function guardarEstudiantesMasivos() {
     if (!comprobarNomina() || !puedeRegistrar) return;
     if (!anioActivo) {
@@ -425,25 +509,29 @@ export default function Estudiantes() {
       }
       const promesas = [
         ...aCrear.map(async (est) => {
-          await medirEscritura("Crear estudiante", () => addDoc(collection(db, "estudiantes"), {
-            cedula: est.cedula,
-            apellidos: est.apellidos,
-            nombres: est.nombres,
-            gradoId: gradoEfectivoId,
-            anioLectivoId: anioActivo.id,
-            activo: true,
-            createdAt: serverTimestamp(),
-            createdBy: user?.uid,
-          }));
+          await medirEscritura("Crear estudiante", () =>
+            addDoc(collection(db, "estudiantes"), {
+              cedula: est.cedula,
+              apellidos: est.apellidos,
+              nombres: est.nombres,
+              gradoId: gradoEfectivoId,
+              anioLectivoId: anioActivo.id,
+              activo: true,
+              createdAt: serverTimestamp(),
+              createdBy: user?.uid,
+            }),
+          );
         }),
         ...aReactivar.map(async (est) => {
-          await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", est.id), {
-            apellidos: est.apellidos,
-            nombres: est.nombres,
-            activo: true,
-            updatedAt: serverTimestamp(),
-            updatedBy: user?.uid,
-          } as never));
+          await medirEscritura("Actualizar estudiante", () =>
+            updateDoc(doc(db, "estudiantes", est.id), {
+              apellidos: est.apellidos,
+              nombres: est.nombres,
+              activo: true,
+              updatedAt: serverTimestamp(),
+              updatedBy: user?.uid,
+            } as never),
+          );
         }),
       ];
       await Promise.all(promesas);
@@ -474,6 +562,7 @@ export default function Estudiantes() {
       setIsSavingMassive(false);
     }
   }
+
   const validarEstudiante = (
     cedula: string,
     apellidos: string,
@@ -506,9 +595,10 @@ export default function Estudiantes() {
     }
     return errors;
   };
+
   async function guardarEstudianteIndividual() {
     if (!comprobarNomina()) return;
-    const actual = estudiantes.find(e => e.id === editingId);
+    const actual = estudiantes.find((e) => e.id === editingId);
     if (!actual || !puedeGestionarEstudiantes(actual.gradoId)) return;
     const errors = validarEstudiante(
       formData.cedula,
@@ -522,18 +612,20 @@ export default function Estudiantes() {
     }
     try {
       if (editingId) {
-        await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", editingId), {
-          apellidos: formData.apellidos.trim(),
-          nombres: formData.nombres.trim(),
-          cedula: formData.cedula.trim(),
-          activo: formData.activo,
-          conAdaptacion: formData.conAdaptacion,
-          sexo: formData.sexo || null,
-          cedulaRepresentante: formData.cedulaRepresentante.trim(),
-          nombreRepresentante: formData.nombreRepresentante.trim(),
-          celularRepresentante: formData.celularRepresentante.trim(),
-          updatedAt: serverTimestamp(),
-        }));
+        await medirEscritura("Actualizar estudiante", () =>
+          updateDoc(doc(db, "estudiantes", editingId), {
+            apellidos: formData.apellidos.trim(),
+            nombres: formData.nombres.trim(),
+            cedula: formData.cedula.trim(),
+            activo: formData.activo,
+            conAdaptacion: formData.conAdaptacion,
+            sexo: formData.sexo || null,
+            cedulaRepresentante: formData.cedulaRepresentante.trim(),
+            nombreRepresentante: formData.nombreRepresentante.trim(),
+            celularRepresentante: formData.celularRepresentante.trim(),
+            updatedAt: serverTimestamp(),
+          }),
+        );
         mostrarToast(
           "success",
           "Estudiante actualizado",
@@ -550,10 +642,12 @@ export default function Estudiantes() {
       );
     }
   }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     await guardarEstudianteIndividual();
   };
+
   const handleEdit = (estudiante: EstudianteConRepresentante) => {
     if (!puedeGestionarEstudiantes(estudiante.gradoId)) {
       mostrarToast(
@@ -576,8 +670,9 @@ export default function Estudiantes() {
     });
     setEditingId(estudiante.id);
     setValidationErrors([]);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    // window.scrollTo({ top: 0, behavior: "smooth" }); // ya no necesario: es un modal
   };
+
   async function handleDelete(id: string) {
     const estudiante = estudiantes.find((e) => e.id === id);
     if (!estudiante) return;
@@ -601,10 +696,12 @@ export default function Estudiantes() {
     );
     if (!confirmado || !comprobarNomina()) return;
     try {
-      await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", id), {
-        activo: false,
-        updatedAt: serverTimestamp(),
-      }));
+      await medirEscritura("Actualizar estudiante", () =>
+        updateDoc(doc(db, "estudiantes", id), {
+          activo: false,
+          updatedAt: serverTimestamp(),
+        }),
+      );
       mostrarToast(
         "success",
         "Estudiante desactivado",
@@ -619,6 +716,7 @@ export default function Estudiantes() {
       );
     }
   }
+
   async function handleToggleActivo(id: string, estadoActual: boolean) {
     if (!comprobarNomina()) return;
     const estudiante = estudiantes.find((e) => e.id === id);
@@ -632,10 +730,12 @@ export default function Estudiantes() {
       return;
     }
     try {
-      await medirEscritura("Actualizar estudiante", () => updateDoc(doc(db, "estudiantes", id), {
-        activo: !estadoActual,
-        updatedAt: serverTimestamp(),
-      }));
+      await medirEscritura("Actualizar estudiante", () =>
+        updateDoc(doc(db, "estudiantes", id), {
+          activo: !estadoActual,
+          updatedAt: serverTimestamp(),
+        }),
+      );
       mostrarToast(
         "success",
         estadoActual ? "Estudiante desactivado" : "Estudiante reactivado",
@@ -650,6 +750,7 @@ export default function Estudiantes() {
       );
     }
   }
+
   const estudiantesFiltrados = estudiantes.filter((est) => {
     if (!mostrarInactivos && !est.activo) return false;
     const searchText = searchTerm.toLowerCase();
@@ -661,10 +762,12 @@ export default function Estudiantes() {
         est.nombreRepresentante.toLowerCase().includes(searchText))
     );
   });
+
   const estudiantesAMostrar =
     userData?.role === "docente" && !gradoEfectivoId
       ? []
       : estudiantesFiltrados;
+
   const toastConfig = {
     success: {
       bg: "bg-[#EAF0F6] border-[#6687A5]",
@@ -695,7 +798,9 @@ export default function Estudiantes() {
       icon: FaInfoCircle,
     },
   };
+
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
+
   if (!ready) {
     return (
       <Layout>
@@ -710,17 +815,35 @@ export default function Estudiantes() {
       </Layout>
     );
   }
+
   return (
     <Layout>
       {nomina.estado === "error" && (
-        <div role="alert" className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+        <div
+          role="alert"
+          className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800"
+        >
           {nomina.error}
-          <button type="button" onClick={() => asegurarEstudiantesCache(claveCache, true)} className="ml-3 rounded bg-[#244563] px-3 py-1 text-white">Reintentar</button>
+          <button
+            type="button"
+            onClick={() => asegurarEstudiantesCache(claveCache, true)}
+            className="ml-3 rounded bg-[#244563] px-3 py-1 text-white"
+          >
+            Reintentar
+          </button>
         </div>
       )}
+
       {nomina.estado === "listo" && nomina.desdeCacheSDK && (
-        <p role="status" className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Mostrando la última nómina disponible. Esperando sincronización para habilitar el guardado.</p>
+        <p
+          role="status"
+          className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800"
+        >
+          Mostrando la última nómina disponible. Esperando sincronización para
+          habilitar el guardado.
+        </p>
       )}
+
       {docenteSinGrados && (
         <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg px-4 py-12 mb-3">
           <div className="flex items-start gap-3 max-w-3xl">
@@ -739,6 +862,7 @@ export default function Estudiantes() {
           </div>
         </div>
       )}
+
       {!docenteSinGrados && !anioActivo && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 mb-3">
           <div className="flex items-start gap-2">
@@ -755,6 +879,7 @@ export default function Estudiantes() {
           </div>
         </div>
       )}
+
       {!docenteSinGrados && gradosFiltrados.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] mb-3 px-2.5 py-2">
           <h3 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5">
@@ -800,236 +925,288 @@ export default function Estudiantes() {
           </div>
         </div>
       )}
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* MODAL DE EDICIÓN (reemplaza el formulario inline anterior)      */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
       {editingId && (
-        <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] mb-3 overflow-hidden">
-          <div className="bg-[#244563] px-2.5 py-3 flex items-center justify-between">
-            <h3 className="text-white font-semibold text-base">
-              Editar Estudiante
-            </h3>
-            <button
-              type="button"
-              onClick={() => {
-                resetForm();
-                setEditingId(null);
-              }}
-              className="min-h-8 text-white text-[11px] hover:bg-[#FFFFFF]/20 px-3 py-1 rounded transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-            >
-              Cancelar
-            </button>
-          </div>
-          <form onSubmit={handleSubmit} className="p-3">
-            {validationErrors.length > 0 && (
-              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
-                <div className="flex items-start gap-2">
-                  <FaExclamationTriangle className="text-[#C93F45] mt-0.5 shrink-0" />
-                  <div>
-                    <h4 className="text-red-800 font-semibold text-[11px] mb-1">
-                      {validationErrors.length} error
-                      {validationErrors.length !== 1 ? "es" : ""} encontrado
-                      {validationErrors.length !== 1 ? "s" : ""}:
-                    </h4>
-                    <ul className="text-[#AD3038] text-[11px] space-y-1">
-                      {validationErrors.map((error, idx) => (
-                        <li key={idx}>• {error}</li>
-                      ))}
-                    </ul>
-                  </div>
+        <div
+          className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-3 animate-in fade-in duration-200"
+          role="presentation"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              resetForm();
+              setEditingId(null);
+            }
+          }}
+        >
+          <div
+            ref={modalRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-editar-estudiante"
+            className="w-full max-w-3xl max-h-[92vh] flex flex-col bg-[#FFFFFF] rounded-xl shadow-[0_24px_60px_-20px_rgba(15,23,42,0.45)] border border-[#D8DEE6] overflow-hidden animate-in zoom-in-95 duration-200"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between gap-3 bg-[#244563] px-4 py-3 shrink-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-white/15 flex items-center justify-center shrink-0">
+                  <FaEdit className="text-white text-[12px]" />
+                </div>
+                <div className="min-w-0">
+                  <h3
+                    id="modal-editar-estudiante"
+                    className="text-white font-semibold text-sm leading-tight truncate"
+                  >
+                    Editar Estudiante
+                  </h3>
+                  <p className="text-[#C7D6E4] text-[10px] leading-tight truncate">
+                    {`${formData.apellidos} ${formData.nombres}`.trim() ||
+                      "Modifica los datos del estudiante"}
+                  </p>
                 </div>
               </div>
-            )}
-            <h4 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5 border-b border-[#ECEFF3] pb-2">
-              <FaUserTie className="text-[#244563]" /> Datos del Estudiante
-            </h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
-              <div>
-                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
-                  Cédula/Código
-                </label>
-                <input
-                  type="text"
-                  value={formData.cedula}
-                  onChange={(e) =>
-                    setFormData({ ...formData, cedula: e.target.value })
-                  }
-                  placeholder="Ej: 1712345678 o A123"
-                  maxLength={10}
-                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
-                  Apellidos
-                </label>
-                <input
-                  type="text"
-                  value={formData.apellidos}
-                  onChange={(e) =>
-                    setFormData({ ...formData, apellidos: e.target.value })
-                  }
-                  placeholder="Ej: Pérez García"
-                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
-                  Nombres
-                </label>
-                <input
-                  type="text"
-                  value={formData.nombres}
-                  onChange={(e) =>
-                    setFormData({ ...formData, nombres: e.target.value })
-                  }
-                  placeholder="Ej: Juan Carlos"
-                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
-                  Género
-                </label>
-                <select
-                  value={formData.sexo}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      sexo: e.target.value as "" | "M" | "F",
-                    })
-                  }
-                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors bg-[#FFFFFF] focus:outline-none text-[#374151]"
-                >
-                  <option value="">Sin especificar</option>
-                  <option value="M">Masculino (M)</option>
-                  <option value="F">Femenino (F)</option>
-                </select>
-              </div>
-              <div className="flex items-center pt-6">
-                <input
-                  type="checkbox"
-                  id="activo"
-                  checked={formData.activo}
-                  onChange={(e) =>
-                    setFormData({ ...formData, activo: e.target.checked })
-                  }
-                  className="w-4 h-4 text-[#244563] border-[#BFC9D4] rounded focus:ring-[#244563]/20 focus:border-[#244563] focus:outline-none"
-                />
-                <label
-                  htmlFor="activo"
-                  className="ml-2 text-[11px] text-[#4B5563]"
-                >
-                  Estudiante activo
-                </label>
-              </div>
-              <div className="flex items-center pt-6">
-                <input
-                  type="checkbox"
-                  id="conAdaptacion"
-                  checked={formData.conAdaptacion}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      conAdaptacion: e.target.checked,
-                    })
-                  }
-                  className="w-4 h-4 text-purple-600 border-[#BFC9D4] rounded focus:ring-purple-500 focus:border-[#244563] focus:outline-none"
-                />
-                <label
-                  htmlFor="conAdaptacion"
-                  className="ml-2 text-[11px] text-[#4B5563]"
-                >
-                  Con adaptación curricular (NECE)
-                </label>
-              </div>
-            </div>
-            <h4 className="text-[10px] font-semibold text-[#64748B] flex shrink-0 items-center gap-1.5 border-b border-[#ECEFF3] pb-2 mt-3">
-              <FaUsers className="text-[#244563]" /> Datos del Representante
-              Legal
-            </h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
-              <div>
-                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
-                  Cédula del Representante
-                </label>
-                <div className="relative">
-                  <FaIdCard className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#9CA3AF] text-[10px]" />
-                  <input
-                    type="text"
-                    value={formData.cedulaRepresentante}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        cedulaRepresentante: e.target.value,
-                      })
-                    }
-                    placeholder="Ej: 1712345678"
-                    maxLength={10}
-                    className="h-8 w-full border border-[#BFC9D4] rounded-md pl-9 pr-3  text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                  />
-                </div>
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
-                  Nombre Completo del Representante
-                </label>
-                <input
-                  type="text"
-                  value={formData.nombreRepresentante}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      nombreRepresentante: e.target.value,
-                    })
-                  }
-                  placeholder="Ej: GARCIA PEREZ JUAN CARLOS"
-                  className="h-8 w-full border border-[#BFC9D4] rounded-md px-3  text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
-                  Celular del Representante
-                </label>
-                <div className="relative">
-                  <FaPhone className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#9CA3AF] text-[10px]" />
-                  <input
-                    type="text"
-                    value={formData.celularRepresentante}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        celularRepresentante: e.target.value,
-                      })
-                    }
-                    placeholder="Ej: 0991234567"
-                    maxLength={10}
-                    className="h-8 w-full border border-[#BFC9D4] rounded-md pl-9 pr-3  text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
-                  />
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-2 pt-4 border-t border-[#D8DEE6] mt-4">
-              <button
-                type="submit"
-                className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4  rounded-md transition-colors text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
-              >
-                <FaCheck className="text-[10px]" /> Actualizar
-              </button>
               <button
                 type="button"
                 onClick={() => {
                   resetForm();
                   setEditingId(null);
                 }}
-                className="min-h-8 inline-flex items-center gap-2 bg-[#ECEFF3] hover:bg-[#D8DEE6] text-[#4B5563] px-4  rounded-md transition-colors text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                className="min-h-8 w-8 inline-flex items-center justify-center rounded-md text-white/80 hover:text-white hover:bg-white/15 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+                aria-label="Cerrar"
               >
-                <FaTimes className="text-[10px]" /> Cancelar
+                <FaTimes className="text-[13px]" />
               </button>
             </div>
-          </form>
+
+            <form
+              onSubmit={handleSubmit}
+              className="flex flex-col flex-1 min-h-0"
+            >
+              {/* Área scrollable */}
+              <div className="flex-1 overflow-y-auto p-4">
+                {validationErrors.length > 0 && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-3">
+                    <div className="flex items-start gap-2">
+                      <FaExclamationTriangle className="text-[#C93F45] mt-0.5 shrink-0" />
+                      <div>
+                        <h4 className="text-red-800 font-semibold text-[11px] mb-1">
+                          {validationErrors.length} error
+                          {validationErrors.length !== 1 ? "es" : ""} encontrado
+                          {validationErrors.length !== 1 ? "s" : ""}:
+                        </h4>
+                        <ul className="text-[#AD3038] text-[11px] space-y-1">
+                          {validationErrors.map((error, idx) => (
+                            <li key={idx}>• {error}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <h4 className="text-[10px] font-semibold text-[#64748B] flex items-center gap-1.5 border-b border-[#ECEFF3] pb-2 mb-3">
+                  <FaUserTie className="text-[#244563]" /> Datos del Estudiante
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                      Cédula/Código
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.cedula}
+                      onChange={(e) =>
+                        setFormData({ ...formData, cedula: e.target.value })
+                      }
+                      placeholder="Ej: 1712345678 o A123"
+                      maxLength={10}
+                      className="h-8 w-full border border-[#BFC9D4] rounded-md px-3 text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                      Apellidos
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.apellidos}
+                      onChange={(e) =>
+                        setFormData({ ...formData, apellidos: e.target.value })
+                      }
+                      placeholder="Ej: Pérez García"
+                      className="h-8 w-full border border-[#BFC9D4] rounded-md px-3 text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                      Nombres
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.nombres}
+                      onChange={(e) =>
+                        setFormData({ ...formData, nombres: e.target.value })
+                      }
+                      placeholder="Ej: Juan Carlos"
+                      className="h-8 w-full border border-[#BFC9D4] rounded-md px-3 text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                      Género
+                    </label>
+                    <select
+                      value={formData.sexo}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          sexo: e.target.value as "" | "M" | "F",
+                        })
+                      }
+                      className="h-8 w-full border border-[#BFC9D4] rounded-md px-3 text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors bg-[#FFFFFF] focus:outline-none text-[#374151]"
+                    >
+                      <option value="">Sin especificar</option>
+                      <option value="M">Masculino (M)</option>
+                      <option value="F">Femenino (F)</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center pt-6">
+                    <input
+                      type="checkbox"
+                      id="activo"
+                      checked={formData.activo}
+                      onChange={(e) =>
+                        setFormData({ ...formData, activo: e.target.checked })
+                      }
+                      className="w-4 h-4 text-[#244563] border-[#BFC9D4] rounded focus:ring-[#244563]/20 focus:border-[#244563] focus:outline-none"
+                    />
+                    <label
+                      htmlFor="activo"
+                      className="ml-2 text-[11px] text-[#4B5563]"
+                    >
+                      Estudiante activo
+                    </label>
+                  </div>
+                  <div className="flex items-center pt-6">
+                    <input
+                      type="checkbox"
+                      id="conAdaptacion"
+                      checked={formData.conAdaptacion}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          conAdaptacion: e.target.checked,
+                        })
+                      }
+                      className="w-4 h-4 text-purple-600 border-[#BFC9D4] rounded focus:ring-purple-500 focus:border-[#244563] focus:outline-none"
+                    />
+                    <label
+                      htmlFor="conAdaptacion"
+                      className="ml-2 text-[11px] text-[#4B5563]"
+                    >
+                      Con adaptación curricular (NECE)
+                    </label>
+                  </div>
+                </div>
+
+                <h4 className="text-[10px] font-semibold text-[#64748B] flex items-center gap-1.5 border-b border-[#ECEFF3] pb-2 mb-3">
+                  <FaUsers className="text-[#244563]" /> Datos del Representante
+                  Legal
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                      Cédula del Representante
+                    </label>
+                    <div className="relative">
+                      <FaIdCard className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#9CA3AF] text-[10px]" />
+                      <input
+                        type="text"
+                        value={formData.cedulaRepresentante}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            cedulaRepresentante: e.target.value,
+                          })
+                        }
+                        placeholder="Ej: 1712345678"
+                        maxLength={10}
+                        className="h-8 w-full border border-[#BFC9D4] rounded-md pl-9 pr-3 text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                      />
+                    </div>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                      Nombre Completo del Representante
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.nombreRepresentante}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          nombreRepresentante: e.target.value,
+                        })
+                      }
+                      placeholder="Ej: GARCIA PEREZ JUAN CARLOS"
+                      className="h-8 w-full border border-[#BFC9D4] rounded-md px-3 text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider mb-1">
+                      Celular del Representante
+                    </label>
+                    <div className="relative">
+                      <FaPhone className="absolute left-3 top-1/2 transform -translate-y-1/2 text-[#9CA3AF] text-[10px]" />
+                      <input
+                        type="text"
+                        value={formData.celularRepresentante}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            celularRepresentante: e.target.value,
+                          })
+                        }
+                        placeholder="Ej: 0991234567"
+                        maxLength={10}
+                        className="h-8 w-full border border-[#BFC9D4] rounded-md pl-9 pr-3 text-[11px] focus:ring-2 focus:ring-[#244563] focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer fijo dentro del form (submit nativo) */}
+              <div className="shrink-0 border-t border-[#D8DEE6] bg-[#ECEFF3] px-4 py-2 flex gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetForm();
+                    setEditingId(null);
+                  }}
+                  className="min-h-8 inline-flex items-center gap-2 bg-[#FFFFFF] hover:bg-[#EAF0F6] text-[#4B5563] border border-[#BFC9D4] px-4 rounded-md transition-colors text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                >
+                  <FaTimes className="text-[10px]" /> Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4 rounded-md transition-colors text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                >
+                  <FaCheck className="text-[10px]" /> Actualizar
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* FORMULARIO MASIVO (sin cambios)                                 */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
       {showMassiveForm && puedeRegistrar && (
         <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] mb-3 overflow-hidden">
           <div className="bg-[#ECEFF3] border-b border-[#D8DEE6] px-2.5 py-2 flex items-center justify-between">
@@ -1128,6 +1305,7 @@ export default function Estudiantes() {
           </div>
         </div>
       )}
+
       {!docenteSinGrados && (
         <>
           {userData?.role === "docente" && !gradoEfectivoId && (
@@ -1141,6 +1319,7 @@ export default function Estudiantes() {
               </p>
             </div>
           )}
+
           {(gradoEfectivoId || esAdmin) && (
             <>
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] mb-3 px-2.5 py-2 flex-col sm:flex-row justify-between">
@@ -1182,6 +1361,7 @@ export default function Estudiantes() {
                   )}
                 </div>
               </div>
+
               <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
                   <span className="text-[11px] text-[#64748B]">
@@ -1420,6 +1600,8 @@ export default function Estudiantes() {
           )}
         </>
       )}
+
+      {/* Toasts */}
       <div className="fixed top-4 right-4 z-110 space-y-2 pointer-events-none max-w-sm w-full">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
@@ -1456,6 +1638,8 @@ export default function Estudiantes() {
           );
         })}
       </div>
+
+      {/* Modal de confirmación */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 bg-[#111827]/40 backdrop-blur-[2px] flex items-center justify-center z-100 p-3 animate-in fade-in duration-200">
           <div className="bg-[#FFFFFF] rounded-lg shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)] max-w-md w-full overflow-hidden animate-in zoom-in-95 duration-200 border border-[#D8DEE6]">

@@ -9,6 +9,7 @@ import {
   setDoc,
   where,
   writeBatch,
+  type QueryDocumentSnapshot,
 } from "firebase/firestore";
 import {
   FaUsers,
@@ -478,6 +479,9 @@ export default function PPE() {
     });
   }, [estudiantesPPE, vistaLista, gradoNombre]);
 
+  // ============================================================
+  // ✅ OPTIMIZACIÓN 1: Carga de datos por fecha específica (no todo el año)
+  // ============================================================
   useEffect(() => {
     let cancelled = false;
     const cargarDatosFecha = async () => {
@@ -490,46 +494,51 @@ export default function PPE() {
         return;
       }
       try {
-        const [asisSnap, notasSnap] = await Promise.all([
-          getPPECached(
-            `ppe:${docenteId}:${anioLectivoId}:asistencia-fecha:${fecha}`,
-            () =>
-              getDocs(
-                query(
-                  collection(db, "ppeAsistencias"),
-                  where("docenteId", "==", docenteId),
-                  where("anioLectivoId", "==", anioLectivoId),
-                  where("fecha", "==", fecha),
-                ),
-              ),
-          ),
-          getPPECached(`ppe:${docenteId}:${anioLectivoId}:calificaciones`, () =>
-            getDocs(
-              query(
-                collection(db, "ppeCalificaciones"),
-                where("docenteId", "==", docenteId),
-                where("anioLectivoId", "==", anioLectivoId),
-              ),
-            ),
-          ),
-        ]);
+        const asisQuery = query(
+          collection(db, "ppeAsistencias"),
+          where("docenteId", "==", docenteId),
+          where("anioLectivoId", "==", anioLectivoId),
+          where("fecha", "==", fecha),
+        );
+
+        let notasSnapDocs: QueryDocumentSnapshot[] = [];
+        if (actividadSeleccionada) {
+          const notasQuery = query(
+            collection(db, "ppeCalificaciones"),
+            where("docenteId", "==", docenteId),
+            where("anioLectivoId", "==", anioLectivoId),
+            where("actividadId", "==", actividadSeleccionada),
+          );
+          const notasSnap = await getPPECached(
+            `ppe:${docenteId}:${anioLectivoId}:calificaciones-actividad:${actividadSeleccionada}`,
+            () => getDocs(notasQuery),
+          );
+          notasSnapDocs = notasSnap.docs;
+        }
+
+        const asisSnap = await getPPECached(
+          `ppe:${docenteId}:${anioLectivoId}:asistencia-fecha:${fecha}`,
+          () => getDocs(asisQuery),
+        );
+
         if (cancelled) return;
+
         const asisMap: Record<string, EstadoPPE> = {};
         asisSnap.docs.forEach((d) => {
           const row = d.data() as AsistenciaPPE;
-          if (estudianteIds.includes(row.estudianteId))
+          if (estudianteIds.includes(row.estudianteId)) {
             asisMap[row.estudianteId] = row.estado;
+          }
         });
+
         const notaMap: Record<string, string> = {};
-        notasSnap.docs.forEach((d) => {
+        notasSnapDocs.forEach((d) => {
           const row = d.data() as NotaPPE;
-          if (
-            estudianteIds.includes(row.estudianteId) &&
-            row.actividadId === actividadSeleccionada
-          ) {
+          if (estudianteIds.includes(row.estudianteId)) {
             notaMap[row.estudianteId] = String(row.nota);
           }
         });
+
         setAsistencias(asisMap);
         setNotas(notaMap);
       } catch (e) {
@@ -757,44 +766,134 @@ export default function PPE() {
     }
   };
 
+  // ============================================================
+  // ✅ CORRECCIÓN TDZ: Declaraciones movidas ANTES de cargarReporte
+  // ============================================================
+  const periodoReporteEfectivo = periodos.some((p) => p.id === periodoReporteId)
+    ? periodoReporteId
+    : (periodos[0]?.id ?? "");
+
+  const rangoFechasReporte = useMemo(() => {
+    if (tipoPeriodoReporte === "semanal" && semanaReporte) {
+      const inicio = lunesDe(semanaReporte);
+      const fin = new Date(inicio);
+      fin.setDate(fin.getDate() + 4);
+      return { inicio: fechaISO(inicio), fin: fechaISO(fin) };
+    }
+    if (tipoPeriodoReporte === "mensual") {
+      const anio = Number(anioReporte);
+      const mes = Number(mesReporte);
+      if (
+        !Number.isFinite(anio) ||
+        !Number.isFinite(mes) ||
+        anio < 2000 ||
+        anio > 2100
+      ) {
+        return { inicio: "", fin: "" };
+      }
+      return {
+        inicio: fechaISO(new Date(anio, mes, 1)),
+        fin: fechaISO(new Date(anio, mes + 1, 0)),
+      };
+    }
+    if (tipoPeriodoReporte === "trimestral") {
+      const periodo = periodos.find((p) => p.id === periodoReporteEfectivo);
+      if (periodo?.fechaInicio && periodo?.fechaFin) {
+        return { inicio: periodo.fechaInicio, fin: periodo.fechaFin };
+      }
+    }
+    return { inicio: "", fin: "" };
+  }, [
+    tipoPeriodoReporte,
+    semanaReporte,
+    mesReporte,
+    anioReporte,
+    periodoReporteEfectivo,
+    periodos,
+  ]);
+
+  const fechaInicioReporte = rangoFechasReporte.inicio;
+  const fechaFinReporte = rangoFechasReporte.fin;
+  const rangoReporteValido = Boolean(
+    fechaInicioReporte &&
+      fechaFinReporte &&
+      fechaInicioReporte <= fechaFinReporte,
+  );
+
+  // ============================================================
+  // ✅ OPTIMIZACIÓN 2: Carga de reporte por rango (con chunking 'in')
+  // ============================================================
   const cargarReporte = useCallback(async () => {
-    if (!docenteId || !anioLectivoId) return;
+    if (!docenteId || !anioLectivoId || !rangoReporteValido) return;
     try {
-      const [asisSnap, notasSnap] = await Promise.all([
-        getPPECached(
-          `ppe:${docenteId}:${anioLectivoId}:reporte-asistencias`,
-          () =>
-            getDocs(
-              query(
-                collection(db, "ppeAsistencias"),
-                where("docenteId", "==", docenteId),
-                where("anioLectivoId", "==", anioLectivoId),
-              ),
-            ),
-        ),
-        getPPECached(
-          `ppe:${docenteId}:${anioLectivoId}:reporte-calificaciones`,
-          () =>
-            getDocs(
-              query(
-                collection(db, "ppeCalificaciones"),
-                where("docenteId", "==", docenteId),
-                where("anioLectivoId", "==", anioLectivoId),
-              ),
-            ),
-        ),
-      ]);
-      setReporteAsistencias(
-        asisSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as AsistenciaPPE),
+      // PASO 1: Obtener SOLO las actividades del rango de fechas
+      const actQuery = query(
+        collection(db, "ppeActividades"),
+        where("docenteId", "==", docenteId),
+        where("anioLectivoId", "==", anioLectivoId),
+        where("fecha", ">=", fechaInicioReporte),
+        where("fecha", "<=", fechaFinReporte),
       );
-      setReporteNotas(
-        notasSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as NotaPPE),
+      const actSnap = await getPPECached(
+        `ppe:${docenteId}:${anioLectivoId}:actividades-rango:${fechaInicioReporte}:${fechaFinReporte}`,
+        () => getDocs(actQuery),
       );
+      const actividadesRango = actSnap.docs.map(
+        (d) => ({ id: d.id, ...d.data() }) as ActividadPPE,
+      );
+      const actividadIdsRango = actividadesRango.map((a) => a.id);
+
+      // PASO 2: Obtener calificaciones de esas actividades (en lotes de 30)
+      const notasRango: NotaPPE[] = [];
+      if (actividadIdsRango.length > 0) {
+        for (let i = 0; i < actividadIdsRango.length; i += 30) {
+          const chunk = actividadIdsRango.slice(i, i + 30);
+          const notasQuery = query(
+            collection(db, "ppeCalificaciones"),
+            where("docenteId", "==", docenteId),
+            where("anioLectivoId", "==", anioLectivoId),
+            where("actividadId", "in", chunk),
+          );
+          const notasSnap = await getPPECached(
+            `ppe:${docenteId}:${anioLectivoId}:calificaciones-rango:${chunk.join(",")}`,
+            () => getDocs(notasQuery),
+          );
+          notasRango.push(
+            ...notasSnap.docs.map((d) => ({ id: d.id, ...d.data() }) as NotaPPE),
+          );
+        }
+      }
+
+      // PASO 3: Obtener asistencias SOLO del rango de fechas
+      const asisQuery = query(
+        collection(db, "ppeAsistencias"),
+        where("docenteId", "==", docenteId),
+        where("anioLectivoId", "==", anioLectivoId),
+        where("fecha", ">=", fechaInicioReporte),
+        where("fecha", "<=", fechaFinReporte),
+      );
+      const asisSnap = await getPPECached(
+        `ppe:${docenteId}:${anioLectivoId}:asistencias-rango:${fechaInicioReporte}:${fechaFinReporte}`,
+        () => getDocs(asisQuery),
+      );
+      const asistenciasRango = asisSnap.docs.map(
+        (d) => ({ id: d.id, ...d.data() }) as AsistenciaPPE,
+      );
+
+      setReporteAsistencias(asistenciasRango);
+      setReporteNotas(notasRango);
     } catch (e) {
       console.error("Error cargando reporte PPE:", e);
       mostrarToast("error", "Error de carga", "No se pudo cargar el reporte.");
     }
-  }, [docenteId, anioLectivoId, mostrarToast]);
+  }, [
+    docenteId,
+    anioLectivoId,
+    fechaInicioReporte,
+    fechaFinReporte,
+    rangoReporteValido,
+    mostrarToast,
+  ]);
 
   useEffect(() => {
     if (vista === "reporte") void cargarReporte();
@@ -980,57 +1079,6 @@ export default function PPE() {
       setSaving(false);
     }
   };
-
-  const periodoReporteEfectivo = periodos.some((p) => p.id === periodoReporteId)
-    ? periodoReporteId
-    : (periodos[0]?.id ?? "");
-
-  const rangoFechasReporte = useMemo(() => {
-    if (tipoPeriodoReporte === "semanal" && semanaReporte) {
-      const inicio = lunesDe(semanaReporte);
-      const fin = new Date(inicio);
-      fin.setDate(fin.getDate() + 4);
-      return { inicio: fechaISO(inicio), fin: fechaISO(fin) };
-    }
-    if (tipoPeriodoReporte === "mensual") {
-      const anio = Number(anioReporte);
-      const mes = Number(mesReporte);
-      if (
-        !Number.isFinite(anio) ||
-        !Number.isFinite(mes) ||
-        anio < 2000 ||
-        anio > 2100
-      ) {
-        return { inicio: "", fin: "" };
-      }
-      return {
-        inicio: fechaISO(new Date(anio, mes, 1)),
-        fin: fechaISO(new Date(anio, mes + 1, 0)),
-      };
-    }
-    if (tipoPeriodoReporte === "trimestral") {
-      const periodo = periodos.find((p) => p.id === periodoReporteEfectivo);
-      if (periodo?.fechaInicio && periodo?.fechaFin) {
-        return { inicio: periodo.fechaInicio, fin: periodo.fechaFin };
-      }
-    }
-    return { inicio: "", fin: "" };
-  }, [
-    tipoPeriodoReporte,
-    semanaReporte,
-    mesReporte,
-    anioReporte,
-    periodoReporteEfectivo,
-    periodos,
-  ]);
-
-  const fechaInicioReporte = rangoFechasReporte.inicio;
-  const fechaFinReporte = rangoFechasReporte.fin;
-  const rangoReporteValido = Boolean(
-    fechaInicioReporte &&
-    fechaFinReporte &&
-    fechaInicioReporte <= fechaFinReporte,
-  );
 
   const asistenciasTrimestre = useMemo(
     () =>
