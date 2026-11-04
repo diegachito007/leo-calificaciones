@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   collection,
   doc,
@@ -29,18 +29,22 @@ import {
   FaArrowLeft,
 } from "react-icons/fa";
 
+// ✅ OPTIMIZACIÓN 1: Agregamos 'id' para poder borrar sin consultar antes
 interface PeriodoCalculado {
+  id?: string; // ID de Firestore (solo presente al editar)
   nombre: string;
   fechaInicio: string;
   fechaFin: string;
   orden: number;
 }
+
 interface Toast {
   id: string;
   type: "success" | "error" | "warning" | "info";
   title: string;
   message?: string;
 }
+
 interface ConfirmModalState {
   isOpen: boolean;
   title: string;
@@ -79,10 +83,13 @@ export default function AniosLectivos() {
     onCancel: () => {},
   });
 
-  const anios = [...aniosLectivos].sort((a, b) => {
-    if (!a.nombre || !b.nombre) return 0;
-    return b.nombre.localeCompare(a.nombre);
-  });
+  // ✅ OPTIMIZACIÓN 2: useMemo para evitar re-ordenar en cada render
+  const anios = useMemo(() => {
+    return [...aniosLectivos].sort((a, b) => {
+      if (!a.nombre || !b.nombre) return 0;
+      return b.nombre.localeCompare(a.nombre);
+    });
+  }, [aniosLectivos]);
 
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
@@ -141,7 +148,10 @@ export default function AniosLectivos() {
     return `${yearInicio}-${yearFin}`;
   };
   
-  const nombreGenerado = calcularNombre(formData.fechaInicio, formData.fechaFin);
+  const nombreGenerado = useMemo(
+    () => calcularNombre(formData.fechaInicio, formData.fechaFin),
+    [formData.fechaInicio, formData.fechaFin]
+  );
 
   const calcularPeriodos = (
     fechaInicio: string,
@@ -173,7 +183,6 @@ export default function AniosLectivos() {
       const nombre =
         tipo === "trimestral" ? `Trimestre ${i + 1}` : `Quimestre ${i + 1}`;
       
-      // Ajustamos para evitar desfase de zona horaria al usar toISOString
       const ajustarZona = (d: Date) => {
         const offset = d.getTimezoneOffset();
         const adjusted = new Date(d.getTime() - offset * 60 * 1000);
@@ -210,18 +219,17 @@ export default function AniosLectivos() {
       );
       const snap = await getDocs(q);
       const data = snap.docs
-        .map((doc) => ({ id: doc.id, ...doc.data() }) as PeriodoEvaluacion)
+        .map((d) => ({ 
+          id: d.id, // ✅ Guardamos el ID para poder borrarlo sin consultar de nuevo
+          nombre: (d.data() as PeriodoEvaluacion).nombre,
+          fechaInicio: (d.data() as PeriodoEvaluacion).fechaInicio,
+          fechaFin: (d.data() as PeriodoEvaluacion).fechaFin,
+          orden: (d.data() as PeriodoEvaluacion).orden,
+        }))
         .sort((a, b) => (a.orden || 0) - (b.orden || 0));
       
       if (data.length > 0) {
-        setPeriodosEditables(
-          data.map((p) => ({
-            nombre: p.nombre,
-            fechaInicio: p.fechaInicio,
-            fechaFin: p.fechaFin,
-            orden: p.orden,
-          })),
-        );
+        setPeriodosEditables(data);
       }
     } catch (error) {
       console.error("Error cargando períodos:", error);
@@ -305,11 +313,12 @@ export default function AniosLectivos() {
           updatedAt: serverTimestamp(),
         });
         
-        const periodosAnteriores = await getDocs(
-          query(collection(db, "periodosEvaluacion"), where("anioLectivoId", "==", editingId)),
-        );
-        periodosAnteriores.docs.forEach((p) => {
-          batch.delete(doc(db, "periodosEvaluacion", p.id));
+        // ✅ OPTIMIZACIÓN 3: Eliminamos los períodos usando los IDs que ya tenemos en memoria
+        // en lugar de hacer un getDocs innecesario.
+        periodosEditables.forEach((p) => {
+          if (p.id) {
+            batch.delete(doc(db, "periodosEvaluacion", p.id));
+          }
         });
       } else {
         const nuevoRef = doc(collection(db, "aniosLectivos"));
@@ -586,7 +595,7 @@ export default function AniosLectivos() {
                   </h4>
                   <div className="space-y-2">
                     {periodosEditables.map((periodo, idx) => (
-                      <div key={idx} className="rounded-md border border-[#E4E8EE] bg-[#FFFFFF] p-2.5 flex items-center gap-3">
+                      <div key={periodo.id || idx} className="rounded-md border border-[#E4E8EE] bg-[#FFFFFF] p-2.5 flex items-center gap-3">
                         <div className="bg-[#EAF0F6] text-[#244563] rounded-full w-6 h-6 flex items-center justify-center text-[10px] font-bold shrink-0">
                           {periodo.orden}
                         </div>

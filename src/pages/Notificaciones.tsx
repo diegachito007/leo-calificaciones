@@ -163,15 +163,61 @@ export default function Notificaciones() {
     items: [],
   });
 
-  // 3 onSnapshot conservados (historial, atenciones, auditoría).
-  // Fase 4 podría filtrarlos por rango y limitarlos.
-  useEffect(() => {
-    if (!uid) return;
-    const a = onSnapshot(
-      query(
-        collection(db, "notificacionesNotasHistorial"),
-        where("docenteId", "==", uid),
+  // ============================================================
+  // 1. CALCULAR RANGO DE FECHAS PRIMERO (para usarlo en los useEffect)
+  // ============================================================
+  const periodosConsulta = useMemo(
+    () =>
+      periodos
+        .filter((p) => p.anioLectivoId === anioActivo?.id)
+        .sort((a, b) => a.fechaInicio.localeCompare(b.fechaInicio)),
+    [periodos, anioActivo?.id],
+  );
+
+  const periodoConsulta =
+    tipoReporte === "trimestral"
+      ? periodosConsulta.find((p) => p.id === periodoConsultaId) ||
+        periodoActual
+      : periodoActual;
+
+  const rango = useMemo(
+    () =>
+      rangoConsulta(
+        tipoReporte,
+        fechaConsulta,
+        periodoConsulta?.fechaInicio || "",
+        periodoConsulta?.fechaFin || "",
       ),
+    [
+      tipoReporte,
+      fechaConsulta,
+      periodoConsulta?.fechaInicio,
+      periodoConsulta?.fechaFin,
+    ],
+  );
+
+  // ============================================================
+  // 2. LISTENERS DE FIRESTORE (ahora 'rango' ya está declarado y disponible)
+  // ============================================================
+  useEffect(() => {
+    if (!uid || !rango.inicio || !rango.fin) return;
+
+    const qNotas = query(
+      collection(db, "notificacionesNotasHistorial"),
+      where("docenteId", "==", uid),
+      where("fecha", ">=", rango.inicio),
+      where("fecha", "<=", rango.fin),
+    );
+
+    const qVisitas = query(
+      collection(db, "notificacionesNotasAtenciones"),
+      where("docenteId", "==", uid),
+      where("fecha", ">=", rango.inicio),
+      where("fecha", "<=", rango.fin),
+    );
+
+    const a = onSnapshot(
+      qNotas,
       (s) =>
         setDatos((p) => ({
           uid,
@@ -187,11 +233,9 @@ export default function Notificaciones() {
           "No se pudieron consultar las notificaciones. Revisa conexión y permisos.",
         ),
     );
+
     const b = onSnapshot(
-      query(
-        collection(db, "notificacionesNotasAtenciones"),
-        where("docenteId", "==", uid),
-      ),
+      qVisitas,
       (s) =>
         setDatos((p) => ({
           uid,
@@ -207,21 +251,20 @@ export default function Notificaciones() {
           "No se pudieron consultar las atenciones. Revisa conexión y permisos.",
         ),
     );
+
     return () => {
       a();
       b();
     };
-  }, [uid]);
+  }, [uid, rango.inicio, rango.fin]);
 
   // ============================================================
-  // FASE 3.4: NÓMINA DESDE estudiantesCache
-  // (antes: cargarCacheNotificaciones + getDocs con gradoId in [...])
+  // 3. NÓMINA DESDE estudiantesCache
   // ============================================================
   useEffect(() => {
     if (!uid || !anioActivo?.id || !accesoCache) return;
     const anio = anioActivo.id;
 
-    // Grados permitidos por el perfil (mismo criterio que estudiantesCache).
     const gradosPermitidos = [
       ...new Set([
         ...(userData?.gradosAsignados ?? []),
@@ -236,13 +279,11 @@ export default function Notificaciones() {
       return;
     }
 
-    // 1. Aseguramos la caché de cada grado permitido.
     gradosPermitidos.forEach((gradoId) => {
       const clave = claveConsultaEstudiantes(accesoCache, anio, gradoId);
       if (clave) asegurarEstudiantesCache(clave);
     });
 
-    // 2. Extraemos estudiantes de la caché (solo activos del año).
     const actualizarDesdeCache = () => {
       const items: Estudiante[] = [];
       gradosPermitidos.forEach((gradoId) => {
@@ -270,12 +311,9 @@ export default function Notificaciones() {
     return () => unsubscribe();
   }, [uid, anioActivo?.id, userData, grados, accesoCache]);
 
+  // ✅ OPTIMIZACIÓN: Listener de auditoría solo activo si sel y verCambios son true
   useEffect(() => {
     if (!uid || !sel || !verCambios) return;
-    // FASE 5: La auditoría solo se consulta cuando el usuario abre el
-    // historial. Limitamos a 50 documentos para evitar traer años de
-    // historial y mantener la carga rápida. El filtro por fecha puede
-    // agregarse en el futuro si es necesario.
     return onSnapshot(
       query(
         collection(db, "notificacionesNotasAuditoria"),
@@ -300,33 +338,7 @@ export default function Notificaciones() {
     () => (datos.uid === uid ? datos.visitas : []),
     [datos, uid],
   );
-  const periodosConsulta = useMemo(
-    () =>
-      periodos
-        .filter((p) => p.anioLectivoId === anioActivo?.id)
-        .sort((a, b) => a.fechaInicio.localeCompare(b.fechaInicio)),
-    [periodos, anioActivo?.id],
-  );
-  const periodoConsulta =
-    tipoReporte === "trimestral"
-      ? periodosConsulta.find((p) => p.id === periodoConsultaId) ||
-        periodoActual
-      : periodoActual;
-  const rango = useMemo(
-    () =>
-      rangoConsulta(
-        tipoReporte,
-        fechaConsulta,
-        periodoConsulta?.fechaInicio || "",
-        periodoConsulta?.fechaFin || "",
-      ),
-    [
-      tipoReporte,
-      fechaConsulta,
-      periodoConsulta?.fechaInicio,
-      periodoConsulta?.fechaFin,
-    ],
-  );
+
   const fechaLarga = (fecha: string) =>
     fecha
       ? new Date(`${fecha}T12:00:00Z`).toLocaleDateString("es-EC", {
@@ -336,6 +348,7 @@ export default function Notificaciones() {
           timeZone: "UTC",
         })
       : "";
+
   const rangoTitulo =
     tipoReporte === "mensual"
       ? new Date(
@@ -346,8 +359,10 @@ export default function Notificaciones() {
           timeZone: "UTC",
         })
       : `${tipoReporte === "semanal" ? "Semana del" : "Del"} ${fechaLarga(rango.inicio)} al ${fechaLarga(rango.fin)}`;
+
   const cambiarRango = (paso: number) => {
     setSel(null);
+    setVerCambios(false); // ✅ Cierra el historial al cambiar rango
     if (tipoReporte === "semanal")
       setFechaConsulta(sumarDias(fechaConsulta, paso * 7));
     else {
@@ -356,6 +371,7 @@ export default function Notificaciones() {
       setFechaConsulta(d.toISOString().slice(0, 10));
     }
   };
+
   const grupos = useMemo(() => {
     const dentro = (fecha: string) =>
       fecha >= rango.inicio && fecha <= rango.fin;
@@ -421,6 +437,7 @@ export default function Notificaciones() {
       }))
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [notas, visitas, anioActivo?.id, periodoConsulta?.id, grados, rango]);
+
   const visibles = grupos.filter((g) => {
     if (
       buscar &&
@@ -445,9 +462,11 @@ export default function Notificaciones() {
     if (estado === "atendidos" && !g.visitas.length) return false;
     return true;
   });
+
   const grupo = grupos.find((g) => g.id === sel);
   const estudiantes =
     alumnos.uid === uid && alumnos.anio === anioActivo?.id ? alumnos.items : [];
+
   const ejecutar = async (fn: () => Promise<void>, msg: string) => {
     if (bloqueo.current) return;
     bloqueo.current = true;
@@ -465,6 +484,7 @@ export default function Notificaciones() {
       setOcupado(false);
     }
   };
+
   const abrir = (n?: NotificacionRegistrada) => {
     setError("");
     setForm({
@@ -488,12 +508,14 @@ export default function Notificaciones() {
       operacionId: crypto.randomUUID(),
     });
   };
+
   const gradosAtencion = grados.filter((g) =>
     estudiantes.some((e) => e.gradoId === g.id),
   );
   const representanteActual = estudiantes
     .find((e) => e.id === form?.estudianteId)
     ?.nombreRepresentante?.trim();
+
   const cargarEstudiante = (id: string) => {
     const e = estudiantes.find((e) => e.id === id);
     if (form && e)
@@ -505,6 +527,7 @@ export default function Notificaciones() {
         asistente: e.nombreRepresentante || "",
       });
   };
+
   const descargar = (n: NotificacionRegistrada) => {
     try {
       generarPdfNotificacion(n).save(nombrePdfNotificacion(n));
@@ -512,9 +535,11 @@ export default function Notificaciones() {
       setError("No se pudo generar el PDF.");
     }
   };
+
   const sinNotificacion = form?.origen === "espontanea";
   const cargando = datos.uid !== uid || !datos.n || !datos.v;
   const contextoListo = !!anioActivo && !!periodoActual;
+
   return (
     <Layout showBack={false}>
       <div className="space-y-3 text-[11px] text-[#273444]">
@@ -551,6 +576,7 @@ export default function Notificaciones() {
                 setTipoReporte(e.target.value as TipoReporte);
                 setFechaConsulta(hoyEcuador());
                 setSel(null);
+                setVerCambios(false); // ✅ Cierra el historial al cambiar tipo
               }}
               className="h-8 min-w-0 rounded-md border border-[#BFC9D4] bg-white px-2 text-[11px] text-[#273444] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20 shrink-0 font-semibold"
             >
@@ -565,6 +591,7 @@ export default function Notificaciones() {
                 onChange={(e) => {
                   setPeriodoConsultaId(e.target.value);
                   setSel(null);
+                  setVerCambios(false); // ✅ Cierra el historial al cambiar período
                 }}
                 className="h-8 max-w-64 shrink-0 truncate rounded-md border border-[#BFC9D4] bg-white px-2 text-[11px] font-semibold text-[#4B5563] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20"
               >
@@ -578,19 +605,17 @@ export default function Notificaciones() {
             )}
             {tipoReporte !== "trimestral" && (
               <div className="flex shrink-0 items-center gap-1">
-                {
-                  <button
-                    className={navegacion}
-                    aria-label={
-                      tipoReporte === "semanal"
-                        ? "Semana anterior"
-                        : "Mes anterior"
-                    }
-                    onClick={() => cambiarRango(-1)}
-                  >
-                    <FaChevronLeft className="text-[10px]" />
-                  </button>
-                }
+                <button
+                  className={navegacion}
+                  aria-label={
+                    tipoReporte === "semanal"
+                      ? "Semana anterior"
+                      : "Mes anterior"
+                  }
+                  onClick={() => cambiarRango(-1)}
+                >
+                  <FaChevronLeft className="text-[10px]" />
+                </button>
                 <span
                   title="Notificaciones por fecha de envío; atenciones por fecha de asistencia"
                   className="inline-flex h-8 items-center min-w-35 justify-center whitespace-nowrap rounded-md border border-[#D8DEE6] bg-white px-2 text-[11px] font-semibold text-[#273444]"
@@ -605,30 +630,27 @@ export default function Notificaciones() {
                       })
                     : `${fechaCorta(rango.inicio)} — ${fechaCorta(rango.fin)}`}
                 </span>
-                {
-                  <>
-                    <button
-                      className={navegacion}
-                      aria-label={
-                        tipoReporte === "semanal"
-                          ? "Semana siguiente"
-                          : "Mes siguiente"
-                      }
-                      onClick={() => cambiarRango(1)}
-                    >
-                      <FaChevronRight className="text-[10px]" />
-                    </button>
-                    <button
-                      className="inline-flex h-8 items-center rounded-md bg-[#ECEFF3] px-2 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#E4E8EE]"
-                      onClick={() => {
-                        setFechaConsulta(hoyEcuador());
-                        setSel(null);
-                      }}
-                    >
-                      Hoy
-                    </button>
-                  </>
-                }
+                <button
+                  className={navegacion}
+                  aria-label={
+                    tipoReporte === "semanal"
+                      ? "Semana siguiente"
+                      : "Mes siguiente"
+                  }
+                  onClick={() => cambiarRango(1)}
+                >
+                  <FaChevronRight className="text-[10px]" />
+                </button>
+                <button
+                  className="inline-flex h-8 items-center rounded-md bg-[#ECEFF3] px-2 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#E4E8EE]"
+                  onClick={() => {
+                    setFechaConsulta(hoyEcuador());
+                    setSel(null);
+                    setVerCambios(false); // ✅ Cierra el historial al ir a "Hoy"
+                  }}
+                >
+                  Hoy
+                </button>
               </div>
             )}
             <div className="relative shrink-0 lg:ml-auto">
@@ -758,7 +780,13 @@ export default function Notificaciones() {
                     {grupo.nombre} · {grupo.grado}
                   </h2>
                 </div>
-                <button className={boton} onClick={() => setSel(null)}>
+                <button
+                  className={boton}
+                  onClick={() => {
+                    setSel(null);
+                    setVerCambios(false); // ✅ Cierra el historial al cerrar el modal
+                  }}
+                >
                   <FaTimes />
                   Cerrar detalle
                 </button>

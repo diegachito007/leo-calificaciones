@@ -91,13 +91,36 @@ interface GrupoDuplicado {
 // ✅ Conteo de referencias de un grado (para borrado seguro)
 const contarReferenciasGrado = async (gradoId: string): Promise<RefsGrado> => {
   const [est, asig, asis, cal, act, tut, asig2] = await Promise.all([
-    getCountFromServer(query(collection(db, "estudiantes"), where("gradoId", "==", gradoId))),
-    getCountFromServer(query(collection(db, "asignaturasDocente"), where("gradoId", "==", gradoId))),
-    getCountFromServer(query(collection(db, "asistencias"), where("gradoId", "==", gradoId))),
-    getCountFromServer(query(collection(db, "calificaciones"), where("gradoId", "==", gradoId))),
-    getCountFromServer(query(collection(db, "actividades"), where("gradoId", "==", gradoId))),
-    getCountFromServer(query(collection(db, "usuarios"), where("tutorDe", "array-contains", gradoId))),
-    getCountFromServer(query(collection(db, "usuarios"), where("gradosAsignados", "array-contains", gradoId))),
+    getCountFromServer(
+      query(collection(db, "estudiantes"), where("gradoId", "==", gradoId)),
+    ),
+    getCountFromServer(
+      query(
+        collection(db, "asignaturasDocente"),
+        where("gradoId", "==", gradoId),
+      ),
+    ),
+    getCountFromServer(
+      query(collection(db, "asistencias"), where("gradoId", "==", gradoId)),
+    ),
+    getCountFromServer(
+      query(collection(db, "calificaciones"), where("gradoId", "==", gradoId)),
+    ),
+    getCountFromServer(
+      query(collection(db, "actividades"), where("gradoId", "==", gradoId)),
+    ),
+    getCountFromServer(
+      query(
+        collection(db, "usuarios"),
+        where("tutorDe", "array-contains", gradoId),
+      ),
+    ),
+    getCountFromServer(
+      query(
+        collection(db, "usuarios"),
+        where("gradosAsignados", "array-contains", gradoId),
+      ),
+    ),
   ]);
   const detalle = {
     estudiantes: est.data().count,
@@ -115,23 +138,25 @@ const contarReferenciasGrado = async (gradoId: string): Promise<RefsGrado> => {
 export default function Grados() {
   const { user, userData } = useAuth();
   const { anioActivo, ready } = useData();
-  
+
   const [gradosLocales, setGradosLocales] = useState<Grado[]>([]);
   const [anioCargado, setAnioCargado] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  
+
   // ✅ Selección múltiple (sin matrícula)
   const [selectedNiveles, setSelectedNiveles] = useState<string[]>([]);
   const [selectedParalelos, setSelectedParalelos] = useState<string[]>([]);
   const [activo, setActivo] = useState(true);
   const [mostrarInactivos, setMostrarInactivos] = useState(true);
   const [guardando, setGuardando] = useState(false);
-  
+
   // ✅ Limpieza de duplicados
   const [analizandoDuplicados, setAnalizandoDuplicados] = useState(false);
-  const [reporteDuplicados, setReporteDuplicados] = useState<GrupoDuplicado[]>([]);
-  
+  const [reporteDuplicados, setReporteDuplicados] = useState<GrupoDuplicado[]>(
+    [],
+  );
+
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
@@ -145,8 +170,11 @@ export default function Grados() {
   useEffect(() => {
     if (!ready || !anioActivo?.id) return;
     const anioId = anioActivo.id;
-    const q = query(collection(db, "grados"), where("anioLectivoId", "==", anioId));
-    
+    const q = query(
+      collection(db, "grados"),
+      where("anioLectivoId", "==", anioId),
+    );
+
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
@@ -163,8 +191,11 @@ export default function Grados() {
     return () => unsubscribe();
   }, [ready, anioActivo?.id]);
 
-  const loadingGrados = ready && anioActivo?.id ? anioCargado !== anioActivo.id : false;
-  const gradosBase = ready && anioActivo?.id ? gradosLocales : [];
+  const loadingGrados =
+    ready && anioActivo?.id ? anioCargado !== anioActivo.id : false;
+  const gradosBase = useMemo(() => {
+    return ready && anioActivo?.id ? gradosLocales : [];
+  }, [ready, anioActivo?.id, gradosLocales]);
 
   const notificarRefresh = useCallback(() => {
     window.dispatchEvent(new Event("eduX:refreshData"));
@@ -180,9 +211,13 @@ export default function Grados() {
     return nuevasCombinaciones;
   }, [selectedNiveles, selectedParalelos]);
 
-  const gradosFiltrados = (() => {
+  const gradosFiltrados = useMemo(() => {
     let filtered = gradosBase;
-    if (userData?.role === "docente" && userData?.gradosAsignados && userData.gradosAsignados.length > 0) {
+    if (
+      userData?.role === "docente" &&
+      userData?.gradosAsignados &&
+      userData.gradosAsignados.length > 0
+    ) {
       const asignados = new Set(userData.gradosAsignados);
       filtered = filtered.filter((g) => asignados.has(g.id));
     }
@@ -190,7 +225,7 @@ export default function Grados() {
       filtered = filtered.filter((g) => g.activo);
     }
     return filtered;
-  })();
+  }, [gradosBase, userData, mostrarInactivos]);
 
   const puedeGestionar = userData?.role === "super_admin";
   const docenteSinGrados =
@@ -232,7 +267,8 @@ export default function Grados() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
+          confirmColor:
+            options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -260,11 +296,19 @@ export default function Grados() {
   async function guardarGrados() {
     if (guardando) return;
     if (!anioActivo) {
-      mostrarToast("warning", "Sin año lectivo activo", "Crea uno primero en el módulo de Años Lectivos.");
+      mostrarToast(
+        "warning",
+        "Sin año lectivo activo",
+        "Crea uno primero en el módulo de Años Lectivos.",
+      );
       return;
     }
     if (selectedNiveles.length === 0 || selectedParalelos.length === 0) {
-      mostrarToast("warning", "Selección incompleta", "Debes seleccionar al menos un nivel y un paralelo.");
+      mostrarToast(
+        "warning",
+        "Selección incompleta",
+        "Debes seleccionar al menos un nivel y un paralelo.",
+      );
       return;
     }
 
@@ -274,8 +318,10 @@ export default function Grados() {
       try {
         const nombre = selectedNiveles[0];
         const paralelo = selectedParalelos[0];
-        const orden = (NIVELES.indexOf(nombre) + 1) * 100 + (PARALELOS.indexOf(paralelo) + 1);
-        
+        const orden =
+          (NIVELES.indexOf(nombre) + 1) * 100 +
+          (PARALELOS.indexOf(paralelo) + 1);
+
         await updateDoc(doc(db, "grados", editingId), {
           nombre,
           paralelo,
@@ -283,13 +329,21 @@ export default function Grados() {
           orden,
           updatedAt: serverTimestamp(),
         });
-        
-        mostrarToast("success", "Grado actualizado", "Los cambios se guardaron correctamente.");
+
+        mostrarToast(
+          "success",
+          "Grado actualizado",
+          "Los cambios se guardaron correctamente.",
+        );
         notificarRefresh();
         resetForm();
       } catch (error) {
         console.error("Error actualizando grado:", error);
-        mostrarToast("error", "Error al actualizar", "No se pudo guardar el cambio.");
+        mostrarToast(
+          "error",
+          "Error al actualizar",
+          "No se pudo guardar el cambio.",
+        );
       } finally {
         setGuardando(false);
       }
@@ -298,17 +352,26 @@ export default function Grados() {
 
     // ✅ MODO CREAR: Validación de duplicados
     const duplicados = combinaciones.filter((comb) =>
-      gradosBase.some((g) => g.nombre === comb.nombre && g.paralelo === comb.paralelo),
+      gradosBase.some(
+        (g) => g.nombre === comb.nombre && g.paralelo === comb.paralelo,
+      ),
     );
-    
+
     if (duplicados.length > 0) {
       const detalle = duplicados
         .map((c) => {
-          const g = gradosBase.find((x) => x.nombre === c.nombre && x.paralelo === c.paralelo);
+          const g = gradosBase.find(
+            (x) => x.nombre === c.nombre && x.paralelo === c.paralelo,
+          );
           return `  • ${c.nombre} - ${c.paralelo}${g && !g.activo ? " (INACTIVO → usa Reactivar)" : ""}`;
         })
         .join("\n");
-      mostrarToast("warning", "Grados ya existentes", `Ya existen en este año lectivo:\n${detalle}`, 8000);
+      mostrarToast(
+        "warning",
+        "Grados ya existentes",
+        `Ya existen en este año lectivo:\n${detalle}`,
+        8000,
+      );
       return;
     }
 
@@ -320,7 +383,7 @@ export default function Grados() {
         const ordenParalelo = PARALELOS.indexOf(comb.paralelo) + 1;
         const orden = ordenNivel * 100 + ordenParalelo;
         const nuevoRef = doc(collection(db, "grados"));
-        
+
         batch.set(nuevoRef, {
           nombre: comb.nombre,
           paralelo: comb.paralelo,
@@ -331,14 +394,22 @@ export default function Grados() {
           createdBy: user?.uid,
         });
       });
-      
+
       await batch.commit();
-      mostrarToast("success", "Grados creados", `Se crearon ${combinaciones.length} grado(s) correctamente.`);
+      mostrarToast(
+        "success",
+        "Grados creados",
+        `Se crearon ${combinaciones.length} grado(s) correctamente.`,
+      );
       notificarRefresh();
       resetForm();
     } catch (error) {
       console.error("Error guardando grados:", error);
-      mostrarToast("error", "Error al guardar", "No se pudieron crear los grados.");
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudieron crear los grados.",
+      );
     } finally {
       setGuardando(false);
     }
@@ -361,7 +432,7 @@ export default function Grados() {
   async function handleDelete(id: string) {
     const grado = gradosFiltrados.find((g) => g.id === id);
     const refs = await contarReferenciasGrado(id);
-    
+
     if (refs.total > 0) {
       mostrarToast(
         "warning",
@@ -371,22 +442,35 @@ export default function Grados() {
       );
       return;
     }
-    
+
     const confirmado = await confirmar(
       `Eliminar ${grado?.nombre || ""} - ${grado?.paralelo || ""}`,
       "Sin referencias detectadas. ¿Eliminar definitivamente?",
-      { confirmText: "Sí, eliminar", cancelText: "Cancelar", confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]", icon: FaTrash },
+      {
+        confirmText: "Sí, eliminar",
+        cancelText: "Cancelar",
+        confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]",
+        icon: FaTrash,
+      },
     );
-    
+
     if (!confirmado) return;
-    
+
     try {
       await deleteDoc(doc(db, "grados", id));
-      mostrarToast("success", "Grado eliminado", `${grado?.nombre} - ${grado?.paralelo} fue eliminado correctamente.`);
+      mostrarToast(
+        "success",
+        "Grado eliminado",
+        `${grado?.nombre} - ${grado?.paralelo} fue eliminado correctamente.`,
+      );
       notificarRefresh();
     } catch (error) {
       console.error("Error eliminando:", error);
-      mostrarToast("error", "Error al eliminar", "No se pudo eliminar el grado.");
+      mostrarToast(
+        "error",
+        "Error al eliminar",
+        "No se pudo eliminar el grado.",
+      );
     }
   }
 
@@ -396,7 +480,11 @@ export default function Grados() {
       notificarRefresh();
     } catch (error) {
       console.error("Error actualizando estado:", error);
-      mostrarToast("error", "Error al actualizar", "No se pudo cambiar el estado del grado.");
+      mostrarToast(
+        "error",
+        "Error al actualizar",
+        "No se pudo cambiar el estado del grado.",
+      );
     }
   }
 
@@ -405,35 +493,54 @@ export default function Grados() {
     if (!anioActivo) return;
     setAnalizandoDuplicados(true);
     try {
-      const snap = await getDocs(query(collection(db, "grados"), where("anioLectivoId", "==", anioActivo.id)));
+      const snap = await getDocs(
+        query(
+          collection(db, "grados"),
+          where("anioLectivoId", "==", anioActivo.id),
+        ),
+      );
       const todos = snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Grado);
-      
+
       const mapa = new Map<string, Grado[]>();
       todos.forEach((g) => {
         const clave = `${g.nombre}||${g.paralelo}`;
         mapa.set(clave, [...(mapa.get(clave) || []), g]);
       });
-      
-      const grupos = Array.from(mapa.entries()).filter(([, lista]) => lista.length > 1);
-      const resultado: GrupoDuplicado[] = [];
-      
-      for (const [clave, lista] of grupos) {
-        const items: ItemDuplicado[] = [];
-        for (const grado of lista) {
-          const refs = await contarReferenciasGrado(grado.id);
-          items.push({ grado, refs });
-        }
+
+      const grupos = Array.from(mapa.entries()).filter(
+        ([, lista]) => lista.length > 1,
+      );
+
+      // ✅ OPTIMIZACIÓN: Ejecutar conteos en paralelo en lugar de secuencial
+      const promesasGrupos = grupos.map(async ([clave, lista]) => {
+        const items = await Promise.all(
+          lista.map(async (grado) => {
+            const refs = await contarReferenciasGrado(grado.id);
+            return { grado, refs };
+          }),
+        );
+        // Ordenar por mayor cantidad de referencias primero (los más "peligrosos" de borrar)
         items.sort((a, b) => b.refs.total - a.refs.total);
-        resultado.push({ clave, items });
-      }
-      
+        return { clave, items };
+      });
+
+      const resultado = await Promise.all(promesasGrupos);
       setReporteDuplicados(resultado);
+
       if (resultado.length === 0) {
-        mostrarToast("success", "Sin duplicados", "No hay grados duplicados en este año lectivo.");
+        mostrarToast(
+          "success",
+          "Sin duplicados",
+          "No hay grados duplicados en este año lectivo.",
+        );
       }
     } catch (error) {
       console.error("Error analizando duplicados:", error);
-      mostrarToast("error", "Error al analizar", "No se pudieron contar las referencias.");
+      mostrarToast(
+        "error",
+        "Error al analizar",
+        "No se pudieron contar las referencias.",
+      );
     } finally {
       setAnalizandoDuplicados(false);
     }
@@ -442,19 +549,32 @@ export default function Grados() {
   const eliminarGradoSeguro = async (grado: Grado) => {
     const refs = await contarReferenciasGrado(grado.id);
     if (refs.total > 0) {
-      mostrarToast("warning", "No se puede eliminar", `Tiene ${refs.total} referencia(s). En su lugar DESACTÍVALO para no romper historial.`, 6000);
+      mostrarToast(
+        "warning",
+        "No se puede eliminar",
+        `Tiene ${refs.total} referencia(s). En su lugar DESACTÍVALO para no romper historial.`,
+        6000,
+      );
       return;
     }
     const ok = await confirmar(
       `Eliminar ${grado.nombre} - ${grado.paralelo}`,
       "Sin referencias detectadas. Se eliminará DEFINITIVAMENTE de Firestore.",
-      { confirmText: "Sí, eliminar", icon: FaTrash, confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]" },
+      {
+        confirmText: "Sí, eliminar",
+        icon: FaTrash,
+        confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]",
+      },
     );
     if (!ok) return;
-    
+
     try {
       await deleteDoc(doc(db, "grados", grado.id));
-      mostrarToast("success", "Grado eliminado", "Se eliminó el grado sin referencias.");
+      mostrarToast(
+        "success",
+        "Grado eliminado",
+        "Se eliminó el grado sin referencias.",
+      );
       notificarRefresh();
       setReporteDuplicados((prev) =>
         prev
@@ -467,23 +587,49 @@ export default function Grados() {
       );
     } catch (error) {
       console.error("Error eliminando:", error);
-      mostrarToast("error", "Error al eliminar", "No se pudo eliminar el grado.");
+      mostrarToast(
+        "error",
+        "Error al eliminar",
+        "No se pudo eliminar el grado.",
+      );
     }
   };
 
   const toggleNivel = (nivel: string) => {
-    setSelectedNiveles((prev) => prev.includes(nivel) ? prev.filter((n) => n !== nivel) : [...prev, nivel]);
+    setSelectedNiveles((prev) =>
+      prev.includes(nivel) ? prev.filter((n) => n !== nivel) : [...prev, nivel],
+    );
   };
-  
+
   const toggleParalelo = (paralelo: string) => {
-    setSelectedParalelos((prev) => prev.includes(paralelo) ? prev.filter((p) => p !== paralelo) : [...prev, paralelo]);
+    setSelectedParalelos((prev) =>
+      prev.includes(paralelo)
+        ? prev.filter((p) => p !== paralelo)
+        : [...prev, paralelo],
+    );
   };
 
   const toastConfig = {
-    success: { bg: "border-l-[#6687A5]", iconBg: "bg-[#244563]", icon: FaCheckCircle },
-    error: { bg: "border-l-red-400", iconBg: "bg-[#C93F45]", icon: FaTimesCircle },
-    warning: { bg: "border-l-amber-400", iconBg: "bg-amber-500", icon: FaExclamationTriangle },
-    info: { bg: "border-l-[#244563]", iconBg: "bg-[#244563]", icon: FaInfoCircle },
+    success: {
+      bg: "border-l-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      icon: FaCheckCircle,
+    },
+    error: {
+      bg: "border-l-red-400",
+      iconBg: "bg-[#C93F45]",
+      icon: FaTimesCircle,
+    },
+    warning: {
+      bg: "border-l-amber-400",
+      iconBg: "bg-amber-500",
+      icon: FaExclamationTriangle,
+    },
+    info: {
+      bg: "border-l-[#244563]",
+      iconBg: "bg-[#244563]",
+      icon: FaInfoCircle,
+    },
   };
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
@@ -494,7 +640,9 @@ export default function Grados() {
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <FaSpinner className="animate-spin text-2xl text-[#244563] mx-auto mb-3" />
-            <p className="text-[#4B5563] text-[11px] font-medium">Cargando grados...</p>
+            <p className="text-[#4B5563] text-[11px] font-medium">
+              Cargando grados...
+            </p>
           </div>
         </div>
       </Layout>
@@ -504,7 +652,6 @@ export default function Grados() {
   return (
     <Layout>
       <div className="mx-auto w-full max-w-6xl space-y-4">
-        
         {/* Cabecera */}
         <div className="flex items-center justify-between gap-3 mb-2">
           <div className="flex items-center gap-3">
@@ -520,7 +667,8 @@ export default function Grados() {
                 Gestión de Grados
               </h1>
               <p className="text-[11px] text-[#6B7280]">
-                Administra los niveles educativos y paralelos del año lectivo activo.
+                Administra los niveles educativos y paralelos del año lectivo
+                activo.
               </p>
             </div>
           </div>
@@ -530,7 +678,11 @@ export default function Grados() {
               disabled={!anioActivo || guardando}
               className="inline-flex items-center gap-1.5 bg-[#244563] hover:bg-[#1B354D] text-white h-8 px-3 rounded-md transition-colors text-[11px] font-semibold disabled:opacity-50"
             >
-              {showForm ? <FaTimes className="text-[10px]" /> : <FaPlus className="text-[10px]" />}
+              {showForm ? (
+                <FaTimes className="text-[10px]" />
+              ) : (
+                <FaPlus className="text-[10px]" />
+              )}
               {showForm ? "Cancelar" : "Crear Grados"}
             </button>
           )}
@@ -541,7 +693,9 @@ export default function Grados() {
           <div className="rounded-lg border border-[#C8D6E5] bg-[#EAF0F6] px-4 py-2.5 flex items-center gap-2 text-[11px]">
             <FaCalendarAlt className="text-[#244563]" />
             <span className="font-medium text-[#1B354D]">Año lectivo:</span>
-            <span className="font-bold text-[#273444]">{anioActivo.nombre}</span>
+            <span className="font-bold text-[#273444]">
+              {anioActivo.nombre}
+            </span>
           </div>
         )}
 
@@ -550,8 +704,13 @@ export default function Grados() {
             <div className="flex items-start gap-2.5">
               <FaInfoCircle className="mt-0.5 shrink-0 text-sm text-amber-600" />
               <div>
-                <h3 className="text-xs font-semibold text-amber-900">No hay año lectivo activo</h3>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800">Debes crear y activar un año lectivo primero en el módulo de Años Lectivos.</p>
+                <h3 className="text-xs font-semibold text-amber-900">
+                  No hay año lectivo activo
+                </h3>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800">
+                  Debes crear y activar un año lectivo primero en el módulo de
+                  Años Lectivos.
+                </p>
               </div>
             </div>
           </div>
@@ -562,8 +721,13 @@ export default function Grados() {
             <div className="flex items-start gap-2.5">
               <FaExclamationTriangle className="mt-0.5 shrink-0 text-sm text-amber-600" />
               <div>
-                <h3 className="text-xs font-semibold text-amber-900">No tienes grados asignados</h3>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800">Contacta al administrador del sistema para que te asigne los grados que podrás gestionar.</p>
+                <h3 className="text-xs font-semibold text-amber-900">
+                  No tienes grados asignados
+                </h3>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800">
+                  Contacta al administrador del sistema para que te asigne los
+                  grados que podrás gestionar.
+                </p>
               </div>
             </div>
           </div>
@@ -577,12 +741,15 @@ export default function Grados() {
                 <FaLayerGroup className="text-[#244563]" />
                 {editingId ? "Editar Grado" : "Creación Múltiple de Grados"}
               </h3>
-              <button type="button" onClick={resetForm} className="text-[#6B7280] hover:text-[#4B5563] text-[11px] font-semibold">
+              <button
+                type="button"
+                onClick={resetForm}
+                className="text-[#6B7280] hover:text-[#4B5563] text-[11px] font-semibold"
+              >
                 Cerrar
               </button>
             </header>
             <form onSubmit={handleSubmit} className="p-4 space-y-4">
-              
               {/* Niveles */}
               <div>
                 <label className="block text-[10px] font-semibold text-[#4B5563] uppercase tracking-wide mb-2">
@@ -601,7 +768,9 @@ export default function Grados() {
                           : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]/50"
                       }`}
                     >
-                      {selectedNiveles.includes(nivel) && <FaCheck className="inline mr-1 text-[10px]" />}
+                      {selectedNiveles.includes(nivel) && (
+                        <FaCheck className="inline mr-1 text-[10px]" />
+                      )}
                       {nivel}
                     </button>
                   ))}
@@ -644,7 +813,10 @@ export default function Grados() {
                   onChange={(e) => setActivo(e.target.checked)}
                   className="w-4 h-4 rounded border-[#BFC9D4] text-[#244563] focus:ring-[#244563]/30"
                 />
-                <label htmlFor="activo" className="text-[11px] text-[#4B5563] font-medium">
+                <label
+                  htmlFor="activo"
+                  className="text-[11px] text-[#4B5563] font-medium"
+                >
                   Grados activos (visibles en el sistema)
                 </label>
               </div>
@@ -653,11 +825,15 @@ export default function Grados() {
               {combinaciones.length > 0 && (
                 <div className="rounded-lg border border-[#D8DEE6] bg-[#F8FAFC] p-3">
                   <h4 className="text-[11px] font-semibold text-[#273444] mb-2 flex items-center gap-1.5">
-                    <FaInfoCircle className="text-[#244563]" /> Vista Previa: {combinaciones.length} grado(s) a crear
+                    <FaInfoCircle className="text-[#244563]" /> Vista Previa:{" "}
+                    {combinaciones.length} grado(s) a crear
                   </h4>
                   <div className="flex flex-wrap gap-1.5">
                     {combinaciones.map((comb, idx) => (
-                      <span key={idx} className="inline-flex items-center bg-[#FFFFFF] border border-[#D8DEE6] rounded-md px-2 py-1 text-[10px] font-semibold text-[#273444] shadow-sm">
+                      <span
+                        key={idx}
+                        className="inline-flex items-center bg-[#FFFFFF] border border-[#D8DEE6] rounded-md px-2 py-1 text-[10px] font-semibold text-[#273444] shadow-sm"
+                      >
                         {comb.nombre} - {comb.paralelo}
                       </span>
                     ))}
@@ -676,11 +852,21 @@ export default function Grados() {
                 </button>
                 <button
                   type="submit"
-                  disabled={selectedNiveles.length === 0 || selectedParalelos.length === 0 || guardando}
+                  disabled={
+                    selectedNiveles.length === 0 ||
+                    selectedParalelos.length === 0 ||
+                    guardando
+                  }
                   className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#244563] px-4 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] disabled:opacity-50"
                 >
-                  {guardando ? <FaSpinner className="animate-spin" /> : <FaCheck />}
-                  {editingId ? "Actualizar Grado" : `Crear ${combinaciones.length} Grado(s)`}
+                  {guardando ? (
+                    <FaSpinner className="animate-spin" />
+                  ) : (
+                    <FaCheck />
+                  )}
+                  {editingId
+                    ? "Actualizar Grado"
+                    : `Crear ${combinaciones.length} Grado(s)`}
                 </button>
               </div>
             </form>
@@ -693,10 +879,12 @@ export default function Grados() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-xs font-semibold text-amber-900 flex items-center gap-1.5">
-                  <FaExclamationTriangle className="text-amber-600" /> Limpieza de grados duplicados
+                  <FaExclamationTriangle className="text-amber-600" /> Limpieza
+                  de grados duplicados
                 </h3>
                 <p className="text-[10px] text-amber-700 mt-0.5">
-                  Detecta duplicados y cuenta sus referencias. Solo podrás eliminar los que tengan 0 referencias.
+                  Detecta duplicados y cuenta sus referencias. Solo podrás
+                  eliminar los que tengan 0 referencias.
                 </p>
               </div>
               <button
@@ -704,27 +892,48 @@ export default function Grados() {
                 disabled={analizandoDuplicados || !anioActivo}
                 className="inline-flex shrink-0 items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white h-8 px-3 rounded-md text-[11px] font-semibold transition-colors disabled:opacity-60"
               >
-                {analizandoDuplicados ? <FaSpinner className="animate-spin" /> : <FaSyncAlt />}
+                {analizandoDuplicados ? (
+                  <FaSpinner className="animate-spin" />
+                ) : (
+                  <FaSyncAlt />
+                )}
                 Analizar duplicados
               </button>
             </div>
-            
+
             {reporteDuplicados.length > 0 && (
               <div className="mt-3 space-y-2">
                 {reporteDuplicados.map((grupo) => (
-                  <div key={grupo.clave} className="rounded-md border border-amber-200 bg-[#FFFFFF] p-2.5">
+                  <div
+                    key={grupo.clave}
+                    className="rounded-md border border-amber-200 bg-[#FFFFFF] p-2.5"
+                  >
                     <p className="text-[11px] font-bold text-[#273444] mb-1.5 flex items-center gap-2">
-                      {grupo.items[0].grado.nombre} - {grupo.items[0].grado.paralelo}
-                      <span className="text-[10px] font-normal text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">{grupo.items.length} docs</span>
+                      {grupo.items[0].grado.nombre} -{" "}
+                      {grupo.items[0].grado.paralelo}
+                      <span className="text-[10px] font-normal text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                        {grupo.items.length} docs
+                      </span>
                     </p>
                     <div className="space-y-1">
                       {grupo.items.map(({ grado, refs }) => (
-                        <div key={grado.id} className="flex items-center justify-between gap-2 p-1.5 rounded bg-[#F8FAFC] border border-[#E4E8EE] text-[10px]">
+                        <div
+                          key={grado.id}
+                          className="flex items-center justify-between gap-2 p-1.5 rounded bg-[#F8FAFC] border border-[#E4E8EE] text-[10px]"
+                        >
                           <div className="min-w-0 flex items-center gap-2">
-                            <span className="font-mono text-[9px] text-[#9CA3AF]">{grado.id.slice(0, 6)}…</span>
-                            <span>{grado.activo ? "🟢 activo" : "⚪ inactivo"}</span>
-                            <span className={`font-semibold ${refs.total === 0 ? "text-[#2E6B3B]" : "text-[#8A5A1B]"}`}>
-                              {refs.total === 0 ? "0 refs (seguro)" : `${refs.total} refs (conservar)`}
+                            <span className="font-mono text-[9px] text-[#9CA3AF]">
+                              {grado.id.slice(0, 6)}…
+                            </span>
+                            <span>
+                              {grado.activo ? "🟢 activo" : "⚪ inactivo"}
+                            </span>
+                            <span
+                              className={`font-semibold ${refs.total === 0 ? "text-[#2E6B3B]" : "text-[#8A5A1B]"}`}
+                            >
+                              {refs.total === 0
+                                ? "0 refs (seguro)"
+                                : `${refs.total} refs (conservar)`}
                             </span>
                           </div>
                           <button
@@ -749,7 +958,8 @@ export default function Grados() {
           <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
             <div className="flex items-center justify-between border-b border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2">
               <h3 className="text-xs font-semibold text-[#4B5563] flex items-center gap-1.5">
-                <FaGraduationCap className="text-[#244563]" /> Grados del Año Lectivo
+                <FaGraduationCap className="text-[#244563]" /> Grados del Año
+                Lectivo
               </h3>
               {puedeGestionar && (
                 <label className="inline-flex items-center gap-1.5 cursor-pointer">
@@ -759,7 +969,9 @@ export default function Grados() {
                     onChange={(e) => setMostrarInactivos(e.target.checked)}
                     className="w-3.5 h-3.5 rounded border-[#BFC9D4] text-[#244563] focus:ring-[#244563]/30"
                   />
-                  <span className="text-[10px] font-medium text-[#4B5563]">Mostrar inactivos</span>
+                  <span className="text-[10px] font-medium text-[#4B5563]">
+                    Mostrar inactivos
+                  </span>
                   {gradosBase.filter((g) => !g.activo).length > 0 && (
                     <span className="text-[9px] px-1.5 py-0.5 bg-[#D8DEE6] text-[#4B5563] rounded-full font-bold">
                       {gradosBase.filter((g) => !g.activo).length}
@@ -768,48 +980,73 @@ export default function Grados() {
                 </label>
               )}
             </div>
-            
+
             <div className="overflow-x-auto">
               <table className="w-full text-[11px] border-collapse">
                 <thead className="bg-[#F8FAFC] text-left text-[10px] uppercase tracking-wide text-[#6B7280]">
                   <tr>
                     <th className="px-3 py-2 font-semibold">Grado</th>
-                    <th className="px-3 py-2 text-center font-semibold w-28">Estado</th>
-                    {puedeGestionar && <th className="px-3 py-2 text-center font-semibold w-32">Acciones</th>}
+                    <th className="px-3 py-2 text-center font-semibold w-28">
+                      Estado
+                    </th>
+                    {puedeGestionar && (
+                      <th className="px-3 py-2 text-center font-semibold w-32">
+                        Acciones
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#ECEFF3]">
                   {gradosFiltrados.length === 0 ? (
                     <tr>
-                      <td colSpan={puedeGestionar ? 3 : 2} className="px-3 py-10 text-center">
+                      <td
+                        colSpan={puedeGestionar ? 3 : 2}
+                        className="px-3 py-10 text-center"
+                      >
                         <FaGraduationCap className="mx-auto text-3xl text-[#9CA3AF]" />
                         <p className="mt-2 text-xs font-semibold text-[#4B5563]">
-                          {userData?.role === "docente" ? "No tienes grados asignados" : "No hay grados registrados para este año lectivo"}
+                          {userData?.role === "docente"
+                            ? "No tienes grados asignados"
+                            : "No hay grados registrados para este año lectivo"}
                         </p>
                         {puedeGestionar && (
-                          <button onClick={() => setShowForm(true)} className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D]">
-                            <FaPlus className="text-[10px]" /> Crear primer grado
+                          <button
+                            onClick={() => setShowForm(true)}
+                            className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D]"
+                          >
+                            <FaPlus className="text-[10px]" /> Crear primer
+                            grado
                           </button>
                         )}
                       </td>
                     </tr>
                   ) : (
                     gradosFiltrados.map((grado) => (
-                      <tr key={grado.id} className={`transition-colors hover:bg-[#F8FAFC] ${!grado.activo ? "opacity-75 bg-[#F8FAFC]/50" : ""}`}>
+                      <tr
+                        key={grado.id}
+                        className={`transition-colors hover:bg-[#F8FAFC] ${!grado.activo ? "opacity-75 bg-[#F8FAFC]/50" : ""}`}
+                      >
                         <td className="px-3 py-2">
                           <div className="flex items-center gap-2.5">
                             <div className="bg-[#EAF0F6] text-[#244563] rounded-md w-8 h-8 flex items-center justify-center font-bold text-[11px]">
                               {grado.paralelo}
                             </div>
                             <div>
-                              <p className="font-semibold text-[#273444]">{grado.nombre}</p>
-                              <p className="text-[10px] text-[#6B7280]">Paralelo {grado.paralelo}</p>
+                              <p className="font-semibold text-[#273444]">
+                                {grado.nombre}
+                              </p>
+                              <p className="text-[10px] text-[#6B7280]">
+                                Paralelo {grado.paralelo}
+                              </p>
                             </div>
                           </div>
                         </td>
                         <td className="px-3 py-2 text-center">
                           <button
-                            onClick={() => puedeGestionar && handleToggleActivo(grado.id, grado.activo)}
+                            onClick={() =>
+                              puedeGestionar &&
+                              handleToggleActivo(grado.id, grado.activo)
+                            }
                             disabled={!puedeGestionar}
                             className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold transition-all ${
                               grado.activo
@@ -817,21 +1054,41 @@ export default function Grados() {
                                 : "bg-[#F3F4F6] text-[#6B7280] ring-1 ring-inset ring-[#D8DEE6]"
                             } ${!puedeGestionar ? "cursor-default" : "cursor-pointer hover:opacity-80"}`}
                           >
-                            {grado.activo ? <><FaCheck className="mr-1 text-[9px]" /> Activo</> : "Inactivo"}
+                            {grado.activo ? (
+                              <>
+                                <FaCheck className="mr-1 text-[9px]" /> Activo
+                              </>
+                            ) : (
+                              "Inactivo"
+                            )}
                           </button>
                         </td>
                         {puedeGestionar && (
                           <td className="px-3 py-2">
                             <div className="flex justify-center gap-1">
                               {!grado.activo && (
-                                <button onClick={() => handleToggleActivo(grado.id, grado.activo)} className="p-1.5 text-[#2E6B3B] hover:bg-[#E7F3EA] rounded-md transition-colors" title="Reactivar">
+                                <button
+                                  onClick={() =>
+                                    handleToggleActivo(grado.id, grado.activo)
+                                  }
+                                  className="p-1.5 text-[#2E6B3B] hover:bg-[#E7F3EA] rounded-md transition-colors"
+                                  title="Reactivar"
+                                >
                                   <FaCheckCircle className="text-[11px]" />
                                 </button>
                               )}
-                              <button onClick={() => handleEdit(grado)} className="p-1.5 text-[#244563] hover:bg-[#EAF0F6] rounded-md transition-colors" title="Editar">
+                              <button
+                                onClick={() => handleEdit(grado)}
+                                className="p-1.5 text-[#244563] hover:bg-[#EAF0F6] rounded-md transition-colors"
+                                title="Editar"
+                              >
                                 <FaEdit className="text-[11px]" />
                               </button>
-                              <button onClick={() => handleDelete(grado.id)} className="p-1.5 text-[#C93F45] hover:bg-red-50 rounded-md transition-colors" title="Eliminar (solo si no tiene referencias)">
+                              <button
+                                onClick={() => handleDelete(grado.id)}
+                                className="p-1.5 text-[#C93F45] hover:bg-red-50 rounded-md transition-colors"
+                                title="Eliminar (solo si no tiene referencias)"
+                              >
                                 <FaTrash className="text-[11px]" />
                               </button>
                             </div>
@@ -843,11 +1100,19 @@ export default function Grados() {
                 </tbody>
               </table>
             </div>
-            
+
             {gradosFiltrados.length > 0 && (
               <div className="bg-[#F8FAFC] border-t border-[#E4E8EE] px-3 py-1.5 flex items-center justify-between text-[10px] text-[#6B7280]">
-                <span>Total: <strong>{gradosFiltrados.length}</strong> grado{gradosFiltrados.length !== 1 ? "s" : ""}</span>
-                <span>{gradosFiltrados.filter((g) => g.activo).length} activo{gradosFiltrados.filter((g) => g.activo).length !== 1 ? "s" : ""}</span>
+                <span>
+                  Total: <strong>{gradosFiltrados.length}</strong> grado
+                  {gradosFiltrados.length !== 1 ? "s" : ""}
+                </span>
+                <span>
+                  {gradosFiltrados.filter((g) => g.activo).length} activo
+                  {gradosFiltrados.filter((g) => g.activo).length !== 1
+                    ? "s"
+                    : ""}
+                </span>
               </div>
             )}
           </section>
@@ -863,16 +1128,27 @@ export default function Grados() {
                 <ConfirmIcon className="text-sm" />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-[#273444]">{confirmModal.title}</h3>
-                <p className="mt-1 whitespace-pre-line text-[11px] leading-relaxed text-[#64748B]">{confirmModal.message}</p>
+                <h3 className="text-sm font-semibold text-[#273444]">
+                  {confirmModal.title}
+                </h3>
+                <p className="mt-1 whitespace-pre-line text-[11px] leading-relaxed text-[#64748B]">
+                  {confirmModal.message}
+                </p>
               </div>
             </div>
             <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#F3F4F6] px-4 py-2.5 sm:flex-row sm:justify-end">
-              <button onClick={confirmModal.onCancel} className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3]">
+              <button
+                onClick={confirmModal.onCancel}
+                className="inline-flex h-8 items-center justify-center rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-3 text-[11px] font-semibold text-[#4B5563] transition-colors hover:bg-[#ECEFF3]"
+              >
                 {confirmModal.cancelText || "Cancelar"}
               </button>
-              <button onClick={confirmModal.onConfirm} className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[11px] font-semibold text-white transition-colors ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"}`}>
-                <ConfirmIcon className="text-[10px]" /> {confirmModal.confirmText || "Confirmar"}
+              <button
+                onClick={confirmModal.onConfirm}
+                className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[11px] font-semibold text-white transition-colors ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"}`}
+              >
+                <ConfirmIcon className="text-[10px]" />{" "}
+                {confirmModal.confirmText || "Confirmar"}
               </button>
             </div>
           </div>
@@ -885,15 +1161,30 @@ export default function Grados() {
           const config = toastConfig[toast.type];
           const Icon = config.icon;
           return (
-            <div key={toast.id} className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}>
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}>
+            <div
+              key={toast.id}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}
+            >
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}
+              >
                 <Icon className="text-[10px]" />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-[11px] font-semibold text-[#273444]">{toast.title}</p>
-                {toast.message && <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">{toast.message}</p>}
+                <p className="text-[11px] font-semibold text-[#273444]">
+                  {toast.title}
+                </p>
+                {toast.message && (
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">
+                    {toast.message}
+                  </p>
+                )}
               </div>
-              <button onClick={() => cerrarToast(toast.id)} className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]" title="Cerrar">
+              <button
+                onClick={() => cerrarToast(toast.id)}
+                className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]"
+                title="Cerrar"
+              >
                 <FaTimes className="h-3 w-3" />
               </button>
             </div>

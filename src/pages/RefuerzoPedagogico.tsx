@@ -459,18 +459,32 @@ export default function RefuerzoPedagogico() {
     : "";
   const nombreVicerrector = configInst?.nombreVicerrector || "";
 
-  const contextoCacheRefuerzo = JSON.stringify([
-    userUid || "",
-    anioActivo?.id || "",
-    userData?.role || "",
-    userData?.status || "",
-    userData?.gradosAsignados || [],
-  ]);
-  const mostrarDiagnosticoRefuerzo =
-    import.meta.env.DEV &&
-    new URLSearchParams(window.location.search).get(
-      "diagnosticoRefuerzoPedagogico",
-    ) === "1";
+  const contextoCacheRefuerzo = useMemo(
+    () =>
+      JSON.stringify([
+        userUid || "",
+        anioActivo?.id || "",
+        userData?.role || "",
+        userData?.status || "",
+        userData?.gradosAsignados || [],
+      ]),
+    [
+      userUid,
+      anioActivo?.id,
+      userData?.role,
+      userData?.status,
+      userData?.gradosAsignados,
+    ],
+  );
+
+  const mostrarDiagnosticoRefuerzo = useMemo(
+    () =>
+      import.meta.env.DEV &&
+      new URLSearchParams(window.location.search).get(
+        "diagnosticoRefuerzoPedagogico",
+      ) === "1",
+    [],
+  );
 
   useEffect(() => {
     const nuevo = searchParams.get("nuevo");

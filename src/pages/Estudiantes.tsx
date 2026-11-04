@@ -4,13 +4,14 @@ import {
   useCallback,
   useRef,
   useSyncExternalStore,
+  useMemo,
 } from "react";
 import {
   collection,
   updateDoc,
   doc,
   serverTimestamp,
-  addDoc,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
@@ -127,7 +128,7 @@ export default function Estudiantes() {
 
   const modalRef = useRef<HTMLDivElement>(null);
 
-  const gradosFiltrados = (() => {
+  const gradosFiltrados = useMemo(() => {
     if (
       userData?.role === "docente" &&
       userData?.gradosAsignados &&
@@ -137,7 +138,7 @@ export default function Estudiantes() {
       return grados.filter((g) => asignados.has(g.id));
     }
     return grados;
-  })();
+  }, [grados, userData]);
 
   const gradoEfectivoId =
     (selectedGradoId && gradosFiltrados.some((g) => g.id === selectedGradoId)
@@ -460,6 +461,7 @@ export default function Estudiantes() {
       ]);
       return;
     }
+
     const { students, errors } = parsearListaMasiva(massiveData);
     if (errors.length > 0) {
       setValidationErrors(errors);
@@ -471,6 +473,8 @@ export default function Estudiantes() {
       ]);
       return;
     }
+
+    // Validar duplicados internos
     const cedulasVistas = new Set<string>();
     const duplicadosInternos: string[] = [];
     students.forEach((s) => {
@@ -483,6 +487,15 @@ export default function Estudiantes() {
       ]);
       return;
     }
+
+    // Límite de seguridad de Firestore (500 operaciones por batch)
+    if (students.length > 450) {
+      setValidationErrors([
+        "La lista es demasiado grande. Firestore permite un máximo de 450 registros por operación masiva. Divida la lista.",
+      ]);
+      return;
+    }
+
     setIsSavingMassive(true);
     try {
       const mapaExistentes = new Map(
@@ -490,15 +503,18 @@ export default function Estudiantes() {
           .filter((e) => e.gradoId === gradoEfectivoId)
           .map((e) => [e.cedula, e]),
       );
+
       const aCrear: EstudianteParseado[] = [];
       const aReactivar: (EstudianteParseado & { id: string })[] = [];
       const duplicadosActivos: string[] = [];
+
       students.forEach((s) => {
         const existente = mapaExistentes.get(s.cedula);
         if (!existente) aCrear.push(s);
         else if (existente.activo) duplicadosActivos.push(s.cedula);
         else aReactivar.push({ ...s, id: existente.id });
       });
+
       if (duplicadosActivos.length > 0) {
         setValidationErrors([
           `Las siguientes cédulas/códigos ya están ACTIVOS en este grado: ${[...new Set(duplicadosActivos)].join(", ")}.`,
@@ -507,34 +523,43 @@ export default function Estudiantes() {
         setIsSavingMassive(false);
         return;
       }
-      const promesas = [
-        ...aCrear.map(async (est) => {
-          await medirEscritura("Crear estudiante", () =>
-            addDoc(collection(db, "estudiantes"), {
-              cedula: est.cedula,
-              apellidos: est.apellidos,
-              nombres: est.nombres,
-              gradoId: gradoEfectivoId,
-              anioLectivoId: anioActivo.id,
-              activo: true,
-              createdAt: serverTimestamp(),
-              createdBy: user?.uid,
-            }),
-          );
-        }),
-        ...aReactivar.map(async (est) => {
-          await medirEscritura("Actualizar estudiante", () =>
-            updateDoc(doc(db, "estudiantes", est.id), {
-              apellidos: est.apellidos,
-              nombres: est.nombres,
-              activo: true,
-              updatedAt: serverTimestamp(),
-              updatedBy: user?.uid,
-            } as never),
-          );
-        }),
-      ];
-      await Promise.all(promesas);
+
+      // ✅ OPTIMIZACIÓN: Usar writeBatch para una sola petición de red atómica
+      const batch = writeBatch(db);
+      let opsCount = 0;
+
+      aCrear.forEach((est) => {
+        const newRef = doc(collection(db, "estudiantes"));
+        batch.set(newRef, {
+          cedula: est.cedula,
+          apellidos: est.apellidos,
+          nombres: est.nombres,
+          gradoId: gradoEfectivoId,
+          anioLectivoId: anioActivo.id,
+          activo: true,
+          createdAt: serverTimestamp(),
+          createdBy: user?.uid,
+        });
+        opsCount++;
+      });
+
+      aReactivar.forEach((est) => {
+        batch.update(doc(db, "estudiantes", est.id), {
+          apellidos: est.apellidos,
+          nombres: est.nombres,
+          activo: true,
+          updatedAt: serverTimestamp(),
+          updatedBy: user?.uid,
+        } as never);
+        opsCount++;
+      });
+
+      if (opsCount > 0) {
+        await medirEscritura(`Registro masivo (${opsCount} ops)`, () =>
+          batch.commit(),
+        );
+      }
+
       const detalle: string[] = [];
       if (aCrear.length > 0)
         detalle.push(`${aCrear.length} nuevo${aCrear.length !== 1 ? "s" : ""}`);
@@ -542,12 +567,14 @@ export default function Estudiantes() {
         detalle.push(
           `${aReactivar.length} reactivado${aReactivar.length !== 1 ? "s" : ""}`,
         );
+
       mostrarToast(
         "success",
         "Registro completado",
         `Procesados ${students.length} estudiante(s): ${detalle.join(", ")}.`,
         5000,
       );
+
       setMassiveData("");
       setValidationErrors([]);
       setShowMassiveForm(false);

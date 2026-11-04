@@ -482,17 +482,19 @@ function ContenidoCalificaciones() {
     Record<string, boolean>
   >({});
 
-  const gradosFiltrados = (() => {
-    if (
-      userData?.role === "docente" &&
-      userData?.gradosAsignados &&
-      userData.gradosAsignados.length > 0
-    ) {
-      const asignados = new Set(userData.gradosAsignados);
-      return grados.filter((g) => asignados.has(g.id));
-    }
-    return grados;
-  })();
+  const gradosFiltrados = useMemo(() => {
+  if (
+    userData?.role === "docente" &&
+    userData?.gradosAsignados &&
+    userData.gradosAsignados.length > 0
+  ) {
+    const asignados = new Set(userData.gradosAsignados);
+    return grados.filter((g) => asignados.has(g.id));
+  }
+  return grados;
+}, [grados, userData]);
+
+
   const gradoEfectivoId = selectedGradoId;
   const claveNomina = claveConsultaEstudiantes(
     acceso,

@@ -124,22 +124,29 @@ export function DataProvider({ children }: { children: ReactNode }) {
       },
     );
 
-    // 6. Usuarios (para nombres de docentes)
-    const unsubUsuarios = onSnapshot(collection(db, "usuarios"), (snap) => {
-      if (!mounted) return;
-      const nombres: Record<string, string> = {};
-      snap.docs.forEach((d) => {
-        const data = d.data() as {
-          nombreDocumento?: string;
-          displayName?: string;
-          email?: string;
-        };
-        nombres[d.id] =
-          data.nombreDocumento || data.displayName || data.email || "Docente";
-      });
-      setNombresDocentes(nombres);
-      setReady(true); // Marcar como listo cuando al menos usuarios cargue
-    });
+    // ✅ 6. Usuarios OPTIMIZADO: Solo escuchamos docentes y super_admins
+    // Esto evita descargar datos de estudiantes, padres o cuentas inactivas.
+    const unsubUsuarios = onSnapshot(
+      query(
+        collection(db, "usuarios"),
+        where("role", "in", ["docente", "super_admin"]),
+      ),
+      (snap) => {
+        if (!mounted) return;
+        const nombres: Record<string, string> = {};
+        snap.docs.forEach((d) => {
+          const data = d.data() as {
+            nombreDocumento?: string;
+            displayName?: string;
+            email?: string;
+          };
+          nombres[d.id] =
+            data.nombreDocumento || data.displayName || data.email || "Docente";
+        });
+        setNombresDocentes(nombres);
+        setReady(true); // Marcar como listo cuando al menos usuarios cargue
+      },
+    );
 
     return () => {
       mounted = false;
@@ -152,15 +159,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // ✅ Recarga manual (botón "Actualizar" si existiera).
-  // Al usar onSnapshot, los datos se actualizan solos, así que esta función
-  // solo es un puente de compatibilidad.
+  // ✅ Recarga manual (puente de compatibilidad, onSnapshot ya lo hace en tiempo real)
   const reload = useCallback(async () => {
-    // Ya no hacemos getDocs aquí. onSnapshot se encarga en tiempo real.
     console.log("DataContext: recarga automática por onSnapshot.");
   }, []);
 
   const anioActivo = aniosLectivos.find((a) => a.activo) || null;
+
   useEffect(() => {
     actualizarAnioCalificaciones(anioActivo?.id || "");
     actualizarAnioReporteNotas(anioActivo?.id || "");

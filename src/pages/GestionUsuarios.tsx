@@ -31,7 +31,7 @@ import {
   FaExclamationTriangle,
   FaInfoCircle,
   FaQuestionCircle,
-  FaTimes as FaXmark,
+  FaTimes,
   FaChalkboardTeacher,
   FaArrowLeft,
 } from "react-icons/fa";
@@ -42,6 +42,7 @@ interface Toast {
   title: string;
   message?: string;
 }
+
 interface ConfirmModalState {
   isOpen: boolean;
   title: string;
@@ -56,7 +57,7 @@ interface ConfirmModalState {
 
 export default function GestionUsuarios() {
   const { canDeleteUser } = useAuth();
-  const { grados, ready } = useData(); // ✅ Eliminado 'reload'
+  const { grados, ready } = useData();
   const [users, setUsers] = useState<AppUser[]>([]);
   const [loadingUsuarios, setLoadingUsuarios] = useState(true);
   const [filter, setFilter] = useState<
@@ -88,7 +89,7 @@ export default function GestionUsuarios() {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, duration);
     },
-    [],
+    []
   );
 
   const cerrarToast = useCallback((id: string) => {
@@ -104,7 +105,7 @@ export default function GestionUsuarios() {
         cancelText?: string;
         confirmColor?: string;
         icon?: React.ComponentType<{ className?: string }>;
-      },
+      }
     ): Promise<boolean> => {
       return new Promise((resolve) => {
         setConfirmModal({
@@ -126,7 +127,7 @@ export default function GestionUsuarios() {
         });
       });
     },
-    [],
+    []
   );
 
   // ==================== CARGA DE DATOS ====================
@@ -137,7 +138,7 @@ export default function GestionUsuarios() {
       q,
       (snap) => {
         const usersData = snap.docs.map(
-          (d) => ({ id: d.id, ...d.data() }) as unknown as AppUser,
+          (d) => ({ id: d.id, ...d.data() }) as unknown as AppUser
         );
         setUsers(usersData);
         setLoadingUsuarios(false);
@@ -145,29 +146,30 @@ export default function GestionUsuarios() {
       (error) => {
         console.error("Error escuchando usuarios:", error);
         setLoadingUsuarios(false);
-      },
+      }
     );
     return () => unsubscribe();
   }, [ready]);
 
   // ==================== ACCIONES ====================
-  async function updateStatus(userId: string, newStatus: string) {
+  // ✅ OPTIMIZACIÓN: Recibimos el objeto 'user' directamente para evitar 
+  // buscar en el estado 'users' que puede estar desactualizado (race condition).
+  async function updateStatus(user: AppUser, newStatus: string) {
     try {
-      const previo = users.find((u) => u.uid === userId)?.status;
-      await updateDoc(doc(db, "usuarios", userId), { status: newStatus });
+      const previo = user.status;
       
-      // ✅ CORRECCIÓN: Abrimos el modal DESPUÉS de actualizar el estado.
-      // El onSnapshot actualizará el estado 'users' automáticamente.
+      await updateDoc(doc(db, "usuarios", user.uid), { 
+        status: newStatus 
+      });
+
+      // Abrimos el modal usando el objeto 'user' que ya tenemos, garantizando datos frescos.
       if (newStatus === "active") {
-        const user = users.find((u) => u.uid === userId);
-        if (user) {
-          setSelectedUserForGrados(user);
-          setGradosSeleccionados(user.gradosAsignados || []);
-          setTutorDe(user.tutorDe || []);
-          setShowGradosModal(true);
-        }
+        setSelectedUserForGrados(user);
+        setGradosSeleccionados(user.gradosAsignados || []);
+        setTutorDe(user.tutorDe || []);
+        setShowGradosModal(true);
       }
-      
+
       if (newStatus === "active") {
         const msg =
           previo === "deleted"
@@ -176,7 +178,7 @@ export default function GestionUsuarios() {
         mostrarToast(
           "success",
           previo === "deleted" ? "Usuario reactivado" : "Usuario aprobado",
-          msg,
+          msg
         );
       } else if (newStatus === "rejected") {
         mostrarToast("warning", "Usuario rechazado", "El registro ha sido rechazado.");
@@ -194,7 +196,7 @@ export default function GestionUsuarios() {
     try {
       const gradosPrevios = selectedUserForGrados.gradosAsignados || [];
       const gradosRemovidos = gradosPrevios.filter(
-        (g) => !gradosSeleccionados.includes(g),
+        (g) => !gradosSeleccionados.includes(g)
       );
 
       // 1. Actualizamos el usuario
@@ -209,7 +211,7 @@ export default function GestionUsuarios() {
         const q = query(
           collection(db, "asignaturasDocente"),
           where("docenteId", "==", selectedUserForGrados.uid),
-          where("activo", "==", true),
+          where("activo", "==", true)
         );
         const snap = await getDocs(q);
         const batch = writeBatch(db);
@@ -227,9 +229,9 @@ export default function GestionUsuarios() {
         "Asignación guardada",
         materiasDesasignadas > 0
           ? `Grados y tutorías actualizados. Se desasignaron ${materiasDesasignadas} materia(s) de los grados removidos.`
-          : "Los grados y tutorías se actualizaron correctamente.",
+          : "Los grados y tutorías se actualizaron correctamente."
       );
-      
+
       setShowGradosModal(false);
       setSelectedUserForGrados(null);
       setGradosSeleccionados([]);
@@ -237,52 +239,6 @@ export default function GestionUsuarios() {
     } catch (error) {
       console.error("Error guardando asignación:", error);
       mostrarToast("error", "Error al guardar", "No se pudo actualizar la asignación.");
-    }
-  }
-
-  async function toggleRole(user: AppUser) {
-    const newRole = user.role === "super_admin" ? "docente" : "super_admin";
-    const confirmado = await confirmar(
-      "Cambiar rol de usuario",
-      `¿Estás seguro de cambiar el rol de "${user.displayName}" a ${newRole === "super_admin" ? "Super Admin" : "Docente"}?`,
-      {
-        confirmText: "Sí, cambiar",
-        cancelText: "Cancelar",
-        confirmColor: "bg-[#244563] hover:bg-[#1B354D]",
-        icon: FaShieldAlt,
-      },
-    );
-    if (!confirmado) return;
-    try {
-      await updateDoc(doc(db, "usuarios", user.uid), { role: newRole });
-      mostrarToast(
-        "success",
-        "Rol actualizado",
-        `${user.displayName} ahora es ${newRole === "super_admin" ? "Super Admin" : "Docente"}.`,
-      );
-    } catch (error) {
-      console.error("Error cambiando rol:", error);
-      mostrarToast("error", "Error al cambiar rol", "No se pudo actualizar el rol.");
-    }
-  }
-
-  async function desactivarMateriasDocente(docenteUid: string): Promise<number> {
-    try {
-      const q = query(
-        collection(db, "asignaturasDocente"),
-        where("docenteId", "==", docenteUid),
-        where("activo", "==", true),
-      );
-      const snap = await getDocs(q);
-      const batch = writeBatch(db);
-      snap.docs.forEach((d) => {
-        batch.update(d.ref, { activo: false });
-      });
-      if (snap.docs.length > 0) await batch.commit();
-      return snap.docs.length;
-    } catch (error) {
-      console.error("Error desactivando materias:", error);
-      return 0;
     }
   }
 
@@ -299,7 +255,7 @@ export default function GestionUsuarios() {
         cancelText: "Cancelar",
         confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]",
         icon: FaArchive,
-      },
+      }
     );
     if (!confirmado) return;
     try {
@@ -312,8 +268,7 @@ export default function GestionUsuarios() {
       mostrarToast(
         "success",
         "Usuario archivado",
-        `${materiasDesactivadas} materia(s) desactivada(s). Su historial se conserva.`,
-        5000,
+        `${materiasDesactivadas} materia(s) desactivada(s). Su historial se conserva.`
       );
     } catch (error) {
       console.error("Error archivando:", error);
@@ -321,8 +276,27 @@ export default function GestionUsuarios() {
     }
   }
 
+  async function desactivarMateriasDocente(docenteUid: string): Promise<number> {
+    try {
+      const q = query(
+        collection(db, "asignaturasDocente"),
+        where("docenteId", "==", docenteUid),
+        where("activo", "==", true)
+      );
+      const snap = await getDocs(q);
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => {
+        batch.update(d.ref, { activo: false });
+      });
+      if (snap.docs.length > 0) await batch.commit();
+      return snap.docs.length;
+    } catch (error) {
+      console.error("Error desactivando materias:", error);
+      return 0;
+    }
+  }
+
   // ==================== FILTROS Y BADGES ====================
-  // ✅ OPTIMIZACIÓN: Memoizamos el filtrado
   const filteredUsers = useMemo(() => users.filter((u) => u.status === filter), [users, filter]);
 
   const getStatusBadge = (status: string) => {
@@ -442,7 +416,7 @@ export default function GestionUsuarios() {
                 >
                   {tab.count}
                 </span>
-              )}
+                )}
             </button>
           ))}
         </div>
@@ -521,13 +495,13 @@ export default function GestionUsuarios() {
                       {user.status === "pending" && (
                         <>
                           <button
-                            onClick={() => updateStatus(user.uid, "active")}
+                            onClick={() => updateStatus(user, "active")}
                             className="inline-flex items-center gap-1 bg-[#244563] hover:bg-[#1B354D] text-white h-8 px-2.5 rounded-md text-[10px] font-semibold transition-colors"
                           >
                             <FaUserCheck className="w-3 h-3" /> Aprobar
                           </button>
                           <button
-                            onClick={() => updateStatus(user.uid, "rejected")}
+                            onClick={() => updateStatus(user, "rejected")}
                             className="inline-flex items-center gap-1 bg-red-50 hover:bg-red-100 text-red-700 ring-1 ring-inset ring-red-200 h-8 px-2.5 rounded-md text-[10px] font-semibold transition-colors"
                           >
                             <FaUserTimes className="w-3 h-3" /> Rechazar
@@ -549,17 +523,10 @@ export default function GestionUsuarios() {
                             <FaPlus className="w-3 h-3" /> Editar Asignación
                           </button>
                           <button
-                            onClick={() => updateStatus(user.uid, "blocked")}
+                            onClick={() => updateStatus(user, "blocked")}
                             className="inline-flex items-center gap-1 bg-[#FFFFFF] hover:bg-[#F3F4F6] border border-[#D8DEE6] text-[#4B5563] h-8 px-2.5 rounded-md text-[10px] font-semibold transition-colors"
                           >
                             <FaShieldAlt className="w-3 h-3" /> Bloquear
-                          </button>
-                          <button
-                            onClick={() => toggleRole(user)}
-                            className="inline-flex items-center gap-1 bg-[#FFFFFF] hover:bg-[#F3F4F6] border border-[#D8DEE6] text-[#4B5563] h-8 px-2.5 rounded-md text-[10px] font-semibold transition-colors"
-                          >
-                            <FaShieldAlt className="w-3 h-3" /> 
-                            {user.role === "super_admin" ? "Quitar Admin" : "Hacer Admin"}
                           </button>
                           {canDeleteUser(user) && (
                             <button
@@ -574,7 +541,7 @@ export default function GestionUsuarios() {
 
                       {user.status === "blocked" && (
                         <button
-                          onClick={() => updateStatus(user.uid, "active")}
+                          onClick={() => updateStatus(user, "active")}
                           className="inline-flex items-center gap-1 bg-[#244563] hover:bg-[#1B354D] text-white h-8 px-2.5 rounded-md text-[10px] font-semibold transition-colors"
                         >
                           <FaUserCheck className="w-3 h-3" /> Desbloquear
@@ -583,7 +550,7 @@ export default function GestionUsuarios() {
 
                       {user.status === "rejected" && (
                         <button
-                          onClick={() => updateStatus(user.uid, "active")}
+                          onClick={() => updateStatus(user, "active")}
                           className="inline-flex items-center gap-1 bg-[#244563] hover:bg-[#1B354D] text-white h-8 px-2.5 rounded-md text-[10px] font-semibold transition-colors"
                         >
                           <FaUserCheck className="w-3 h-3" /> Aprobar
@@ -592,7 +559,7 @@ export default function GestionUsuarios() {
 
                       {user.status === "deleted" && (
                         <button
-                          onClick={() => updateStatus(user.uid, "active")}
+                          onClick={() => updateStatus(user, "active")}
                           className="inline-flex items-center gap-1 bg-[#244563] hover:bg-[#1B354D] text-white h-8 px-2.5 rounded-md text-[10px] font-semibold transition-colors"
                           title="El docente retorna: reactivar y reasignar grados"
                         >
@@ -648,7 +615,7 @@ export default function GestionUsuarios() {
                 }}
                 className="flex h-8 w-7 shrink-0 items-center justify-center rounded-md text-[#6B7280] transition-colors hover:bg-[#ECEFF3] hover:text-[#4B5563]"
               >
-                <FaXmark className="text-sm" />
+                <FaTimes className="text-sm" />
               </button>
             </div>
             
@@ -745,7 +712,7 @@ export default function GestionUsuarios() {
               
               {gradosSeleccionados.length > 0 &&
                 (selectedUserForGrados.gradosAsignados || []).some(
-                  (g) => !gradosSeleccionados.includes(g),
+                  (g) => !gradosSeleccionados.includes(g)
                 ) && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
                     Al guardar, las materias asignadas en{" "}
@@ -827,15 +794,19 @@ export default function GestionUsuarios() {
           return (
             <div
               key={toast.id}
-              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] ${config.bg}`}
             >
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}>
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}
+              >
                 <Icon className="text-[10px]" />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-[11px] font-semibold text-[#273444]">{toast.title}</p>
                 {toast.message && (
-                  <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">{toast.message}</p>
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">
+                    {toast.message}
+                  </p>
                 )}
               </div>
               <button
@@ -843,7 +814,7 @@ export default function GestionUsuarios() {
                 className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]"
                 title="Cerrar"
               >
-                <FaXmark className="h-3 w-3" />
+                <FaTimes className="h-3 w-3" />
               </button>
             </div>
           );

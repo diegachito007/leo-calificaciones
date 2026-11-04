@@ -5,7 +5,6 @@ import {
   updateDoc,
   query,
   where,
-  addDoc,
   serverTimestamp,
   writeBatch,
   onSnapshot,
@@ -399,6 +398,7 @@ export default function GestionMateriasDocentes() {
     }
     const dest = usersById.get(transferDestId);
     if (!dest) return;
+
     const confirmado = await confirmar(
       "Transferir materias",
       `¿Transferir ${transferMaterias.length} materia(s) de "${transferSource.displayName}" a "${dest.displayName}"?\n\nLas materias se copiarán al nuevo docente y se desactivarán del anterior.`,
@@ -410,10 +410,15 @@ export default function GestionMateriasDocentes() {
       },
     );
     if (!confirmado) return;
+
     setIsTransferring(true);
     try {
       let transferidas = 0;
       let omitidas = 0;
+
+      // ✅ OPTIMIZACIÓN: Usar writeBatch para atomicidad y 1 sola petición de red
+      const batch = writeBatch(db);
+
       for (const mat of transferMaterias) {
         const yaExiste = asignaciones.some(
           (a) =>
@@ -422,11 +427,15 @@ export default function GestionMateriasDocentes() {
             a.destrezaId === mat.destrezaId &&
             a.activo,
         );
+
         if (yaExiste) {
           omitidas++;
           continue;
         }
-        await addDoc(collection(db, "asignaturasDocente"), {
+
+        // 1. Crear la nueva asignación en el batch
+        const nuevaRef = doc(collection(db, "asignaturasDocente"));
+        batch.set(nuevaRef, {
           docenteId: dest.uid,
           gradoId: mat.gradoId,
           destrezaId: mat.destrezaId,
@@ -435,23 +444,30 @@ export default function GestionMateriasDocentes() {
           transferidoDe: transferSource.uid,
           createdAt: serverTimestamp(),
         });
-        await updateDoc(doc(db, "asignaturasDocente", mat.id), {
+
+        // 2. Desactivar la asignación original en el batch
+        batch.update(doc(db, "asignaturasDocente", mat.id), {
           activo: false,
         });
+
         transferidas++;
       }
-      const gradosOrigen = transferMaterias.map((m) => m.gradoId);
-      const gradosActualesDest = dest.gradosAsignados || [];
-      const gradosUnicos = Array.from(
-        new Set([...gradosActualesDest, ...gradosOrigen]),
-      );
-      await updateDoc(doc(db, "usuarios", dest.uid), {
-        gradosAsignados: gradosUnicos,
-      });
 
-      setAsignaciones((prev) =>
-        prev.filter((a) => !transferMaterias.some((m) => m.id === a.id)),
-      );
+      // 3. Actualizar los grados asignados del docente destino (solo si hubo transferencias)
+      if (transferidas > 0) {
+        const gradosOrigen = transferMaterias.map((m) => m.gradoId);
+        const gradosActualesDest = dest.gradosAsignados || [];
+        const gradosUnicos = Array.from(
+          new Set([...gradosActualesDest, ...gradosOrigen]),
+        );
+
+        batch.update(doc(db, "usuarios", dest.uid), {
+          gradosAsignados: gradosUnicos,
+        });
+
+        // ✅ Ejecutar todo en una sola operación atómica
+        await batch.commit();
+      }
 
       mostrarToast(
         "success",
@@ -459,6 +475,7 @@ export default function GestionMateriasDocentes() {
         `${transferidas} materia(s) transferida(s) a ${dest.displayName}${omitidas > 0 ? `. ${omitidas} omitida(s) (ya existían)` : ""}.`,
         6000,
       );
+
       setShowTransferModal(false);
       setTransferSource(null);
       setTransferMaterias([]);

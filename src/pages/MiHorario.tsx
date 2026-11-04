@@ -1,17 +1,23 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   collection,
   addDoc,
   deleteDoc,
   doc,
   updateDoc,
+  writeBatch,
+  serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../lib/firebase";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
 import type { Destreza, Ambito } from "../types";
 import { claveAccesoEstudiantes } from "../utils/estudiantesCache";
-import { useHorarioPanel, claveHorario, leerHorario } from "../utils/panelCache";
+import {
+  useHorarioPanel,
+  claveHorario,
+  leerHorario,
+} from "../utils/panelCache";
 import Layout from "../components/Layout";
 import {
   FaGraduationCap,
@@ -79,27 +85,47 @@ export default function MiHorario() {
     onConfirm: () => {},
     onCancel: () => {},
   });
-  const gradosFiltrados = (() => {
-    if (
-      userData?.role === "docente"
-    ) {
+  const gradosFiltrados = useMemo(() => {
+    if (userData?.role === "docente") {
       const asignados = new Set(userData.gradosAsignados || []);
       return grados.filter((g) => asignados.has(g.id));
     }
     return grados;
-  })();
-  const gradoEfectivoId = gradosFiltrados.some(g => g.id === selectedGradoId)
-    ? selectedGradoId : gradosFiltrados[0]?.id || "";
+  }, [grados, userData]);
+  const gradoEfectivoId = gradosFiltrados.some((g) => g.id === selectedGradoId)
+    ? selectedGradoId
+    : gradosFiltrados[0]?.id || "";
   const acceso = claveAccesoEstudiantes(user?.uid, userData);
-  const propias = useHorarioPanel(acceso, anioActivo?.id || "", "propias", user?.uid || "");
-  const delGrado = useHorarioPanel(acceso, anioActivo?.id || "", "grado", gradoEfectivoId);
+  const propias = useHorarioPanel(
+    acceso,
+    anioActivo?.id || "",
+    "propias",
+    user?.uid || "",
+  );
+  const delGrado = useHorarioPanel(
+    acceso,
+    anioActivo?.id || "",
+    "grado",
+    gradoEfectivoId,
+  );
   const asignaturas = propias.items;
   const asignaturasGradoCache = delGrado.items;
-  const puedeEditar = propias.listo && delGrado.listo && !propias.desdeCache && !delGrado.desdeCache;
-  const leerPropias = () => leerHorario(claveHorario(acceso, anioActivo?.id || "", "propias", user?.uid || ""));
-  const leerDelGrado = () => leerHorario(claveHorario(acceso, anioActivo?.id || "", "grado", gradoEfectivoId));
+  const puedeEditar =
+    propias.listo &&
+    delGrado.listo &&
+    !propias.desdeCache &&
+    !delGrado.desdeCache;
+  const leerPropias = () =>
+    leerHorario(
+      claveHorario(acceso, anioActivo?.id || "", "propias", user?.uid || ""),
+    );
+  const leerDelGrado = () =>
+    leerHorario(
+      claveHorario(acceso, anioActivo?.id || "", "grado", gradoEfectivoId),
+    );
   const datosVigentes = () => {
-    const a = leerPropias(); const g = leerDelGrado();
+    const a = leerPropias();
+    const g = leerDelGrado();
     return a.listo && g.listo && !a.desdeCache && !g.desdeCache;
   };
   const mostrarToast = useCallback(
@@ -134,7 +160,8 @@ export default function MiHorario() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
+          confirmColor:
+            options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -162,21 +189,25 @@ export default function MiHorario() {
       n.includes("preparatoria")
     );
   };
-  const destrezasDelGrado = (() => {
+  // ✅ OPTIMIZACIÓN: useMemo para evitar recálculos en cada render
+  const destrezasDelGrado = useMemo(() => {
     if (!gradoEfectivoId) return [];
     const ambitosDelGrado = new Set(
       ambitos.filter((a) => a.gradoId === gradoEfectivoId).map((a) => a.id),
     );
     return destrezas.filter((d) => ambitosDelGrado.has(d.ambitoId));
-  })();
-  const asignaturasDelGrado = asignaturas.filter(
-    (a) => a.gradoId === gradoEfectivoId,
-  );
-  const destrezasDisponibles = (() => {
+  }, [gradoEfectivoId, ambitos, destrezas]);
+
+  const asignaturasDelGrado = useMemo(() => {
+    return asignaturas.filter((a) => a.gradoId === gradoEfectivoId);
+  }, [asignaturas, gradoEfectivoId]);
+
+  const destrezasDisponibles = useMemo(() => {
     const asignadasIds = new Set(asignaturasDelGrado.map((a) => a.destrezaId));
     return destrezasDelGrado.filter((d) => !asignadasIds.has(d.id));
-  })();
-  const destrezasPorAmbito = (() => {
+  }, [destrezasDelGrado, asignaturasDelGrado]);
+
+  const destrezasPorAmbito = useMemo(() => {
     const grupos: Record<string, { ambito: Ambito; destrezas: Destreza[] }> =
       {};
     destrezasDisponibles.forEach((destreza) => {
@@ -188,7 +219,7 @@ export default function MiHorario() {
       grupos[ambito.id].destrezas.push(destreza);
     });
     return Object.values(grupos);
-  })();
+  }, [destrezasDisponibles, ambitos]);
   // ✅ DISPONIBILIDAD DE DESTREZA: otro docente ya la tiene en este grado
   const verificarDisponibilidad = (destrezaId: string): boolean => {
     const asignacionPropia = leerPropias().items.find(
@@ -235,7 +266,14 @@ export default function MiHorario() {
   }, 0);
   // ==================== ACCIONES ====================
   const asignarMateria = async (destrezaId: string) => {
-    if (!puedeEditar || saving || !user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
+    if (
+      !puedeEditar ||
+      saving ||
+      !user?.uid ||
+      !anioActivo?.id ||
+      !gradoEfectivoId
+    )
+      return;
     setSaving(true);
     try {
       const disponible = verificarDisponibilidad(destrezaId);
@@ -275,13 +313,22 @@ export default function MiHorario() {
     }
   };
   const asignarTodasDelAmbito = async (ambitoId: string) => {
-    if (!puedeEditar || saving || !user?.uid || !anioActivo?.id || !gradoEfectivoId) return;
+    if (
+      !puedeEditar ||
+      saving ||
+      !user?.uid ||
+      !anioActivo?.id ||
+      !gradoEfectivoId
+    )
+      return;
+
     const grupo = destrezasPorAmbito.find((g) => g.ambito.id === ambitoId);
     if (!grupo) return;
+
     const totalDestrezas = grupo.destrezas.length;
     const confirmado = await confirmar(
       `Asignar destrezas de "${grupo.ambito.nombre}"`,
-      `¿Asignar las ${totalDestrezas} destreza(s) de este ámbito a tu horario en este grado? Las destrezas ya asignadas a otro docente se omitirán. Luego podrás configurar el horario de cada una.`,
+      `¿Asignar las ${totalDestrezas} destreza(s) de este ámbito a tu horario en este grado? Las destrezas ya asignadas a otro docente se omitirán.`,
       {
         confirmText: "Sí, asignar",
         cancelText: "Cancelar",
@@ -289,38 +336,57 @@ export default function MiHorario() {
         icon: FaPlus,
       },
     );
+
     if (!confirmado || !datosVigentes()) return;
+
     setSaving(true);
     try {
+      const batch = writeBatch(db); // ✅ UNA SOLA OPERACIÓN PARA TODAS
       let asignadas = 0;
       let omitidas = 0;
+
       for (const destreza of grupo.destrezas) {
-        if (!datosVigentes()) throw new Error("El contexto del horario cambió");
-        if (leerPropias().items.some(a => a.gradoId === gradoEfectivoId && a.destrezaId === destreza.id)) {
+        // Verificación de seguridad antes de agregar al batch
+        if (
+          leerPropias().items.some(
+            (a) =>
+              a.gradoId === gradoEfectivoId && a.destrezaId === destreza.id,
+          )
+        ) {
           omitidas++;
           continue;
         }
+
         const disponible = verificarDisponibilidad(destreza.id);
         if (!disponible) {
           omitidas++;
           continue;
         }
-        await addDoc(collection(db, "asignaturasDocente"), {
+
+        // ✅ Usamos batch.set en lugar de addDoc para hacerlo atómico
+        const nuevaRef = doc(collection(db, "asignaturasDocente"));
+        batch.set(nuevaRef, {
           docenteId: user.uid,
           gradoId: gradoEfectivoId,
           destrezaId: destreza.id,
           anioLectivoId: anioActivo.id,
           activo: true,
           horario: [],
-          createdAt: new Date(),
+          createdAt: serverTimestamp(), // ✅ Mejor práctica que new Date()
         });
         asignadas++;
       }
-      let mensaje = `Se asignaron ${asignadas} destreza(s).`;
-      if (omitidas > 0) {
-        mensaje += ` ${omitidas} omitida(s) (ya estaban asignadas a otro docente).`;
+
+      if (asignadas > 0) {
+        await batch.commit(); // ✅ Se ejecuta todo en una sola petición a Firestore
       }
-      mostrarToast("success", "Asignación masiva completada", mensaje, 6000);
+
+      let mensaje = `Se asignaron ${asignadas} destreza(s) correctamente.`;
+      if (omitidas > 0) {
+        mensaje += ` ${omitidas} omitida(s) (ya estaban asignadas).`;
+      }
+
+      mostrarToast("success", "Asignación completada", mensaje, 6000);
     } catch (error) {
       console.error("Error asignando todas las destrezas del ámbito:", error);
       mostrarToast(
@@ -332,6 +398,7 @@ export default function MiHorario() {
       setSaving(false);
     }
   };
+
   const removerMateria = async (asignacionId: string) => {
     if (!puedeEditar || saving) return;
     const asignatura = asignaturas.find((a) => a.id === asignacionId);
@@ -493,13 +560,27 @@ export default function MiHorario() {
   return (
     <Layout>
       <div className="space-y-3">
-        {(propias.error || delGrado.error) ? (
-          <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-            No se pudo consultar el horario. Comprueba la conexión y los permisos.
-            <button className="ml-3 underline" onClick={() => { propias.reintentar(); delGrado.reintentar(); }}>Reintentar</button>
+        {propias.error || delGrado.error ? (
+          <div
+            role="alert"
+            className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+          >
+            No se pudo consultar el horario. Comprueba la conexión y los
+            permisos.
+            <button
+              className="ml-3 underline"
+              onClick={() => {
+                propias.reintentar();
+                delGrado.reintentar();
+              }}
+            >
+              Reintentar
+            </button>
           </div>
         ) : !puedeEditar && gradoEfectivoId ? (
-          <p className="text-xs text-slate-600">Verificando el horario antes de permitir cambios…</p>
+          <p className="text-xs text-slate-600">
+            Verificando el horario antes de permitir cambios…
+          </p>
         ) : null}
         {gradosFiltrados.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">

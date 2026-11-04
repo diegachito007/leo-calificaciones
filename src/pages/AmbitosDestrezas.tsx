@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import {
   collection,
   addDoc,
@@ -97,32 +97,35 @@ export default function AmbitosDestrezas() {
 
   const destrezaFormRef = useRef<HTMLDivElement>(null);
 
-  const grados = (() => {
+  // ✅ OPTIMIZACIÓN: Reemplazo de IIFEs por useMemo para evitar recálculos en cada render
+  const grados = useMemo(() => {
     if (!anioActivo) return [];
     return todosLosGrados
       .filter((g) => g.anioLectivoId === anioActivo.id && g.activo)
       .sort((a, b) => (a.orden || 0) - (b.orden || 0));
-  })();
+  }, [anioActivo, todosLosGrados]);
 
-  const gradoEfectivoId = selectedGradoId || (grados.length > 0 ? grados[0].id : "");
+  const gradoEfectivoId = useMemo(() => {
+    return selectedGradoId || (grados.length > 0 ? grados[0].id : "");
+  }, [selectedGradoId, grados]);
 
-  const ambitos = (() => {
+  const ambitos = useMemo(() => {
     if (!gradoEfectivoId) return [];
     return todosLosAmbitosContext
       .filter((a) => a.gradoId === gradoEfectivoId)
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
-  })();
+  }, [gradoEfectivoId, todosLosAmbitosContext]);
 
-  const destrezas = (() => {
+  const destrezas = useMemo(() => {
     if (!gradoEfectivoId) return [];
     return todasLasDestrezasContext
       .filter((d) => d.gradoId === gradoEfectivoId)
       .sort((a, b) => (a.orden || 0) - (b.orden || 0));
-  })();
+  }, [gradoEfectivoId, todasLasDestrezasContext]);
 
-  const todosLosAmbitos = (() => {
+  const todosLosAmbitos = useMemo(() => {
     return [...todosLosAmbitosContext].sort((a, b) => a.nombre.localeCompare(b.nombre));
-  })();
+  }, [todosLosAmbitosContext]);
 
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
@@ -651,7 +654,6 @@ export default function AmbitosDestrezas() {
     resetDestrezaForm();
   };
 
-  // ✅ NUEVA FUNCIÓN: Exportar a Excel
   const exportarAExcel = () => {
     const gradoActual = grados.find((g) => g.id === gradoEfectivoId);
     if (!gradoActual) return;
@@ -659,7 +661,6 @@ export default function AmbitosDestrezas() {
     try {
       const wb = XLSX.utils.book_new();
 
-      // Hoja 1: Ámbitos
       const ambitosExcel = ambitos.map((a, idx) => ({
         "N°": idx + 1,
         "Ámbito": a.nombre,
@@ -669,7 +670,6 @@ export default function AmbitosDestrezas() {
       const wsAmbitos = XLSX.utils.json_to_sheet(ambitosExcel);
       wsAmbitos["!cols"] = [{ wch: 5 }, { wch: 40 }, { wch: 15 }, { wch: 10 }];
 
-      // Hoja 2: Destrezas
       const destrezasExcel = destrezas.map((d, idx) => {
         const ambito = ambitos.find((a) => a.id === d.ambitoId);
         return {
@@ -730,7 +730,6 @@ export default function AmbitosDestrezas() {
     <Layout>
       <div className="mx-auto w-full max-w-6xl space-y-4">
         
-        {/* Cabecera */}
         <div className="flex items-center gap-3 mb-2">
           <button
             onClick={() => window.history.back()}
@@ -749,7 +748,6 @@ export default function AmbitosDestrezas() {
           </div>
         </div>
 
-        {/* Info Año Lectivo */}
         {anioActivo && (
           <div className="rounded-lg border border-[#C8D6E5] bg-[#EAF0F6] px-4 py-2.5 flex items-center gap-2 text-[11px]">
             <FaCalendarAlt className="text-[#244563]" />
@@ -770,7 +768,6 @@ export default function AmbitosDestrezas() {
           </div>
         )}
 
-        {/* Selector de Grado */}
         <div className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
           <div className="border-b border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2">
             <h3 className="text-xs font-semibold text-[#4B5563] flex items-center gap-1.5">
@@ -824,7 +821,6 @@ export default function AmbitosDestrezas() {
           </div>
         </div>
 
-        {/* Breadcrumb Destrezas */}
         {currentView === "destrezas" && ambitoSeleccionado && (
           <div className="flex items-center gap-2 text-[11px]">
             <button onClick={volverAAmbitos} className="inline-flex items-center gap-1 text-[#244563] hover:text-[#1B354D] font-semibold">
@@ -837,7 +833,6 @@ export default function AmbitosDestrezas() {
           </div>
         )}
 
-        {/* VISTA: ÁMBITOS */}
         {currentView === "ambitos" && gradoEfectivoId && (
           <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E4E8EE] bg-[#ECEFF3] px-3 py-2">
@@ -1033,7 +1028,6 @@ export default function AmbitosDestrezas() {
           </section>
         )}
 
-        {/* VISTA: DESTREZAS */}
         {currentView === "destrezas" && ambitoSeleccionado && (
           <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#E4E8EE] bg-[#ECEFF3] px-3 py-2">
@@ -1146,7 +1140,6 @@ export default function AmbitosDestrezas() {
         )}
       </div>
 
-      {/* MODAL: Confirmar Registro Masivo */}
       {showConfirmAmbitoModal && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-3 sm:p-4">
           <div className="w-full max-w-md overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
@@ -1186,7 +1179,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* MODAL: Copiar Ámbitos */}
       {showCopyModal && (
         <div className="fixed inset-0 z-100 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-3 sm:p-4">
           <div className="w-full max-w-lg overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
@@ -1276,7 +1268,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* MODAL: Confirmación Genérica */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 z-110 flex items-center justify-center bg-[#111827]/40 backdrop-blur-[2px] p-3 sm:p-4">
           <div className="w-full max-w-sm overflow-hidden rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-[0_20px_50px_-28px_rgba(15,23,42,0.40)]">
@@ -1301,7 +1292,6 @@ export default function AmbitosDestrezas() {
         </div>
       )}
 
-      {/* Toasts Flotantes */}
       <div className="pointer-events-none fixed right-3 top-3 z-100 w-full max-w-xs space-y-2">
         {toasts.map((toast) => {
           const config = toastConfig[toast.type];
