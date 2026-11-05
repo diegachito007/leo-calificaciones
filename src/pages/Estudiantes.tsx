@@ -151,12 +151,12 @@ export default function Estudiantes() {
 
   const esAdmin = userData?.role === "super_admin";
 
-  const tutorDeAnioActivo = (() => {
+  const tutorDeAnioActivo = useMemo(() => {
     if (!userData?.tutorDe) return [];
     return gradosFiltrados
       .filter((g) => userData.tutorDe?.includes(g.id))
       .map((g) => g.id);
-  })();
+  }, [gradosFiltrados, userData]);
 
   const mostrarToast = useCallback(
     (type: Toast["type"], title: string, message?: string, duration = 4000) => {
@@ -461,7 +461,6 @@ export default function Estudiantes() {
       ]);
       return;
     }
-
     const { students, errors } = parsearListaMasiva(massiveData);
     if (errors.length > 0) {
       setValidationErrors(errors);
@@ -473,7 +472,6 @@ export default function Estudiantes() {
       ]);
       return;
     }
-
     // Validar duplicados internos
     const cedulasVistas = new Set<string>();
     const duplicadosInternos: string[] = [];
@@ -487,7 +485,6 @@ export default function Estudiantes() {
       ]);
       return;
     }
-
     // Límite de seguridad de Firestore (500 operaciones por batch)
     if (students.length > 450) {
       setValidationErrors([
@@ -495,7 +492,6 @@ export default function Estudiantes() {
       ]);
       return;
     }
-
     setIsSavingMassive(true);
     try {
       const mapaExistentes = new Map(
@@ -503,18 +499,15 @@ export default function Estudiantes() {
           .filter((e) => e.gradoId === gradoEfectivoId)
           .map((e) => [e.cedula, e]),
       );
-
       const aCrear: EstudianteParseado[] = [];
       const aReactivar: (EstudianteParseado & { id: string })[] = [];
       const duplicadosActivos: string[] = [];
-
       students.forEach((s) => {
         const existente = mapaExistentes.get(s.cedula);
         if (!existente) aCrear.push(s);
         else if (existente.activo) duplicadosActivos.push(s.cedula);
         else aReactivar.push({ ...s, id: existente.id });
       });
-
       if (duplicadosActivos.length > 0) {
         setValidationErrors([
           `Las siguientes cédulas/códigos ya están ACTIVOS en este grado: ${[...new Set(duplicadosActivos)].join(", ")}.`,
@@ -523,11 +516,9 @@ export default function Estudiantes() {
         setIsSavingMassive(false);
         return;
       }
-
       // ✅ OPTIMIZACIÓN: Usar writeBatch para una sola petición de red atómica
       const batch = writeBatch(db);
       let opsCount = 0;
-
       aCrear.forEach((est) => {
         const newRef = doc(collection(db, "estudiantes"));
         batch.set(newRef, {
@@ -542,7 +533,6 @@ export default function Estudiantes() {
         });
         opsCount++;
       });
-
       aReactivar.forEach((est) => {
         batch.update(doc(db, "estudiantes", est.id), {
           apellidos: est.apellidos,
@@ -553,13 +543,11 @@ export default function Estudiantes() {
         } as never);
         opsCount++;
       });
-
       if (opsCount > 0) {
         await medirEscritura(`Registro masivo (${opsCount} ops)`, () =>
           batch.commit(),
         );
       }
-
       const detalle: string[] = [];
       if (aCrear.length > 0)
         detalle.push(`${aCrear.length} nuevo${aCrear.length !== 1 ? "s" : ""}`);
@@ -567,14 +555,12 @@ export default function Estudiantes() {
         detalle.push(
           `${aReactivar.length} reactivado${aReactivar.length !== 1 ? "s" : ""}`,
         );
-
       mostrarToast(
         "success",
         "Registro completado",
         `Procesados ${students.length} estudiante(s): ${detalle.join(", ")}.`,
         5000,
       );
-
       setMassiveData("");
       setValidationErrors([]);
       setShowMassiveForm(false);
@@ -697,7 +683,6 @@ export default function Estudiantes() {
     });
     setEditingId(estudiante.id);
     setValidationErrors([]);
-    // window.scrollTo({ top: 0, behavior: "smooth" }); // ya no necesario: es un modal
   };
 
   async function handleDelete(id: string) {
@@ -914,25 +899,14 @@ export default function Estudiantes() {
             {esAdmin ? "Seleccionar Grado:" : "Mis Grados Asignados:"}
           </h3>
           <div className="flex flex-wrap gap-2">
-            {esAdmin && (
-              <button
-                onClick={() => setSelectedGradoId(null)}
-                className={`h-8 px-2.5  rounded-md text-[11px] font-semibold transition-colors border ${
-                  gradoEfectivoId === null
-                    ? "bg-[#244563] text-white border-[#244563]"
-                    : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"
-                } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
-              >
-                Todos los grados
-              </button>
-            )}
+            {/* ✅ ELIMINADO: Botón "Todos los grados" para evitar descargas masivas */}
             {gradosFiltrados.map((grado) => {
               const esTutor = tutorDeAnioActivo.includes(grado.id);
               return (
                 <button
                   key={grado.id}
                   onClick={() => setSelectedGradoId(grado.id)}
-                  className={`min-h-8 px-4  rounded-md text-[11px] font-medium transition-colors border flex items-center gap-2 ${
+                  className={`min-h-8 px-4 rounded-md text-[11px] font-medium transition-colors border flex items-center gap-2 ${
                     gradoEfectivoId === grado.id
                       ? "bg-[#244563] text-white border-[#244563]"
                       : "bg-[#FFFFFF] text-[#4B5563] border-[#D8DEE6] hover:border-[#C96522]"
@@ -1005,7 +979,6 @@ export default function Estudiantes() {
                 <FaTimes className="text-[13px]" />
               </button>
             </div>
-
             <form
               onSubmit={handleSubmit}
               className="flex flex-col flex-1 min-h-0"
@@ -1031,7 +1004,6 @@ export default function Estudiantes() {
                     </div>
                   </div>
                 )}
-
                 <h4 className="text-[10px] font-semibold text-[#64748B] flex items-center gap-1.5 border-b border-[#ECEFF3] pb-2 mb-3">
                   <FaUserTie className="text-[#244563]" /> Datos del Estudiante
                 </h4>
@@ -1139,7 +1111,6 @@ export default function Estudiantes() {
                     </label>
                   </div>
                 </div>
-
                 <h4 className="text-[10px] font-semibold text-[#64748B] flex items-center gap-1.5 border-b border-[#ECEFF3] pb-2 mb-3">
                   <FaUsers className="text-[#244563]" /> Datos del Representante
                   Legal
@@ -1206,7 +1177,6 @@ export default function Estudiantes() {
                   </div>
                 </div>
               </div>
-
               {/* Footer fijo dentro del form (submit nativo) */}
               <div className="shrink-0 border-t border-[#D8DEE6] bg-[#ECEFF3] px-4 py-2 flex gap-2 justify-end">
                 <button
@@ -1304,7 +1274,7 @@ export default function Estudiantes() {
               <button
                 onClick={guardarEstudiantesMasivos}
                 disabled={isSavingMassive || !massiveData.trim()}
-                className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] disabled:bg-[#BFC9D4] disabled:cursor-not-allowed text-white px-4  rounded-md transition-colors text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] disabled:bg-[#BFC9D4] disabled:cursor-not-allowed text-white px-4 rounded-md transition-colors text-[11px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 {isSavingMassive ? (
                   <>
@@ -1324,7 +1294,7 @@ export default function Estudiantes() {
                   setMassiveData("");
                   setValidationErrors([]);
                 }}
-                className="min-h-8 inline-flex items-center gap-2 bg-[#ECEFF3] hover:bg-[#D8DEE6] text-[#4B5563] px-4  rounded-md transition-colors text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                className="min-h-8 inline-flex items-center gap-2 bg-[#ECEFF3] hover:bg-[#D8DEE6] text-[#4B5563] px-4 rounded-md transition-colors text-[11px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 <FaTimes className="text-[10px]" /> Cancelar
               </button>
@@ -1335,19 +1305,22 @@ export default function Estudiantes() {
 
       {!docenteSinGrados && (
         <>
-          {userData?.role === "docente" && !gradoEfectivoId && (
+          {/* ✅ MODIFICADO: Ahora aplica a TODOS (incluidos admins) para evitar descargas masivas */}
+          {!gradoEfectivoId && (
             <div className="bg-[#ECEFF3] border border-[#D8DEE6] rounded-lg p-8 text-center mb-3">
               <FaBookOpen className="text-2xl text-[#9CA3AF] mx-auto mb-3" />
               <p className="text-[#64748B] font-medium mb-1">
                 Selecciona un grado para ver los estudiantes
               </p>
               <p className="text-[#6B7280] text-[11px]">
-                Haz clic en uno de los botones de grados asignados arriba
+                Para proteger la base de datos, debes seleccionar un grado
+                específico.
               </p>
             </div>
           )}
 
-          {(gradoEfectivoId || esAdmin) && (
+          {/* ✅ MODIFICADO: Solo muestra la tabla si hay un grado efectivo seleccionado */}
+          {gradoEfectivoId && (
             <>
               <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[#D8DEE6] bg-[#ECEFF3] mb-3 px-2.5 py-2 flex-col sm:flex-row justify-between">
                 <div className="relative w-full sm:w-96">
@@ -1357,7 +1330,7 @@ export default function Estudiantes() {
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     placeholder="Buscar por apellidos, nombres, cédula o representante..."
-                    className="h-8 w-full pl-10 pr-4  border border-[#BFC9D4] rounded-md text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
+                    className="h-8 w-full pl-10 pr-4 border border-[#BFC9D4] rounded-md text-[11px] focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563] transition-colors focus:outline-none bg-[#FFFFFF] text-[#374151]"
                   />
                 </div>
                 <div className="flex gap-2 flex-wrap">
@@ -1368,7 +1341,7 @@ export default function Estudiantes() {
                         {estudiantesAMostrar.length > 0 && (
                           <button
                             onClick={handleExportExcel}
-                            className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4  rounded-md text-[11px] font-medium shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                            className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4 rounded-md text-[11px] font-medium shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                           >
                             <FaFileExcel /> Descargar Excel
                           </button>
@@ -1381,14 +1354,13 @@ export default function Estudiantes() {
                         setShowMassiveForm(true);
                         setValidationErrors([]);
                       }}
-                      className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4  rounded-md transition-colors text-[11px] font-medium shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                      className="min-h-8 inline-flex items-center gap-2 bg-[#244563] hover:bg-[#1B354D] text-white px-4 rounded-md transition-colors text-[11px] font-medium shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                     >
                       <FaUpload className="text-[11px]" /> Registrar Estudiantes
                     </button>
                   )}
                 </div>
               </div>
-
               <div className="bg-[#FFFFFF] rounded-lg shadow-[0_3px_12px_-8px_rgba(15,23,42,0.18)] border border-[#D8DEE6] overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#D8DEE6] bg-[#ECEFF3] px-2.5 py-2">
                   <span className="text-[11px] text-[#64748B]">
@@ -1531,14 +1503,14 @@ export default function Estudiantes() {
                                       <div className="flex gap-2">
                                         <button
                                           onClick={() => handleEdit(est)}
-                                          className="min-h-8 flex-1 inline-flex items-center justify-center gap-2 px-3  rounded-md bg-[#EAF0F6] text-[#244563] hover:bg-[#EAF0F6] text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                          className="min-h-8 flex-1 inline-flex items-center justify-center gap-2 px-3 rounded-md bg-[#EAF0F6] text-[#244563] hover:bg-[#EAF0F6] text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                                         >
                                           <FaEdit /> Editar
                                         </button>
                                         {est.activo && (
                                           <button
                                             onClick={() => handleDelete(est.id)}
-                                            className="min-h-8 flex-1 inline-flex items-center justify-center gap-2 px-3  rounded-md bg-red-50 text-[#C93F45] hover:bg-red-100 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                            className="min-h-8 flex-1 inline-flex items-center justify-center gap-2 px-3 rounded-md bg-red-50 text-[#C93F45] hover:bg-red-100 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                                           >
                                             <FaTrash /> Desactivar
                                           </button>
@@ -1600,14 +1572,14 @@ export default function Estudiantes() {
                                   <div className="flex justify-center gap-2">
                                     <button
                                       onClick={() => handleEdit(est)}
-                                      className="min-h-8 inline-flex items-center gap-1 px-3  rounded-md transition-colors bg-[#EAF0F6] text-[#244563] hover:bg-[#EAF0F6] text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                      className="min-h-8 inline-flex items-center gap-1 px-3 rounded-md transition-colors bg-[#EAF0F6] text-[#244563] hover:bg-[#EAF0F6] text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                                     >
                                       <FaEdit /> Editar
                                     </button>
                                     {est.activo && (
                                       <button
                                         onClick={() => handleDelete(est.id)}
-                                        className="min-h-8 inline-flex items-center gap-1 px-3  rounded-md transition-colors bg-red-50 text-[#C93F45] hover:bg-red-100 text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                                        className="min-h-8 inline-flex items-center gap-1 px-3 rounded-md transition-colors bg-red-50 text-[#C93F45] hover:bg-red-100 text-[10px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
                                       >
                                         <FaTrash /> Desactivar
                                       </button>
@@ -1688,13 +1660,13 @@ export default function Estudiantes() {
             <div className="px-4 py-2 bg-[#ECEFF3] flex gap-3 justify-end">
               <button
                 onClick={confirmModal.onCancel}
-                className="min-h-8 px-4  bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] border border-[#BFC9D4] rounded-md text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
+                className="min-h-8 px-4 bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] border border-[#BFC9D4] rounded-md text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40"
               >
                 {confirmModal.cancelText || "Cancelar"}
               </button>
               <button
                 onClick={confirmModal.onConfirm}
-                className={`min-h-8 px-4  ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"} text-white rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
+                className={`min-h-8 px-4 ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"} text-white rounded-md text-[11px] font-semibold transition-colors flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40`}
               >
                 <ConfirmIcon className="text-[10px]" />{" "}
                 {confirmModal.confirmText || "Confirmar"}
