@@ -1,4 +1,5 @@
 import { useState, useEffect, startTransition, useCallback } from "react";
+import { Navigate } from "react-router-dom"; // ✅ Asegúrate de tener este import
 import {
   doc,
   updateDoc,
@@ -39,6 +40,7 @@ type AreaDirector = (typeof AREAS)[number]["campo"];
 
 export default function Configuracion() {
   const { user, userData } = useAuth();
+
   const [nombreDocumento, setNombreDocumento] = useState("");
   const [directorArea, setDirectorArea] = useState<AreaDirector | "">("");
   const [directores, setDirectores] = useState<Record<string, string>>({});
@@ -184,10 +186,14 @@ export default function Configuracion() {
     },
   };
 
+  // ✅ LA PROTECCIÓN VA AQUÍ: Después de todos los Hooks y antes del return
+  if (userData?.role === "super_admin") {
+    return <Navigate to="/" replace />;
+  }
+
   return (
     <Layout>
       <div className="mx-auto w-full max-w-2xl space-y-4">
-        {/* Cabecera */}
         <div className="flex items-center gap-3 mb-2">
           <button
             onClick={() => window.history.back()}
@@ -223,7 +229,6 @@ export default function Configuracion() {
           </header>
 
           <div className="space-y-4 px-4 py-4">
-            {/* Foto y datos de Google */}
             <div className="flex items-center gap-3 border-b border-[#E4E8EE] pb-4">
               {user?.photoURL ? (
                 <img
@@ -254,7 +259,6 @@ export default function Configuracion() {
               </div>
             </div>
 
-            {/* Nombre para documentos */}
             <div>
               <label
                 htmlFor="nombre-documento"
@@ -287,7 +291,6 @@ export default function Configuracion() {
               </p>
             </div>
 
-            {/* Director de área */}
             <div>
               <label
                 htmlFor="director-area"
@@ -350,7 +353,6 @@ export default function Configuracion() {
               )}
             </div>
 
-            {/* Vista previa */}
             {nombreDocumento && (
               <section className="overflow-hidden rounded-md border border-[#D8DEE6] bg-[#ECEFF3]">
                 <p className="flex items-center gap-1.5 border-b border-[#E4E8EE] px-3 py-1.5 text-[10px] font-semibold text-[#4B5563]">
@@ -404,7 +406,6 @@ export default function Configuracion() {
         </section>
       </div>
 
-      {/* Toasts Flotantes */}
       <div
         aria-live="polite"
         aria-atomic="false"

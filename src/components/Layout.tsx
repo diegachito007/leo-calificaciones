@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useData } from "../context/DataContext";
@@ -21,14 +21,13 @@ import {
   FaBookOpen,
   FaGraduationCap,
   FaCalendarAlt,
-  FaUserGraduate,
   FaCogs,
   FaBars,
   FaTimes,
-  FaExchangeAlt,
   FaClipboardList,
   FaBell,
 } from "react-icons/fa";
+
 interface LayoutProps {
   children: ReactNode;
   title?: string;
@@ -38,84 +37,30 @@ interface LayoutProps {
   action?: ReactNode;
   showFooter?: boolean;
 }
+
 const RAIL_KEY = "eduX_rail_open";
-const ACTIVE_ROLE_KEY = "eduX_activeRole";
-// ✅ LOGOS: versión completa (rail expandido + móvil) e isotipo (rail colapsado)
-// ⚠️ Ajusta aquí la extensión/nombre real de tus archivos en /public
 const LOGO_FULL = "/logo.eduX.png";
 const LOGO_ICON = "/logo.eduX.mini.png";
+
 interface NavItem {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   roles: ("super_admin" | "docente")[];
 }
+
 const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Inicio", icon: FaHome, roles: ["super_admin", "docente"] },
   {
-    to: "/calificaciones",
-    label: "Asistencia · Notas",
-    icon: FaChartBar,
-    roles: ["super_admin", "docente"],
-  },
-  {
-    to: "/reporte-asistencias",
-    label: "Reporte Asistencias",
-    icon: FaClipboardCheck,
-    roles: ["super_admin", "docente"],
-  },
-  {
-    to: "/reporte-notas",
-    label: "Reporte Notas",
-    icon: FaExclamationTriangle,
-    roles: ["super_admin", "docente"],
-  },
-  {
-    to: "/notificaciones",
-    label: "Notificaciones",
-    icon: FaBell,
-    roles: ["super_admin", "docente"],
-  },
-  {
-    to: "/refuerzo-pedagogico",
-    label: "Refuerzo Pedagógico",
-    icon: FaBookOpen,
-    roles: ["super_admin", "docente"],
-  },
-  {
-    to: "/mi-horario",
-    label: "Mi Horario",
-    icon: FaChalkboardTeacher,
-    roles: ["super_admin", "docente"],
-  },
-  {
-    to: "/estudiantes",
-    label: "Estudiantes",
-    icon: FaUsers,
-    roles: ["super_admin", "docente"],
-  },
-  {
-    to: "/ppe",
-    label: "Programa de Participación Estudiantil (PPE)",
-    icon: FaClipboardList,
-    roles: ["docente"],
-  },
-  {
-    to: "/gestion-usuarios",
-    label: "Gestión Usuarios",
-    icon: FaUserShield,
+    to: "/configuracion-institucional",
+    label: "Config. Institucional",
+    icon: FaCogs,
     roles: ["super_admin"],
   },
   {
-    to: "/gestion-materias",
-    label: "Gestión Materias",
-    icon: FaChalkboardTeacher,
-    roles: ["super_admin"],
-  },
-  {
-    to: "/matriculas",
-    label: "Matrículas",
-    icon: FaUserGraduate,
+    to: "/anios-lectivos",
+    label: "Años Lectivos",
+    icon: FaCalendarAlt,
     roles: ["super_admin"],
   },
   {
@@ -131,19 +76,68 @@ const NAV_ITEMS: NavItem[] = [
     roles: ["super_admin"],
   },
   {
-    to: "/anios-lectivos",
-    label: "Años Lectivos",
-    icon: FaCalendarAlt,
+    to: "/gestion-materias",
+    label: "Gestión Materias",
+    icon: FaChalkboardTeacher,
     roles: ["super_admin"],
   },
+
   {
-    to: "/configuracion-institucional",
-    label: "Config. Institucional",
-    icon: FaCogs,
+    to: "/calificaciones",
+    label: "Asistencia · Notas",
+    icon: FaChartBar,
+    roles: ["docente"],
+  },
+  {
+    to: "/reporte-asistencias",
+    label: "Reporte Asistencias",
+    icon: FaClipboardCheck,
+    roles: ["docente"],
+  },
+  {
+    to: "/reporte-notas",
+    label: "Reporte Notas",
+    icon: FaExclamationTriangle,
+    roles: ["docente"],
+  },
+  {
+    to: "/refuerzo-pedagogico",
+    label: "Refuerzo Pedagógico",
+    icon: FaBookOpen,
+    roles: ["docente"],
+  },
+  {
+    to: "/notificaciones",
+    label: "Notificaciones",
+    icon: FaBell,
+    roles: ["docente"],
+  },
+  {
+    to: "/ppe",
+    label: "Programa de Participación Estudiantil (PPE)",
+    icon: FaClipboardList,
+    roles: ["docente"],
+  },
+  {
+    to: "/estudiantes",
+    label: "Estudiantes",
+    icon: FaUsers,
+    roles: ["super_admin", "docente"],
+  },
+  {
+    to: "/mi-horario",
+    label: "Mi Horario",
+    icon: FaChalkboardTeacher,
+    roles: ["docente"],
+  },
+  {
+    to: "/gestion-usuarios",
+    label: "Gestión Usuarios",
+    icon: FaUserShield,
     roles: ["super_admin"],
   },
 ];
-const PENDING_ROLE_DIALOG_KEY = "eduX_pendingRoleDialog";
+
 export default function Layout({
   children,
   title,
@@ -159,6 +153,7 @@ export default function Layout({
   const [logoError, setLogoError] = useState(false);
   const [logoIconError, setLogoIconError] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   const [railOpen, setRailOpen] = useState<boolean>(() => {
     try {
       return localStorage.getItem(RAIL_KEY) === "1";
@@ -166,47 +161,25 @@ export default function Layout({
       return false;
     }
   });
+
   const { grados } = useData();
+
   const nombreUsuario = userData?.nombreDocumento
     ? userData.nombreDocumento
     : user?.displayName || "Usuario";
+
   const tutorDeAnioActivo = (() => {
     if (!userData?.tutorDe) return [];
     return grados
       .filter((g) => userData.tutorDe?.includes(g.id))
       .map((g) => g.id);
   })();
-  const hasDualRole =
-    userData?.role === "super_admin" &&
-    ((userData?.gradosAsignados?.length ?? 0) > 0 ||
-      (userData?.tutorDe?.length ?? 0) > 0);
-  // ✅ Rol activo elegido en Dashboard (solo aplica a usuarios con doble rol)
-  const [rolOverride, setRolOverride] = useState<
-    "super_admin" | "docente" | null
-  >(() => {
-    try {
-      return localStorage.getItem(ACTIVE_ROLE_KEY) as
-        | "super_admin"
-        | "docente"
-        | null;
-    } catch {
-      return null;
-    }
-  });
-  useEffect(() => {
-    const onRole = (e: Event) => {
-      setRolOverride((e as CustomEvent<"super_admin" | "docente">).detail);
-    };
-    window.addEventListener("eduX:activeRole", onRole);
-    return () => window.removeEventListener("eduX:activeRole", onRole);
-  }, []);
-  const rol =
-    hasDualRole && rolOverride
-      ? rolOverride
-      : userData?.role === "super_admin"
-        ? "super_admin"
-        : "docente";
+
+  // ✅ El rol se lee directamente de Firebase. Sin lógica de doble rol.
+  const rol = userData?.role === "super_admin" ? "super_admin" : "docente";
+
   const navItems = NAV_ITEMS.filter((n) => n.roles.includes(rol));
+
   const toggleRail = () => {
     setRailOpen((v) => {
       const next = !v;
@@ -218,17 +191,9 @@ export default function Layout({
       return next;
     });
   };
-  const cambiarRolCrossPage = () => {
-    setShowDropdown(false);
-    try {
-      localStorage.setItem(PENDING_ROLE_DIALOG_KEY, "1");
-    } catch {
-      /* sin almacenamiento */
-    }
-    navigate("/");
-  };
+
   const mostrarBarraNavegacion = title || subtitle || action || showBack;
-  // ✅ Dropdown compartido (usado tanto en rail desktop como en móvil)
+
   const renderDropdown = (anchorClass: string) => (
     <div
       className={`absolute z-50 w-72 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 ${anchorClass}`}
@@ -259,37 +224,27 @@ export default function Layout({
         </div>
       </div>
       <div className="py-1">
-        <button
-          onClick={() => {
-            setShowDropdown(false);
-            navigate("/configuracion");
-          }}
-          className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
-        >
-          <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
-            <FaUserCog className="text-sm" />
-          </div>
-          <div className="text-left flex-1">
-            <p className="font-medium">Mi Perfil</p>
-            <p className="text-xs text-slate-500">
-              Editar nombre para documentos
-            </p>
-          </div>
-        </button>
-        {hasDualRole && (
+        {/* ✅ Ocultamos "Mi Perfil" si es Super Admin */}
+        {rol === "docente" && (
           <button
-            onClick={cambiarRolCrossPage}
+            onClick={() => {
+              setShowDropdown(false);
+              navigate("/configuracion");
+            }}
             className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
           >
-            <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center">
-              <FaExchangeAlt className="text-sm" />
+            <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center">
+              <FaUserCog className="text-sm" />
             </div>
             <div className="text-left flex-1">
-              <p className="font-medium">Cambiar de rol</p>
-              <p className="text-xs text-slate-500">Super Admin ↔ Docente</p>
+              <p className="font-medium">Mi Perfil</p>
+              <p className="text-xs text-slate-500">
+                Editar nombre para documentos
+              </p>
             </div>
           </button>
         )}
+
         {rol === "super_admin" && (
           <button
             onClick={() => {
@@ -325,6 +280,7 @@ export default function Layout({
       </div>
     </div>
   );
+
   return (
     <div className="min-h-screen bg-linear-to-br from-slate-50 to-slate-100 flex">
       {/* ==================== RAIL VERTICAL (solo PC ≥ 1024px) ==================== */}
@@ -333,7 +289,6 @@ export default function Layout({
           lg:sticky lg:top-0 lg:h-screen
           ${railOpen ? "lg:w-56" : "lg:w-16"}`}
       >
-        {/* Logo + toggle */}
         <div
           className={`flex px-2 py-3 border-b border-slate-100 ${
             railOpen
@@ -349,7 +304,6 @@ export default function Layout({
             title="eduX"
           >
             {railOpen ? (
-              // ✅ Rail expandido: logo completo horizontal
               logoError ? (
                 <div className="bg-linear-to-br from-blue-600 to-purple-600 p-2 rounded-lg shadow-md group-hover:scale-105 transition-transform">
                   <FaTrophy className="text-white text-xl" />
@@ -362,8 +316,7 @@ export default function Layout({
                   onError={() => setLogoError(true)}
                 />
               )
-            ) : // ✅ Rail colapsado: isotipo cuadrado (solo la letra)
-            logoIconError ? (
+            ) : logoIconError ? (
               <div className="bg-linear-to-br from-blue-600 to-purple-600 p-1.5 rounded-lg shadow-md group-hover:scale-105 transition-transform">
                 <FaTrophy className="text-white text-sm" />
               </div>
@@ -386,7 +339,6 @@ export default function Layout({
             />
           </button>
         </div>
-        {/* Navegación */}
         <nav className="flex-1 overflow-y-auto overflow-x-hidden py-2 flex flex-col gap-1 px-2">
           {navItems.map((item) => {
             const activo = location.pathname === item.to;
@@ -410,7 +362,6 @@ export default function Layout({
             );
           })}
         </nav>
-        {/* Avatar al pie del rail */}
         <div
           className={`border-t border-slate-100 p-2 relative ${railOpen ? "" : "flex justify-center"}`}
         >
@@ -452,11 +403,11 @@ export default function Layout({
           )}
         </div>
       </aside>
+
       {/* ==================== HEADER HORIZONTAL (tablet + móvil < 1024px) ==================== */}
       <div className="lg:hidden w-full flex flex-col min-h-screen">
         <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-sm">
           <div className="flex items-center justify-between px-3 py-2.5">
-            {/* Izquierda: hamburguesa + logo completo (hay espacio horizontal) */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -484,7 +435,6 @@ export default function Layout({
                 )}
               </Link>
             </div>
-            {/* Derecha: avatar + dropdown */}
             <div className="relative">
               <button
                 onClick={() => setShowDropdown(!showDropdown)}
@@ -508,7 +458,6 @@ export default function Layout({
               )}
             </div>
           </div>
-          {/* Drawer de navegación (se despliega desde arriba) */}
           {mobileMenuOpen && (
             <div className="border-t border-slate-100 bg-white px-2 py-2 max-h-[75vh] overflow-y-auto">
               {navItems.map((item) => {
@@ -535,7 +484,6 @@ export default function Layout({
             </div>
           )}
         </header>
-        {/* ==================== CONTENIDO (tablet + móvil) ==================== */}
         <div className="flex-1 flex flex-col">
           <main className="grow max-w-7xl mx-auto w-full px-4 sm:px-6 py-5">
             {mostrarBarraNavegacion && (
@@ -574,6 +522,7 @@ export default function Layout({
           </main>
         </div>
       </div>
+
       {/* ==================== CONTENIDO (PC) ==================== */}
       <div className="hidden lg:flex flex-1 min-w-0 flex-col">
         <main className="grow max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
