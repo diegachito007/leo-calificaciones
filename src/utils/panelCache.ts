@@ -56,6 +56,16 @@ let metricas = {
   cambios: 0,
   errores: 0,
 };
+export function liberarHorario(clave: string) {
+  const entrada = horarios.get(clave);
+  if (!entrada) return;
+
+  entrada.detener?.(); // 🔥 Cierra la escucha del horario
+  horarios.delete(clave);
+
+  metricas = { ...metricas, activos: Math.max(0, metricas.activos - 1) };
+  emitir();
+}
 function emitir() {
   revision++;
   observadores.forEach((fn) => fn());
@@ -229,9 +239,16 @@ export function useHorarioPanel(
     observarPanel,
     useCallback(() => leerHorario(clave), [clave]),
   );
+
   useEffect(() => {
     asegurarHorario(clave);
+
+    // ✅ ESTO ES LO QUE FALTABA: Limpiar al desmontar
+    return () => {
+      liberarHorario(clave);
+    };
   }, [clave]);
+
   return { ...valor, reintentar: () => asegurarHorario(clave, true) };
 }
 // Una petición por clave; también comparte la promesa mientras está pendiente.

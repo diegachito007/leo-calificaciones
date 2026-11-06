@@ -47,6 +47,7 @@ import {
   revisionCalificaciones,
   erroresCalificaciones,
   reintentarCalificaciones,
+  liberarCalificaciones,
 } from "../utils/calificacionesCache";
 import {
   construirRefuerzoConHistorial,
@@ -335,6 +336,11 @@ function ContenidoCalificaciones() {
   const erroresCarga = erroresCalificaciones();
   useEffect(() => {
     if (acceso && anioCache) prepararCalificaciones(acceso, anioCache);
+
+    // ✅ EL PARCHE CRÍTICO: Limpiar listeners al salir de Calificaciones
+    return () => {
+      liberarCalificaciones(acceso, anioCache);
+    };
   }, [acceso, anioCache]);
   const [selectedGradoId, setSelectedGradoId] = useState("");
   const [selectedGradoNombre, setSelectedGradoNombre] = useState("");
@@ -483,17 +489,16 @@ function ContenidoCalificaciones() {
   >({});
 
   const gradosFiltrados = useMemo(() => {
-  if (
-    userData?.role === "docente" &&
-    userData?.gradosAsignados &&
-    userData.gradosAsignados.length > 0
-  ) {
-    const asignados = new Set(userData.gradosAsignados);
-    return grados.filter((g) => asignados.has(g.id));
-  }
-  return grados;
-}, [grados, userData]);
-
+    if (
+      userData?.role === "docente" &&
+      userData?.gradosAsignados &&
+      userData.gradosAsignados.length > 0
+    ) {
+      const asignados = new Set(userData.gradosAsignados);
+      return grados.filter((g) => asignados.has(g.id));
+    }
+    return grados;
+  }, [grados, userData]);
 
   const gradoEfectivoId = selectedGradoId;
   const claveNomina = claveConsultaEstudiantes(

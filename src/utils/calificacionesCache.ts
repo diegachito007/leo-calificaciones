@@ -48,11 +48,99 @@ let metricas = {
   iniciales: 0,
   cambios: 0,
   errores: 0,
+  liberados: 0,
 };
 const emitir = () => {
   revision++;
   observadores.forEach((fn) => fn());
 };
+
+// ============================================================
+// ✅ FASE 2 (ANTI-ZOMBIS): CIERRE DIFERIDO CON PERÍODO DE GRACIA
+// ============================================================
+// Cuando una consulta se queda sin observadores (el componente se
+// desmontó), NO matamos el listener de inmediato: programamos su cierre
+// tras un período de gracia. Si el usuario vuelve a entrar antes de que
+// venza el temporizador, se reutiliza la escucha viva (0 lecturas nuevas).
+// Si nadie la usa en todo el período, se libera y deja de consumir.
+const TTL_LIBERACION_MS = 3 * 60 * 1000; // 3 minutos de gracia
+const timersLimpieza = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelarCierre(clave: string) {
+  const timer = timersLimpieza.get(clave);
+  if (timer) {
+    clearTimeout(timer);
+    timersLimpieza.delete(clave);
+  }
+}
+
+function programarCierre(clave: string) {
+  cancelarCierre(clave);
+  const timer = setTimeout(() => {
+    timersLimpieza.delete(clave);
+    const e = entradas.get(clave);
+    if (!e) return;
+    // Si alguien volvió a observar o hay una lectura en curso, no se toca.
+    if (e.observadores.size > 0 || e.esperas.size > 0) return;
+    e.detener?.();
+    entradas.delete(clave);
+    metricas = { ...metricas, liberados: metricas.liberados + 1 };
+    emitir();
+  }, TTL_LIBERACION_MS);
+  timersLimpieza.set(clave, timer);
+}
+
+/**
+ * ✅ LIBERA DE INMEDIATO LOS LISTENERS "ZOMBI".
+ * Cierra todas las entradas del contexto actual que NO tengan observadores
+ * activos ni lecturas pendientes, y cancela sus temporizadores de cierre
+ * diferido. Devuelve la cantidad de entradas liberadas.
+ * Es segura: nunca toca una consulta que esté siendo usada por la UI.
+ */
+export function liberarCalificaciones(acceso: string, anio: string): number {
+  if (acceso !== accesoActual || anio !== anioActual) return 0;
+  let liberadas = 0;
+  for (const [clave, e] of [...entradas.entries()]) {
+    if (e.observadores.size > 0 || e.esperas.size > 0) continue;
+    cancelarCierre(clave);
+    e.detener?.();
+    entradas.delete(clave);
+    liberadas++;
+  }
+  if (liberadas > 0) {
+    metricas = { ...metricas, liberados: metricas.liberados + liberadas };
+    emitir();
+  }
+  return liberadas;
+}
+
+/**
+ * ✅ Libera una consulta específica (actividades o calificaciones de un id).
+ * Por defecto respeta observadores/lecturas activas; con `forzar = true`
+ * la cierra aunque esté en uso (rechaza esperas pendientes).
+ */
+export function liberarConsultaCalificaciones(
+  acceso: string,
+  anio: string,
+  tipo: Tipo,
+  id: string,
+  forzar = false,
+): boolean {
+  if (acceso !== accesoActual || anio !== anioActual) return false;
+  const clave = JSON.stringify([tipo, id]);
+  const e = entradas.get(clave);
+  if (!e) return false;
+  if (!forzar && (e.observadores.size > 0 || e.esperas.size > 0)) return false;
+  cancelarCierre(clave);
+  e.esperas.forEach((p) => p.reject(new Error("La consulta fue liberada.")));
+  e.esperas.clear();
+  e.detener?.();
+  entradas.delete(clave);
+  metricas = { ...metricas, liberados: metricas.liberados + 1 };
+  emitir();
+  return true;
+}
+
 export const observarCalificaciones = (fn: () => void) => {
   observadores.add(fn);
   return () => {
@@ -73,11 +161,15 @@ export function reiniciarMetricasCalificaciones() {
     iniciales: 0,
     cambios: 0,
     errores: 0,
+    liberados: 0,
   };
   emitir();
 }
 function limpiar() {
   generacion++;
+  // ✅ También se cancelan los temporizadores de cierre diferido.
+  timersLimpieza.forEach((t) => clearTimeout(t));
+  timersLimpieza.clear();
   const anteriores = [...entradas.values()];
   entradas.clear();
   anteriores.forEach((e) => {
@@ -247,10 +339,15 @@ export function observarConsultaCalificaciones(
   fn: (datos: DatosConsulta, listo: boolean) => void,
 ) {
   const e = asegurar(acceso, anio, tipo, id);
+  const clave = JSON.stringify([tipo, id]);
+  // ✅ El componente (re)montó: se cancela el cierre diferido pendiente.
+  cancelarCierre(clave);
   e.observadores.add(fn);
   fn(e.valor, e.recibida);
   return () => {
     e.observadores.delete(fn);
+    // ✅ Sin observadores: programar liberación con período de gracia.
+    if (e.observadores.size === 0) programarCierre(clave);
   };
 }
 async function leerConsulta(
@@ -260,21 +357,30 @@ async function leerConsulta(
   id: string,
 ): Promise<DatosConsulta> {
   const e = asegurar(acceso, anio, tipo, id);
+  const clave = JSON.stringify([tipo, id]);
   if (e.error) throw new Error(e.error);
-  if (e.sincronizada) return e.valor;
+  if (e.sincronizada) {
+    // ✅ Lectura única sin UI observando: programar liberación diferida.
+    if (e.observadores.size === 0) programarCierre(clave);
+    return e.valor;
+  }
   return new Promise((resolve, reject) => {
     const espera = {
       resolve: (datos: DatosConsulta) => {
         clearTimeout(timer);
+        e.esperas.delete(espera);
+        if (e.observadores.size === 0) programarCierre(clave);
         resolve(datos);
       },
       reject: (error: Error) => {
         clearTimeout(timer);
+        e.esperas.delete(espera);
         reject(error);
       },
     };
     const timer = setTimeout(() => {
       e.esperas.delete(espera);
+      if (e.observadores.size === 0) programarCierre(clave);
       reject(
         new Error(
           "No se pudo confirmar la sincronización. Revisa tu conexión y vuelve a intentar.",

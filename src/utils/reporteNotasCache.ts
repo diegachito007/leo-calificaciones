@@ -61,6 +61,22 @@ const observar = (fn: () => void) => {
     observadores.delete(fn);
   };
 };
+export function liberar(
+  acceso: string,
+  anio: string,
+  consulta: ConsultaReporte,
+) {
+  if (!permitido(acceso, anio)) return;
+  const clave = JSON.stringify(consulta);
+  const entrada = entradas.get(clave);
+  if (!entrada) return;
+
+  entrada.detener?.(); // 🔥 Esto mata el onSnapshot de Firestore
+  entradas.delete(clave);
+
+  metricas = { ...metricas, activos: Math.max(0, metricas.activos - 1) };
+  emitir();
+}
 const leerRevision = () => revision;
 export const observarReporteNotas = observar;
 export const revisionReporteNotas = leerRevision;
@@ -239,6 +255,11 @@ export function useConsultasReporte<T extends { id: string }>(
   const version = useSyncExternalStore(observar, leerRevision);
   useEffect(() => {
     estables.forEach((c) => asegurar(acceso, anio, c));
+
+    // ✅ ESTO ES LO QUE FALTABA: Limpiar al salir de la pantalla
+    return () => {
+      estables.forEach((c) => liberar(acceso, anio, c));
+    };
   }, [acceso, anio, estables]);
   const estado = useMemo(() => {
     const documentos = new Map<string, T>();
