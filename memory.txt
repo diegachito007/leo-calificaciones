@@ -1,0 +1,28 @@
+PASO 1: crear árbol de archivos
+
+tree /F /A > arbol_proyecto.txt
+
+PASO 2: concentrar todo los archivos en una sola carpeta
+
+# Definir rutas
+$origen = "D:\Proyectos\IA\qwen\colegios-app\src"
+$destino = "D:\Proyectos\IA\qwen\colegios-app\xxx"
+
+# Crear carpeta destino si no existe
+New-Item -ItemType Directory -Path $destino -Force | Out-Null
+
+# Copiar TODOS los archivos de todas las subcarpetas
+Get-ChildItem -Path $origen -File -Recurse | Copy-Item -Destination $destino
+
+PASO 3: volcar toda la base de datos de supabase
+
+$ npm install -g supatool
+
+$ echo "SUPABASE_CONNECTION_STRING=postgresql://postgres:SayaDana007**@db.meuutnclsgnwajhwewon.supabase.co:5432/postgres" >> .env.local
+
+$ supatool extract --all -o supabase/schemas
+
+Paso 4: generar el dump.ps1
+
+powershell -ExecutionPolicy Bypass -File .\dump.ps1
+

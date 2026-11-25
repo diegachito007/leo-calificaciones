@@ -29,6 +29,8 @@ import ArchivedAccount from "./pages/ArchivedAccount";
 import MigracionAsistencia from "./pages/MigracionAsistencia";
 import EnMantenimiento from "./pages/EnMantenimiento";
 import GestionMateriasDocentes from "./pages/GestionMateriasDocentes";
+// ✅ IMPORTAMOS EL COMPONENTE DE REPARACIÓN
+import RepararDatos from "./pages/RepararDatos";
 
 function PrivateRoute({ children }: { children: ReactNode }) {
   const { user, userData, loading, authError, retryProfile, logout } =
@@ -195,6 +197,9 @@ function AppRoutes() {
         path="/login"
         element={user ? <Navigate to="/" replace /> : <Login />}
       />
+
+      {/* ✅ RUTA DE REPARACIÓN AISLADA (Fuera de PrivateRoute y AdminRoute) */}
+      <Route path="/reparar-datos" element={<RepararDatos />} />
 
       {/* Rutas protegidas */}
       <Route

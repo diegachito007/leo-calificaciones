@@ -60,20 +60,26 @@ interface ConfirmModalState {
 export default function AniosLectivos() {
   const { user } = useAuth();
   const { aniosLectivos, ready } = useData();
-  
+
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     fechaInicio: "",
     fechaFin: "",
     tipoEvaluacion: "trimestral" as "trimestral" | "quimestral",
     activo: false,
   });
-  
-  const [periodosEditables, setPeriodosEditables] = useState<PeriodoCalculado[]>([]);
+
+  const [periodosEditables, setPeriodosEditables] = useState<
+    PeriodoCalculado[]
+  >([]);
+  // Períodos tal como están en Firestore al abrir la edición (para conservar sus IDs)
+  const [periodosOriginales, setPeriodosOriginales] = useState<
+    PeriodoCalculado[]
+  >([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmModal, setConfirmModal] = useState<ConfirmModalState>({
     isOpen: false,
@@ -125,7 +131,8 @@ export default function AniosLectivos() {
           message,
           confirmText: options?.confirmText || "Confirmar",
           cancelText: options?.cancelText || "Cancelar",
-          confirmColor: options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
+          confirmColor:
+            options?.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]",
           icon: options?.icon || FaQuestionCircle,
           onConfirm: () => {
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -147,10 +154,10 @@ export default function AniosLectivos() {
     const yearFin = new Date(fechaFin).getFullYear();
     return `${yearInicio}-${yearFin}`;
   };
-  
+
   const nombreGenerado = useMemo(
     () => calcularNombre(formData.fechaInicio, formData.fechaFin),
-    [formData.fechaInicio, formData.fechaFin]
+    [formData.fechaInicio, formData.fechaFin],
   );
 
   const calcularPeriodos = (
@@ -159,8 +166,10 @@ export default function AniosLectivos() {
     tipo: "trimestral" | "quimestral",
   ): PeriodoCalculado[] => {
     if (!fechaInicio || !fechaFin) return [];
-    const inicio = new Date(fechaInicio);
-    const fin = new Date(fechaFin);
+    // Se fuerza hora local: new Date('YYYY-MM-DD') se interpreta como UTC y en Ecuador
+    // (UTC-5) retrocede un día al convertir de vuelta a texto.
+    const inicio = new Date(`${fechaInicio}T00:00:00`);
+    const fin = new Date(`${fechaFin}T00:00:00`);
     const totalDias = Math.ceil(
       (fin.getTime() - inicio.getTime()) / (1000 * 60 * 60 * 24),
     );
@@ -182,7 +191,7 @@ export default function AniosLectivos() {
             );
       const nombre =
         tipo === "trimestral" ? `Trimestre ${i + 1}` : `Quimestre ${i + 1}`;
-      
+
       const ajustarZona = (d: Date) => {
         const offset = d.getTimezoneOffset();
         const adjusted = new Date(d.getTime() - offset * 60 * 1000);
@@ -198,6 +207,20 @@ export default function AniosLectivos() {
     }
     return periodos;
   };
+
+  // Al recalcular fechas o cambiar el tipo, se conserva el ID del período existente
+  // que tenga el mismo orden y nombre. Así no se pierde la referencia (periodoId).
+  const recalcularConIds = (
+    inicio: string,
+    fin: string,
+    tipo: "trimestral" | "quimestral",
+  ): PeriodoCalculado[] =>
+    calcularPeriodos(inicio, fin, tipo).map((n) => {
+      const orig = periodosOriginales.find(
+        (o) => o.orden === n.orden && o.nombre === n.nombre,
+      );
+      return orig?.id ? { ...n, id: orig.id } : n;
+    });
 
   const actualizarPeriodo = (
     index: number,
@@ -219,7 +242,7 @@ export default function AniosLectivos() {
       );
       const snap = await getDocs(q);
       const data = snap.docs
-        .map((d) => ({ 
+        .map((d) => ({
           id: d.id, // ✅ Guardamos el ID para poder borrarlo sin consultar de nuevo
           nombre: (d.data() as PeriodoEvaluacion).nombre,
           fechaInicio: (d.data() as PeriodoEvaluacion).fechaInicio,
@@ -227,8 +250,9 @@ export default function AniosLectivos() {
           orden: (d.data() as PeriodoEvaluacion).orden,
         }))
         .sort((a, b) => (a.orden || 0) - (b.orden || 0));
-      
+
       if (data.length > 0) {
+        setPeriodosOriginales(data);
         setPeriodosEditables(data);
       }
     } catch (error) {
@@ -239,32 +263,56 @@ export default function AniosLectivos() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.fechaInicio || !formData.fechaFin) {
-      mostrarToast("warning", "Fechas obligatorias", "Las fechas de inicio y fin son obligatorias.");
+      mostrarToast(
+        "warning",
+        "Fechas obligatorias",
+        "Las fechas de inicio y fin son obligatorias.",
+      );
       return;
     }
     if (new Date(formData.fechaFin) <= new Date(formData.fechaInicio)) {
-      mostrarToast("warning", "Rango inválido", "La fecha de fin debe ser posterior a la fecha de inicio.");
+      mostrarToast(
+        "warning",
+        "Rango inválido",
+        "La fecha de fin debe ser posterior a la fecha de inicio.",
+      );
       return;
     }
     if (periodosEditables.length === 0) {
-      mostrarToast("warning", "Sin períodos", "No se han generado los períodos de evaluación.");
+      mostrarToast(
+        "warning",
+        "Sin períodos",
+        "No se han generado los períodos de evaluación.",
+      );
       return;
     }
-    
+
     for (const periodo of periodosEditables) {
       if (!periodo.fechaInicio || !periodo.fechaFin) {
-        mostrarToast("warning", "Fechas incompletas", `Las fechas del ${periodo.nombre} son obligatorias.`);
+        mostrarToast(
+          "warning",
+          "Fechas incompletas",
+          `Las fechas del ${periodo.nombre} son obligatorias.`,
+        );
         return;
       }
       if (new Date(periodo.fechaFin) <= new Date(periodo.fechaInicio)) {
-        mostrarToast("warning", "Rango inválido", `La fecha de fin del ${periodo.nombre} debe ser posterior a la fecha de inicio.`);
+        mostrarToast(
+          "warning",
+          "Rango inválido",
+          `La fecha de fin del ${periodo.nombre} debe ser posterior a la fecha de inicio.`,
+        );
         return;
       }
       if (
         new Date(periodo.fechaInicio) < new Date(formData.fechaInicio) ||
         new Date(periodo.fechaFin) > new Date(formData.fechaFin)
       ) {
-        mostrarToast("warning", "Rango fuera de límites", `Las fechas del ${periodo.nombre} deben estar dentro del rango del año lectivo.`);
+        mostrarToast(
+          "warning",
+          "Rango fuera de límites",
+          `Las fechas del ${periodo.nombre} deben estar dentro del rango del año lectivo.`,
+        );
         return;
       }
     }
@@ -291,11 +339,13 @@ export default function AniosLectivos() {
       } else {
         estadoActivo = forzarActivo || !anios.some((a) => a.activo);
       }
-      
+
       const batch = writeBatch(db);
-      
+
       if (estadoActivo) {
-        const aniosActivos = anios.filter((a) => a.activo && a.id !== editingId);
+        const aniosActivos = anios.filter(
+          (a) => a.activo && a.id !== editingId,
+        );
         aniosActivos.forEach((anio) => {
           batch.update(doc(db, "aniosLectivos", anio.id), { activo: false });
         });
@@ -312,11 +362,14 @@ export default function AniosLectivos() {
           activo: estadoActivo,
           updatedAt: serverTimestamp(),
         });
-        
-        // ✅ OPTIMIZACIÓN 3: Eliminamos los períodos usando los IDs que ya tenemos en memoria
-        // en lugar de hacer un getDocs innecesario.
-        periodosEditables.forEach((p) => {
-          if (p.id) {
+
+        // Solo se eliminan los períodos que YA NO existen (p. ej. al pasar de
+        // trimestral a quimestral). Los demás se actualizan conservando su ID.
+        const idsConservados = new Set(
+          periodosEditables.filter((p) => p.id).map((p) => p.id as string),
+        );
+        periodosOriginales.forEach((p) => {
+          if (p.id && !idsConservados.has(p.id)) {
             batch.delete(doc(db, "periodosEvaluacion", p.id));
           }
         });
@@ -335,10 +388,30 @@ export default function AniosLectivos() {
       }
 
       periodosEditables.forEach((periodo) => {
+        const tipoPeriodo =
+          formData.tipoEvaluacion === "trimestral" ? "trimestre" : "quimestre";
+
+        // Período existente: se actualiza en el mismo documento (el ID no cambia)
+        if (editingId && periodo.id) {
+          batch.update(doc(db, "periodosEvaluacion", periodo.id), {
+            nombre: periodo.nombre,
+            tipo: tipoPeriodo,
+            fechaInicio: periodo.fechaInicio,
+            fechaFin: periodo.fechaFin,
+            orden: periodo.orden,
+            updatedAt: serverTimestamp(),
+          });
+          return;
+        }
+
+        // Período nuevo
         const nuevoRef = doc(collection(db, "periodosEvaluacion"));
         batch.set(nuevoRef, {
           nombre: periodo.nombre,
-          tipo: formData.tipoEvaluacion === "trimestral" ? "trimestre" : "quimestre",
+          tipo:
+            formData.tipoEvaluacion === "trimestral"
+              ? "trimestre"
+              : "quimestre",
           anioLectivoId: anioId,
           fechaInicio: periodo.fechaInicio,
           fechaFin: periodo.fechaFin,
@@ -349,7 +422,7 @@ export default function AniosLectivos() {
       });
 
       await batch.commit();
-      
+
       mostrarToast(
         "success",
         editingId ? "Período actualizado" : "Período creado",
@@ -359,7 +432,11 @@ export default function AniosLectivos() {
       resetForm();
     } catch (error) {
       console.error("Error guardando año lectivo:", error);
-      mostrarToast("error", "Error al guardar", "No se pudo guardar el año lectivo. Intenta nuevamente.");
+      mostrarToast(
+        "error",
+        "Error al guardar",
+        "No se pudo guardar el año lectivo. Intenta nuevamente.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -374,6 +451,8 @@ export default function AniosLectivos() {
     });
     setEditingId(anio.id);
     setShowForm(true);
+    setPeriodosEditables([]);
+    setPeriodosOriginales([]);
     cargarPeriodosExistentes(anio.id);
   };
 
@@ -382,25 +461,41 @@ export default function AniosLectivos() {
     const confirmado = await confirmar(
       `Eliminar año lectivo ${anio?.nombre || ""}`,
       `¿Estás seguro de eliminar este año lectivo? Se eliminarán también todos los períodos de evaluación asociados. Esta acción no se puede deshacer.`,
-      { confirmText: "Sí, eliminar", cancelText: "Cancelar", confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]", icon: FaTrash },
+      {
+        confirmText: "Sí, eliminar",
+        cancelText: "Cancelar",
+        confirmColor: "bg-[#C93F45] hover:bg-[#AD3038]",
+        icon: FaTrash,
+      },
     );
     if (!confirmado) return;
-    
+
     try {
       const batch = writeBatch(db);
       const periodos = await getDocs(
-        query(collection(db, "periodosEvaluacion"), where("anioLectivoId", "==", id)),
+        query(
+          collection(db, "periodosEvaluacion"),
+          where("anioLectivoId", "==", id),
+        ),
       );
       periodos.docs.forEach((p) => {
         batch.delete(doc(db, "periodosEvaluacion", p.id));
       });
       batch.delete(doc(db, "aniosLectivos", id));
       await batch.commit();
-      
-      mostrarToast("success", "Año lectivo eliminado", `${anio?.nombre} y sus períodos fueron eliminados correctamente.`);
+
+      mostrarToast(
+        "success",
+        "Año lectivo eliminado",
+        `${anio?.nombre} y sus períodos fueron eliminados correctamente.`,
+      );
     } catch (error) {
       console.error("Error eliminando:", error);
-      mostrarToast("error", "Error al eliminar", "No se pudo eliminar el año lectivo.");
+      mostrarToast(
+        "error",
+        "Error al eliminar",
+        "No se pudo eliminar el año lectivo.",
+      );
     }
   }
 
@@ -409,16 +504,26 @@ export default function AniosLectivos() {
     setIsSaving(true);
     try {
       const batch = writeBatch(db);
-      anios.filter((a) => a.activo).forEach((a) => {
-        batch.update(doc(db, "aniosLectivos", a.id), { activo: false });
-      });
+      anios
+        .filter((a) => a.activo)
+        .forEach((a) => {
+          batch.update(doc(db, "aniosLectivos", a.id), { activo: false });
+        });
       batch.update(doc(db, "aniosLectivos", id), { activo: true });
       await batch.commit();
-      
-      mostrarToast("success", "Período activado", `${anio?.nombre} ahora es el período académico vigente.`);
+
+      mostrarToast(
+        "success",
+        "Período activado",
+        `${anio?.nombre} ahora es el período académico vigente.`,
+      );
     } catch (error) {
       console.error("Error activando:", error);
-      mostrarToast("error", "Error al activar", "No se pudo activar el período.");
+      mostrarToast(
+        "error",
+        "Error al activar",
+        "No se pudo activar el período.",
+      );
     } finally {
       setIsSaving(false);
     }
@@ -434,13 +539,30 @@ export default function AniosLectivos() {
     setEditingId(null);
     setShowForm(false);
     setPeriodosEditables([]);
+    setPeriodosOriginales([]);
   };
 
   const toastConfig = {
-    success: { bg: "border-l-[#6687A5]", iconBg: "bg-[#244563]", icon: FaCheckCircle },
-    error: { bg: "border-l-red-400", iconBg: "bg-[#C93F45]", icon: FaTimesCircle },
-    warning: { bg: "border-l-amber-400", iconBg: "bg-amber-500", icon: FaExclamationTriangle },
-    info: { bg: "border-l-[#244563]", iconBg: "bg-[#244563]", icon: FaInfoCircle },
+    success: {
+      bg: "border-l-[#6687A5]",
+      iconBg: "bg-[#244563]",
+      icon: FaCheckCircle,
+    },
+    error: {
+      bg: "border-l-red-400",
+      iconBg: "bg-[#C93F45]",
+      icon: FaTimesCircle,
+    },
+    warning: {
+      bg: "border-l-amber-400",
+      iconBg: "bg-amber-500",
+      icon: FaExclamationTriangle,
+    },
+    info: {
+      bg: "border-l-[#244563]",
+      iconBg: "bg-[#244563]",
+      icon: FaInfoCircle,
+    },
   };
 
   const ConfirmIcon = confirmModal.icon || FaQuestionCircle;
@@ -451,7 +573,9 @@ export default function AniosLectivos() {
         <div className="flex items-center justify-center py-20">
           <div className="text-center">
             <FaSpinner className="animate-spin text-2xl text-[#244563] mx-auto mb-3" />
-            <p className="text-[#4B5563] text-[11px] font-medium">Cargando periodos...</p>
+            <p className="text-[#4B5563] text-[11px] font-medium">
+              Cargando periodos...
+            </p>
           </div>
         </div>
       </Layout>
@@ -461,7 +585,6 @@ export default function AniosLectivos() {
   return (
     <Layout>
       <div className="mx-auto w-full max-w-6xl space-y-4">
-        
         {/* Cabecera */}
         <div className="flex items-center justify-between gap-3 mb-2">
           <div className="flex items-center gap-3">
@@ -487,7 +610,11 @@ export default function AniosLectivos() {
             disabled={isSaving}
             className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#244563] px-3 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {showForm ? <FaTimes className="text-[10px]" /> : <FaPlus className="text-[10px]" />}
+            {showForm ? (
+              <FaTimes className="text-[10px]" />
+            ) : (
+              <FaPlus className="text-[10px]" />
+            )}
             {showForm ? "Cancelar" : "Nuevo periodo"}
           </button>
         </div>
@@ -497,16 +624,21 @@ export default function AniosLectivos() {
           <section className="rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] shadow-sm overflow-hidden">
             <header className="border-b border-[#E4E8EE] bg-[#ECEFF3] px-4 py-2.5">
               <h3 className="text-xs font-semibold text-[#4B5563]">
-                {editingId ? "Editar Periodo Académico" : "Nuevo Periodo Académico"}
+                {editingId
+                  ? "Editar Periodo Académico"
+                  : "Nuevo Periodo Académico"}
               </h3>
             </header>
             <form onSubmit={handleSubmit} className="p-4 space-y-4">
-              
               {nombreGenerado && (
                 <div className="rounded-md border border-[#C8D6E5] bg-[#EAF0F6] px-3 py-2 flex items-center gap-2 text-[11px]">
                   <FaInfoCircle className="text-[#244563]" />
-                  <span className="font-medium text-[#1B354D]">Periodo académico:</span>
-                  <span className="font-bold text-[#273444]">{nombreGenerado}</span>
+                  <span className="font-medium text-[#1B354D]">
+                    Periodo académico:
+                  </span>
+                  <span className="font-bold text-[#273444]">
+                    {nombreGenerado}
+                  </span>
                 </div>
               )}
 
@@ -522,7 +654,13 @@ export default function AniosLectivos() {
                       const nuevaFecha = e.target.value;
                       setFormData({ ...formData, fechaInicio: nuevaFecha });
                       if (nuevaFecha && formData.fechaFin) {
-                        setPeriodosEditables(calcularPeriodos(nuevaFecha, formData.fechaFin, formData.tipoEvaluacion));
+                        setPeriodosEditables(
+                          recalcularConIds(
+                            nuevaFecha,
+                            formData.fechaFin,
+                            formData.tipoEvaluacion,
+                          ),
+                        );
                       }
                     }}
                     className="w-full h-8 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2.5 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563]"
@@ -540,7 +678,13 @@ export default function AniosLectivos() {
                       const nuevaFecha = e.target.value;
                       setFormData({ ...formData, fechaFin: nuevaFecha });
                       if (formData.fechaInicio && nuevaFecha) {
-                        setPeriodosEditables(calcularPeriodos(formData.fechaInicio, nuevaFecha, formData.tipoEvaluacion));
+                        setPeriodosEditables(
+                          recalcularConIds(
+                            formData.fechaInicio,
+                            nuevaFecha,
+                            formData.tipoEvaluacion,
+                          ),
+                        );
                       }
                     }}
                     min={formData.fechaInicio}
@@ -558,32 +702,62 @@ export default function AniosLectivos() {
                   <button
                     type="button"
                     onClick={() => {
-                      setFormData({ ...formData, tipoEvaluacion: "trimestral" });
+                      setFormData({
+                        ...formData,
+                        tipoEvaluacion: "trimestral",
+                      });
                       if (formData.fechaInicio && formData.fechaFin) {
-                        setPeriodosEditables(calcularPeriodos(formData.fechaInicio, formData.fechaFin, "trimestral"));
+                        setPeriodosEditables(
+                          recalcularConIds(
+                            formData.fechaInicio,
+                            formData.fechaFin,
+                            "trimestral",
+                          ),
+                        );
                       }
                     }}
                     className={`p-2.5 border rounded-lg transition-all text-left ${
-                      formData.tipoEvaluacion === "trimestral" ? "border-[#244563] bg-[#EAF0F6] ring-1 ring-[#244563]/30" : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"
+                      formData.tipoEvaluacion === "trimestral"
+                        ? "border-[#244563] bg-[#EAF0F6] ring-1 ring-[#244563]/30"
+                        : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"
                     }`}
                   >
-                    <div className="font-semibold text-[#273444] text-[11px] mb-0.5">Trimestral</div>
-                    <div className="text-[10px] text-[#6B7280]">3 períodos de evaluación</div>
+                    <div className="font-semibold text-[#273444] text-[11px] mb-0.5">
+                      Trimestral
+                    </div>
+                    <div className="text-[10px] text-[#6B7280]">
+                      3 períodos de evaluación
+                    </div>
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      setFormData({ ...formData, tipoEvaluacion: "quimestral" });
+                      setFormData({
+                        ...formData,
+                        tipoEvaluacion: "quimestral",
+                      });
                       if (formData.fechaInicio && formData.fechaFin) {
-                        setPeriodosEditables(calcularPeriodos(formData.fechaInicio, formData.fechaFin, "quimestral"));
+                        setPeriodosEditables(
+                          recalcularConIds(
+                            formData.fechaInicio,
+                            formData.fechaFin,
+                            "quimestral",
+                          ),
+                        );
                       }
                     }}
                     className={`p-2.5 border rounded-lg transition-all text-left ${
-                      formData.tipoEvaluacion === "quimestral" ? "border-[#244563] bg-[#EAF0F6] ring-1 ring-[#244563]/30" : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"
+                      formData.tipoEvaluacion === "quimestral"
+                        ? "border-[#244563] bg-[#EAF0F6] ring-1 ring-[#244563]/30"
+                        : "border-[#D8DEE6] bg-[#FFFFFF] hover:border-[#C96522]/40"
                     }`}
                   >
-                    <div className="font-semibold text-[#273444] text-[11px] mb-0.5">Quimestral</div>
-                    <div className="text-[10px] text-[#6B7280]">2 períodos de evaluación</div>
+                    <div className="font-semibold text-[#273444] text-[11px] mb-0.5">
+                      Quimestral
+                    </div>
+                    <div className="text-[10px] text-[#6B7280]">
+                      2 períodos de evaluación
+                    </div>
                   </button>
                 </div>
               </div>
@@ -591,21 +765,33 @@ export default function AniosLectivos() {
               {periodosEditables.length > 0 && (
                 <div className="rounded-lg border border-[#D8DEE6] bg-[#F8FAFC] p-3">
                   <h4 className="text-[11px] font-semibold text-[#273444] mb-3 flex items-center gap-1.5">
-                    <FaCalendarAlt className="text-[#244563]" /> Períodos de Evaluación (editables)
+                    <FaCalendarAlt className="text-[#244563]" /> Períodos de
+                    Evaluación (editables)
                   </h4>
                   <div className="space-y-2">
                     {periodosEditables.map((periodo, idx) => (
-                      <div key={periodo.id || idx} className="rounded-md border border-[#E4E8EE] bg-[#FFFFFF] p-2.5 flex items-center gap-3">
+                      <div
+                        key={periodo.id || idx}
+                        className="rounded-md border border-[#E4E8EE] bg-[#FFFFFF] p-2.5 flex items-center gap-3"
+                      >
                         <div className="bg-[#EAF0F6] text-[#244563] rounded-full w-6 h-6 flex items-center justify-center text-[10px] font-bold shrink-0">
                           {periodo.orden}
                         </div>
                         <div className="flex-1 grid grid-cols-2 gap-2">
                           <label className="block">
-                            <span className="text-[9px] text-[#6B7280] uppercase mb-0.5 block">Inicio</span>
+                            <span className="text-[9px] text-[#6B7280] uppercase mb-0.5 block">
+                              Inicio
+                            </span>
                             <input
                               type="date"
                               value={periodo.fechaInicio}
-                              onChange={(e) => actualizarPeriodo(idx, "fechaInicio", e.target.value)}
+                              onChange={(e) =>
+                                actualizarPeriodo(
+                                  idx,
+                                  "fechaInicio",
+                                  e.target.value,
+                                )
+                              }
                               min={formData.fechaInicio}
                               max={periodo.fechaFin || formData.fechaFin}
                               className="w-full h-7 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563]"
@@ -613,11 +799,19 @@ export default function AniosLectivos() {
                             />
                           </label>
                           <label className="block">
-                            <span className="text-[9px] text-[#6B7280] uppercase mb-0.5 block">Fin</span>
+                            <span className="text-[9px] text-[#6B7280] uppercase mb-0.5 block">
+                              Fin
+                            </span>
                             <input
                               type="date"
                               value={periodo.fechaFin}
-                              onChange={(e) => actualizarPeriodo(idx, "fechaFin", e.target.value)}
+                              onChange={(e) =>
+                                actualizarPeriodo(
+                                  idx,
+                                  "fechaFin",
+                                  e.target.value,
+                                )
+                              }
                               min={periodo.fechaInicio || formData.fechaInicio}
                               max={formData.fechaFin}
                               className="w-full h-7 border border-[#BFC9D4] bg-[#FFFFFF] rounded-md px-2 text-[11px] text-[#273444] outline-none focus:ring-2 focus:ring-[#244563]/20 focus:border-[#244563]"
@@ -636,11 +830,17 @@ export default function AniosLectivos() {
                   type="checkbox"
                   id="activo"
                   checked={formData.activo}
-                  onChange={(e) => setFormData({ ...formData, activo: e.target.checked })}
+                  onChange={(e) =>
+                    setFormData({ ...formData, activo: e.target.checked })
+                  }
                   className="w-4 h-4 rounded border-[#BFC9D4] text-[#244563] focus:ring-[#244563]/30"
                 />
                 <label htmlFor="activo" className="text-[11px] text-[#4B5563]">
-                  {editingId ? (formData.activo ? "Mantener como activo" : "Marcar como activo") : "Marcar como periodo activo"}
+                  {editingId
+                    ? formData.activo
+                      ? "Mantener como activo"
+                      : "Marcar como activo"
+                    : "Marcar como periodo activo"}
                 </label>
               </div>
 
@@ -658,7 +858,11 @@ export default function AniosLectivos() {
                   disabled={isSaving}
                   className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-[#244563] px-4 text-[11px] font-semibold text-white transition-colors hover:bg-[#1B354D] disabled:opacity-50"
                 >
-                  {isSaving ? <FaSpinner className="animate-spin" /> : <FaCheck />}
+                  {isSaving ? (
+                    <FaSpinner className="animate-spin" />
+                  ) : (
+                    <FaCheck />
+                  )}
                   {editingId ? "Actualizar" : "Guardar"}
                 </button>
               </div>
@@ -670,7 +874,9 @@ export default function AniosLectivos() {
         {anios.length === 0 ? (
           <div className="rounded-lg border border-dashed border-[#D8DEE6] bg-[#FFFFFF] px-4 py-10 text-center">
             <FaCalendarAlt className="mx-auto text-3xl text-[#9CA3AF]" />
-            <p className="mt-2 text-xs font-semibold text-[#4B5563]">No hay periodos académicos</p>
+            <p className="mt-2 text-xs font-semibold text-[#4B5563]">
+              No hay periodos académicos
+            </p>
             <button
               type="button"
               disabled={isSaving}
@@ -697,30 +903,47 @@ export default function AniosLectivos() {
                         {anio.nombre}
                       </h3>
                       <p className="mt-0.5 text-[10px] text-[#6B7280]">
-                        {anio.tipoEvaluacion === "trimestral" ? "Trimestral" : "Quimestral"}
+                        {anio.tipoEvaluacion === "trimestral"
+                          ? "Trimestral"
+                          : "Quimestral"}
                       </p>
                     </div>
                   </div>
-                  <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${anio.activo ? "bg-[#EAF0F6] text-[#1B354D] ring-1 ring-inset ring-[#C8D6E5]" : "bg-[#F3F4F6] text-[#6B7280]"}`}>
+                  <span
+                    className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${anio.activo ? "bg-[#EAF0F6] text-[#1B354D] ring-1 ring-inset ring-[#C8D6E5]" : "bg-[#F3F4F6] text-[#6B7280]"}`}
+                  >
                     {anio.activo && <FaCheck className="text-[8px]" />}
                     {anio.activo ? "Activo" : "Inactivo"}
                   </span>
                 </div>
                 <dl className="grid grid-cols-2 gap-3 px-3 py-3">
                   <div>
-                    <dt className="mb-1 text-[10px] text-[#6B7280]">Fecha de inicio</dt>
+                    <dt className="mb-1 text-[10px] text-[#6B7280]">
+                      Fecha de inicio
+                    </dt>
                     <dd className="text-[11px] font-medium text-[#273444]">
-                      {new Date(`${anio.fechaInicio}T00:00:00`).toLocaleDateString("es-EC", {
-                        day: "numeric", month: "short", year: "numeric",
+                      {new Date(
+                        `${anio.fechaInicio}T00:00:00`,
+                      ).toLocaleDateString("es-EC", {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
                       })}
                     </dd>
                   </div>
                   <div>
-                    <dt className="mb-1 text-[10px] text-[#6B7280]">Fecha de fin</dt>
+                    <dt className="mb-1 text-[10px] text-[#6B7280]">
+                      Fecha de fin
+                    </dt>
                     <dd className="text-[11px] font-medium text-[#273444]">
-                      {new Date(`${anio.fechaFin}T00:00:00`).toLocaleDateString("es-EC", {
-                        day: "numeric", month: "short", year: "numeric",
-                      })}
+                      {new Date(`${anio.fechaFin}T00:00:00`).toLocaleDateString(
+                        "es-EC",
+                        {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        },
+                      )}
                     </dd>
                   </div>
                 </dl>
@@ -769,9 +992,13 @@ export default function AniosLectivos() {
                 <FaExclamationTriangle className="text-sm" />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-[#273444]">Crear Nuevo Periodo Académico</h3>
+                <h3 className="text-sm font-semibold text-[#273444]">
+                  Crear Nuevo Periodo Académico
+                </h3>
                 <p className="mt-1 text-[11px] leading-relaxed text-[#64748B]">
-                  Ya existe un periodo académico activo. Si creas este nuevo periodo ({nombreGenerado}), se convertirá en el vigente y el actual se inactivará automáticamente. ¿Deseas continuar?
+                  Ya existe un periodo académico activo. Si creas este nuevo
+                  periodo ({nombreGenerado}), se convertirá en el vigente y el
+                  actual se inactivará automáticamente. ¿Deseas continuar?
                 </p>
               </div>
             </div>
@@ -802,8 +1029,12 @@ export default function AniosLectivos() {
                 <ConfirmIcon className="text-sm" />
               </span>
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-[#273444]">{confirmModal.title}</h3>
-                <p className="mt-1 whitespace-pre-line text-[11px] leading-relaxed text-[#64748B]">{confirmModal.message}</p>
+                <h3 className="text-sm font-semibold text-[#273444]">
+                  {confirmModal.title}
+                </h3>
+                <p className="mt-1 whitespace-pre-line text-[11px] leading-relaxed text-[#64748B]">
+                  {confirmModal.message}
+                </p>
               </div>
             </div>
             <div className="flex flex-col gap-2 border-t border-[#E4E8EE] bg-[#F3F4F6] px-4 py-2.5 sm:flex-row sm:justify-end">
@@ -817,7 +1048,8 @@ export default function AniosLectivos() {
                 onClick={confirmModal.onConfirm}
                 className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-[11px] font-semibold text-white transition-colors ${confirmModal.confirmColor || "bg-[#C93F45] hover:bg-[#AD3038]"}`}
               >
-                <ConfirmIcon className="text-[10px]" /> {confirmModal.confirmText || "Confirmar"}
+                <ConfirmIcon className="text-[10px]" />{" "}
+                {confirmModal.confirmText || "Confirmar"}
               </button>
             </div>
           </div>
@@ -830,13 +1062,32 @@ export default function AniosLectivos() {
           const config = toastConfig[toast.type];
           const Icon = config.icon;
           return (
-            <div key={toast.id} className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}>
-              <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}><Icon className="text-[10px]" /></span>
+            <div
+              key={toast.id}
+              className={`pointer-events-auto flex items-start gap-2 rounded-md border border-[#D8DEE6] border-l-4 bg-[#FFFFFF] p-2.5 shadow-[0_14px_32px_-20px_rgba(15,23,42,0.30)] animate-in slide-in-from-right-4 fade-in duration-300 ${config.bg}`}
+            >
+              <span
+                className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${config.iconBg}`}
+              >
+                <Icon className="text-[10px]" />
+              </span>
               <div className="min-w-0 flex-1">
-                <p className="text-[11px] font-semibold text-[#273444]">{toast.title}</p>
-                {toast.message && <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">{toast.message}</p>}
+                <p className="text-[11px] font-semibold text-[#273444]">
+                  {toast.title}
+                </p>
+                {toast.message && (
+                  <p className="mt-0.5 text-[10px] leading-relaxed text-[#64748B]">
+                    {toast.message}
+                  </p>
+                )}
               </div>
-              <button onClick={() => cerrarToast(toast.id)} className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]" title="Cerrar"><FaTimes className="h-3 w-3" /></button>
+              <button
+                onClick={() => cerrarToast(toast.id)}
+                className="shrink-0 text-[#6B7280] transition-colors hover:text-[#4B5563]"
+                title="Cerrar"
+              >
+                <FaTimes className="h-3 w-3" />
+              </button>
             </div>
           );
         })}

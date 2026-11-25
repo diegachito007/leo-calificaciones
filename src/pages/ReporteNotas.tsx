@@ -49,6 +49,7 @@ import {
   FaWhatsapp,
   FaClipboardList,
   FaCheck,
+  FaTable,
 } from "react-icons/fa";
 
 // ==================== INTERFACES ====================
@@ -144,7 +145,44 @@ interface GrupoMateriaRiesgo {
   notaPromedio: number;
 }
 
-type ModoVista = "tutor" | "docente";
+type ModoVista = "tutor" | "docente" | "consolidado";
+
+// ==================== CONSOLIDADO DEL TRIMESTRE ====================
+// Orden en que se muestran las columnas (tipos de actividad). Los tipos que no
+// estén en esta lista (por ejemplo, tipos nuevos) se agregan al final.
+const ORDEN_TIPOS_ACTIVIDAD = [
+  "Tarea",
+  "Lección",
+  "Prueba",
+  "Proyecto Individual",
+  "Proyecto Grupal",
+  "Exposición",
+  "Taller",
+  "Evaluación Trimestral",
+  "Proyecto Trimestral",
+  "Insumo",
+];
+
+interface ColumnaConsolidado {
+  tipo: string;
+  cantidad: number; // actividades de ese tipo en la materia
+}
+
+interface FilaConsolidado {
+  estudiante: Estudiante;
+  promedios: (number | null)[]; // uno por columna (null = sin notas)
+  final: number | null; // promedio de los promedios por tipo
+}
+
+interface SeccionConsolidada {
+  id: string;
+  nombre: string;
+  ambitoNombre: string;
+  columnas: ColumnaConsolidado[];
+  filas: FilaConsolidado[];
+  promediosCurso: (number | null)[];
+  finalCurso: number | null;
+}
 
 // ==================== HELPERS ====================
 const esGradoInicial = (nombre: string): boolean => {
@@ -157,6 +195,23 @@ const esGradoInicial = (nombre: string): boolean => {
 };
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+const promedioNotas = (valores: number[]): number | null =>
+  valores.length
+    ? round2(valores.reduce((suma, n) => suma + n, 0) / valores.length)
+    : null;
+
+const soloNumeros = (valores: (number | null)[]): number[] =>
+  valores.filter((v): v is number => v !== null);
+
+const claseNotaConsolidado = (nota: number): string =>
+  nota >= 9
+    ? "bg-[#EAF0F6] text-[#1B354D]"
+    : nota >= 7
+      ? "bg-[#EAF0F6] text-[#244563]"
+      : nota >= 5
+        ? "bg-amber-50 text-amber-700"
+        : "bg-red-50 text-[#AD3038]";
 
 const ESTRATEGIAS_NOTA = [
   { value: "promediar", label: "Promediar (Original + Refuerzo) / 2" },
@@ -208,11 +263,43 @@ export default function ReporteNotas() {
 
 function ReporteNotasContenido() {
   const { user, userData } = useAuth();
-  const { grados, ambitos, destrezas, anioActivo, periodoActual, ready } =
-    useData();
+  const {
+    grados,
+    ambitos,
+    destrezas,
+    anioActivo,
+    periodoActual: periodoVigente,
+    periodos,
+    ready,
+  } = useData();
   const navigate = useNavigate();
   const [informeNotificacion, setInformeNotificacion] =
     useState<InformeNotificacion | null>(null);
+
+  // ==================== TRIMESTRE DEL REPORTE ====================
+  // Por defecto es el trimestre vigente (según la fecha de hoy). Si hoy no cae
+  // en ningún rango (receso, o fin de rango), se usa el último trimestre que ya
+  // empezó, para no cargar por error las actividades de todo el año.
+  // El usuario puede cambiarlo para consultar otro trimestre.
+  const [periodoSelId, setPeriodoSelId] = useState("");
+  const periodosOrdenados = useMemo(
+    () =>
+      [...periodos].sort((a, b) =>
+        String(a.fechaInicio).localeCompare(String(b.fechaInicio)),
+      ),
+    [periodos],
+  );
+  const periodoActual = useMemo(() => {
+    const elegido = periodosOrdenados.find((p) => p.id === periodoSelId);
+    if (elegido) return elegido;
+    if (periodoVigente) return periodoVigente;
+    const d = new Date();
+    const hoy = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const iniciados = periodosOrdenados.filter(
+      (p) => String(p.fechaInicio).slice(0, 10) <= hoy,
+    );
+    return iniciados[iniciados.length - 1] || periodosOrdenados[0] || null;
+  }, [periodoSelId, periodosOrdenados, periodoVigente]);
 
   const acceso = claveAccesoEstudiantes(user?.uid, userData);
   const anio = anioActivo?.id || "";
@@ -293,7 +380,12 @@ function ReporteNotasContenido() {
 
   const modoEfectivo = useMemo<ModoVista>(() => {
     if (modoVista === "tutor" && !esTutor) return "docente";
-    if (modoVista === "docente" && !tieneMaterias && esTutor) return "tutor";
+    if (
+      (modoVista === "docente" || modoVista === "consolidado") &&
+      !tieneMaterias &&
+      esTutor
+    )
+      return "tutor";
     return modoVista;
   }, [modoVista, esTutor, tieneMaterias]);
 
@@ -773,6 +865,64 @@ function ReporteNotasContenido() {
       .sort((a, b) => a.apellidos.localeCompare(b.apellidos));
   }, [estudiantesFiltrados, gradoDocenteEfectivo]);
 
+  // ==================== VISTA CONSOLIDAR TRIMESTRE ====================
+  // Por cada materia: una columna por tipo de actividad con el PROMEDIO de las
+  // notas finales (con refuerzo) de todas las actividades de ese tipo.
+  // El promedio final es el promedio de los promedios por tipo mostrados.
+  const seccionesConsolidadas: SeccionConsolidada[] =
+    modoEfectivo !== "consolidado"
+      ? []
+      : seccionesDocente.map((sec) => {
+          const porTipo = new Map<string, ActividadData[]>();
+          sec.actividades.forEach((a) => {
+            const lista = porTipo.get(a.tipo) || [];
+            lista.push(a);
+            porTipo.set(a.tipo, lista);
+          });
+          const tipos = Array.from(porTipo.keys()).sort((a, b) => {
+            const ia = ORDEN_TIPOS_ACTIVIDAD.indexOf(a);
+            const ib = ORDEN_TIPOS_ACTIVIDAD.indexOf(b);
+            return (
+              (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.localeCompare(b)
+            );
+          });
+          const columnas: ColumnaConsolidado[] = tipos.map((tipo) => ({
+            tipo,
+            cantidad: porTipo.get(tipo)?.length || 0,
+          }));
+          const filas: FilaConsolidado[] = estudiantesDelGradoDocente.map(
+            (est) => {
+              const promedios = tipos.map((tipo) =>
+                promedioNotas(
+                  (porTipo.get(tipo) || []).flatMap((actividad) => {
+                    if (!aplicaActividad(est, actividad)) return [];
+                    const cal = calMap.get(`${est.id}|${actividad.id}`);
+                    if (!cal || cal.nota == null) return [];
+                    const nota = notaFinalDe(cal);
+                    return Number.isFinite(nota) ? [nota] : [];
+                  }),
+                ),
+              );
+              return {
+                estudiante: est,
+                promedios,
+                final: promedioNotas(soloNumeros(promedios)),
+              };
+            },
+          );
+          return {
+            id: sec.id,
+            nombre: sec.nombre,
+            ambitoNombre: sec.ambitoNombre,
+            columnas,
+            filas,
+            promediosCurso: tipos.map((_, i) =>
+              promedioNotas(soloNumeros(filas.map((f) => f.promedios[i]))),
+            ),
+            finalCurso: promedioNotas(soloNumeros(filas.map((f) => f.final))),
+          };
+        });
+
   const estudianteDetalle = useMemo(
     () =>
       estudiantesDelGradoDocente.find((e) => e.id === estudianteDetalleId) ||
@@ -1232,6 +1382,145 @@ function ReporteNotasContenido() {
     }
   };
 
+  // ==================== DESCARGA EXCEL: CONSOLIDADO DEL TRIMESTRE ====================
+  // Un libro con una hoja por materia (o solo la materia indicada).
+  const exportarConsolidadoExcel = (secciones: SeccionConsolidada[]) => {
+    try {
+      if (secciones.length === 0) {
+        mostrarAviso(
+          "info",
+          "No hay actividades para consolidar en este grado y trimestre.",
+        );
+        return;
+      }
+      const wb = XLSX.utils.book_new();
+      const hojasUsadas = new Set<string>();
+      const textoNota = (v: number | null): number | string =>
+        v === null ? "—" : v;
+
+      secciones.forEach((sec) => {
+        const nCols = sec.columnas.length;
+        const ultimaColumna = nCols + 3; // N°, Apellidos, Nombres + tipos + Promedio
+        const titulo =
+          `${sec.nombre} — ${gradoDocenteActual?.nombre || ""} ${gradoDocenteActual?.paralelo || ""} — ${periodoActual?.nombre || ""}`
+            .replace(/\s+/g, " ")
+            .trim();
+        const data: (string | number)[][] = [
+          [titulo, ...Array(ultimaColumna).fill("")],
+          [
+            "N°",
+            "Apellidos",
+            "Nombres",
+            ...sec.columnas.map((c) => c.tipo),
+            "Promedio",
+          ],
+          ["", "", "", ...sec.columnas.map((c) => `(${c.cantidad} act.)`), ""],
+          ...sec.filas.map((fila, index) => [
+            index + 1,
+            fila.estudiante.apellidos,
+            fila.estudiante.nombres,
+            ...fila.promedios.map(textoNota),
+            textoNota(fila.final),
+          ]),
+          [
+            "",
+            "Promedio del curso",
+            "",
+            ...sec.promediosCurso.map(textoNota),
+            textoNota(sec.finalCurso),
+          ],
+        ];
+        const ultimaFila = data.length - 1;
+        const ws = XLSX.utils.aoa_to_sheet(data);
+        ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: ultimaColumna } }];
+        ws["!cols"] = [
+          { wch: 5 },
+          { wch: 26 },
+          { wch: 26 },
+          ...sec.columnas.map(() => ({ wch: 16 })),
+          { wch: 12 },
+        ];
+        ws["!rows"] = data.map((_, r) => ({ hpt: r === 0 ? 24 : 20 }));
+        data.forEach((fila, r) =>
+          fila.forEach((valor, c) => {
+            const cell = ws[XLSX.utils.encode_cell({ r, c })];
+            if (!cell) return;
+            const esTitulo = r === 0;
+            const encabezado = r === 1 || r === 2;
+            const resumen = r === ultimaFila;
+            const esNota = r >= 3 && c >= 3;
+            const columnaPromedio = c === ultimaColumna && r >= 3;
+            const baja = esNota && typeof valor === "number" && valor < 7;
+            cell.s = {
+              font: {
+                name: "Calibri",
+                sz: esTitulo ? 13 : 11,
+                bold: esTitulo || encabezado || resumen || columnaPromedio,
+                color: { rgb: baja ? "9C0006" : "273444" },
+              },
+              alignment: {
+                vertical: "center",
+                horizontal: esTitulo
+                  ? "left"
+                  : esNota || encabezado
+                    ? "center"
+                    : "left",
+                wrapText: true,
+              },
+              fill: {
+                patternType: "solid",
+                fgColor: {
+                  rgb: baja
+                    ? "FFC7CE"
+                    : esTitulo || encabezado
+                      ? "EAF0F6"
+                      : resumen || columnaPromedio
+                        ? "F2F5F8"
+                        : "FFFFFF",
+                },
+              },
+              border: { bottom: { style: "thin", color: { rgb: "D8DEE6" } } },
+            };
+            if (esNota && typeof valor === "number") cell.z = "0.00";
+          }),
+        );
+
+        // Nombre de hoja válido para Excel (máx. 31 caracteres, sin \ / ? * [ ] :) y único.
+        const base =
+          sec.nombre
+            .replace(/[\\/?*[\]:]/g, " ")
+            .trim()
+            .substring(0, 28) || "Materia";
+        let nombreHoja = base;
+        let contador = 2;
+        while (hojasUsadas.has(nombreHoja.toLowerCase())) {
+          nombreHoja = `${base.substring(0, 26)} ${contador++}`;
+        }
+        hojasUsadas.add(nombreHoja.toLowerCase());
+        XLSX.utils.book_append_sheet(wb, ws, nombreHoja);
+      });
+
+      const limpiar = (texto: string) => texto.replace(/[^a-zA-Z0-9]/g, "_");
+      const fechaStr = new Date().toISOString().split("T")[0];
+      const grado = limpiar(
+        `${gradoDocenteActual?.nombre || "Grado"}_${gradoDocenteActual?.paralelo || ""}`,
+      );
+      const periodo = limpiar(periodoActual?.nombre || "Trimestre");
+      const sufijo =
+        secciones.length === 1 ? `_${limpiar(secciones[0].nombre)}` : "";
+      XLSX.writeFile(
+        wb,
+        `Consolidado_${grado}_${periodo}${sufijo}_${fechaStr}.xlsx`,
+      );
+    } catch (error) {
+      console.error("Error exportando consolidado:", error);
+      mostrarAviso(
+        "error",
+        "No se pudo descargar el consolidado en Excel. Inténtalo nuevamente.",
+      );
+    }
+  };
+
   // ==================== RENDER ====================
   if (!ready) {
     return (
@@ -1270,9 +1559,42 @@ function ReporteNotasContenido() {
         <h1 className="text-base font-semibold tracking-tight text-[#244563]">
           Reporte de notas
         </h1>
-        {periodoActual && (
-          <span className="text-[11px] font-medium text-[#9A4518]">
-            {periodoActual.nombre}
+        {periodosOrdenados.length > 1 ? (
+          <div
+            className="inline-flex items-center gap-0.5 rounded-md border border-[#D8DEE6] bg-[#ECEFF3] p-0.5"
+            role="group"
+            aria-label="Trimestre del reporte"
+          >
+            {periodosOrdenados.map((p) => {
+              const sel = periodoActual?.id === p.id;
+              const esVigente = periodoVigente?.id === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setPeriodoSelId(p.id)}
+                  className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-7 px-2.5 rounded text-[11px] font-semibold transition-colors ${sel ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70" : "text-[#4B5563] hover:bg-[#D8DEE6]"}`}
+                  title={esVigente ? `${p.nombre} (vigente hoy)` : p.nombre}
+                >
+                  {p.nombre}
+                  {esVigente && (
+                    <span className="ml-1 text-[9px] font-bold text-[#C96522]">
+                      ●
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          periodoActual && (
+            <span className="text-[11px] font-medium text-[#9A4518]">
+              {periodoActual.nombre}
+            </span>
+          )
+        )}
+        {periodoActual && !periodoVigente && (
+          <span className="text-[10px] text-[#64748B]">
+            Hoy no hay un trimestre vigente; se muestra {periodoActual.nombre}.
           </span>
         )}
       </div>
@@ -1321,6 +1643,14 @@ function ReporteNotasContenido() {
               className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${modoEfectivo === "docente" ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70" : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"}`}
             >
               <FaChalkboardTeacher className="text-[10px]" /> Vista Docente
+            </button>
+          )}
+          {tieneMaterias && (
+            <button
+              onClick={() => setModoVista("consolidado")}
+              className={`focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 px-2.5 rounded-md text-[11px] font-semibold transition-colors flex items-center justify-center gap-2 ${modoEfectivo === "consolidado" ? "bg-[#244563] text-[#FFFFFF] shadow-sm ring-1 ring-[#C96522]/70" : "bg-[#ECEFF3] text-[#4B5563] hover:bg-[#D8DEE6]"}`}
+            >
+              <FaTable className="text-[10px]" /> Consolidar trimestre
             </button>
           )}
         </div>
@@ -1542,6 +1872,165 @@ function ReporteNotasContenido() {
                 </div>
               ))}
             </div>
+          </div>
+        )
+      ) : modoEfectivo === "consolidado" ? (
+        seccionesConsolidadas.length === 0 ? (
+          <div className="bg-[#FFFFFF] rounded-lg border border-[#D8DEE6] px-4 py-8 text-center">
+            <div className="bg-[#ECEFF3] rounded-full p-2.5 mb-3 inline-block">
+              <FaTable className="text-2xl text-[#9CA3AF]" />
+            </div>
+            <h3 className="text-sm font-bold text-[#374151] mb-2">
+              Sin actividades para consolidar
+            </h3>
+            <p className="text-[#64748B] text-[11px]">
+              Aún no hay actividades en tus materias de este grado y trimestre.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#D8DEE6] bg-[#FFFFFF] px-3 py-2">
+              <p className="flex min-w-0 flex-1 items-start gap-1.5 text-[10px] leading-relaxed text-[#64748B]">
+                <FaInfoCircle className="mt-0.5 shrink-0" />
+                <span>
+                  Cada columna es el <strong>promedio</strong> de todas las
+                  actividades de ese tipo (nota final, con refuerzo si lo
+                  tiene). El <strong>Prom</strong> es el promedio de los tipos
+                  mostrados.
+                </span>
+              </p>
+              <button
+                onClick={() => exportarConsolidadoExcel(seccionesConsolidadas)}
+                className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 inline-flex items-center gap-1.5 border border-[#D8DEE6] bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] px-3 rounded-md text-[11px] font-semibold transition-colors"
+                title="Descargar Excel con una hoja por materia"
+              >
+                <FaFileExcel className="text-[11px]" />
+                <span>Exportar todo</span>
+              </button>
+            </div>
+            {seccionesConsolidadas.map((sec) => (
+              <div
+                key={sec.id}
+                className="bg-[#FFFFFF] rounded-lg border border-[#D8DEE6] overflow-hidden"
+              >
+                <div className="bg-[#ECEFF3] border-b border-[#D8DEE6] px-3 py-2 flex flex-wrap gap-2 items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FaBook className="text-[#244563] text-sm" />
+                    <div>
+                      <h3 className="text-[#273444] text-xs font-semibold">
+                        {sec.nombre}
+                      </h3>
+                      <p className="text-[#64748B] text-[10px]">
+                        {sec.ambitoNombre}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[#4B5563] text-[10px] bg-[#EAF0F6] px-2 py-1 rounded-full">
+                      {sec.columnas.length} tipo(s) de actividad
+                    </span>
+                    <button
+                      onClick={() => exportarConsolidadoExcel([sec])}
+                      className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#244563]/40 h-8 inline-flex items-center gap-1.5 border border-[#D8DEE6] bg-[#FFFFFF] hover:bg-[#ECEFF3] text-[#4B5563] px-3 rounded-md text-[11px] font-semibold transition-colors"
+                      title={`Descargar Excel del consolidado de ${sec.nombre}`}
+                    >
+                      <FaFileExcel className="text-[11px]" />
+                      <span className="hidden sm:inline">Excel</span>
+                    </button>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-max border-collapse text-[11px]">
+                    <thead>
+                      <tr className="border-b border-[#E4E8EE] bg-[#F3F4F6]">
+                        <th className="w-8 px-1.5 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#6B7280]">
+                          #
+                        </th>
+                        <th className="sticky left-0 z-10 min-w-48 border-r border-[#E4E8EE] bg-[#F3F4F6] px-2 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                          Estudiante
+                        </th>
+                        {sec.columnas.map((col) => (
+                          <th
+                            key={col.tipo}
+                            className="min-w-24 border-r border-[#E4E8EE] px-2 py-1.5 text-center align-top"
+                          >
+                            <div className="truncate text-[10px] font-semibold text-[#4B5563]">
+                              {col.tipo}
+                            </div>
+                            <div className="text-[10px] font-normal tabular-nums text-[#6B7280]">
+                              {col.cantidad} act.
+                            </div>
+                          </th>
+                        ))}
+                        <th className="sticky right-0 z-10 w-16 border-l border-[#D8DEE6] bg-[#F3F4F6] px-2 py-1.5 text-center text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                          Prom
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sec.filas.map((fila, idx) => (
+                        <tr
+                          key={fila.estudiante.id}
+                          className="group transition-colors hover:bg-[#F4F5F7]"
+                        >
+                          <td className="border-b border-[#E4E8EE] px-1.5 py-1 text-center text-[10px] tabular-nums text-[#6B7280]">
+                            {idx + 1}
+                          </td>
+                          <td className="sticky left-0 z-10 max-w-56 truncate border-b border-r border-[#E4E8EE] bg-[#FFFFFF] px-2 py-1 font-medium text-[#374151] group-hover:bg-[#F3F4F6]">
+                            {fila.estudiante.apellidos}{" "}
+                            {fila.estudiante.nombres}
+                          </td>
+                          {fila.promedios.map((p, i) => (
+                            <td
+                              key={sec.columnas[i].tipo}
+                              className="border-b border-r border-[#E4E8EE] px-2 py-1 text-center"
+                            >
+                              {p === null ? (
+                                <span className="text-[#9CA3AF]">—</span>
+                              ) : (
+                                <span
+                                  className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${claseNotaConsolidado(p)}`}
+                                >
+                                  {p}
+                                </span>
+                              )}
+                            </td>
+                          ))}
+                          <td className="sticky right-0 z-10 border-b border-l border-[#D8DEE6] bg-[#FFFFFF] px-2 py-1 text-center group-hover:bg-[#F3F4F6]">
+                            {fila.final === null ? (
+                              <span className="text-[#9CA3AF]">—</span>
+                            ) : (
+                              <span
+                                className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-bold ${claseNotaConsolidado(fila.final)}`}
+                              >
+                                {fila.final}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="bg-[#F3F4F6]">
+                        <td className="px-1.5 py-1" />
+                        <td className="sticky left-0 z-10 border-r border-[#E4E8EE] bg-[#F3F4F6] px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#64748B]">
+                          Promedio del curso
+                        </td>
+                        {sec.promediosCurso.map((p, i) => (
+                          <td
+                            key={sec.columnas[i].tipo}
+                            className="border-r border-[#E4E8EE] px-2 py-1 text-center text-[10px] font-bold tabular-nums text-[#4B5563]"
+                          >
+                            {p === null ? "—" : p}
+                          </td>
+                        ))}
+                        <td className="sticky right-0 z-10 border-l border-[#D8DEE6] bg-[#F3F4F6] px-2 py-1 text-center text-[10px] font-bold tabular-nums text-[#273444]">
+                          {sec.finalCurso === null ? "—" : sec.finalCurso}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
           </div>
         )
       ) : seccionesDocente.length === 0 ? (

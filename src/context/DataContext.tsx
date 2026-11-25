@@ -143,11 +143,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [anioActivo?.id]);
 
   const periodoActual = useMemo(() => {
-    const hoy = new Date();
+    // Se comparan fechas calendario (YYYY-MM-DD) en hora local. Antes se usaba
+    // new Date("YYYY-MM-DD"), que es medianoche UTC: en Ecuador (UTC-5) el
+    // trimestre "terminaba" a las 19:00 del día anterior a su fecha de fin.
+    const d = new Date();
+    const hoy = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     return (
       periodos.find((p) => {
-        const i = new Date(p.fechaInicio);
-        const f = new Date(p.fechaFin);
+        const i = String(p.fechaInicio).slice(0, 10);
+        const f = String(p.fechaFin).slice(0, 10);
         return hoy >= i && hoy <= f;
       }) || null
     );
