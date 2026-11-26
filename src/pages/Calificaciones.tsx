@@ -213,6 +213,11 @@ const TIPOS_ACTIVIDAD = [
   "Evaluación Trimestral",
   "Proyecto Trimestral",
 ];
+// Tipos de actividad que solo pueden existir una vez por grado, año lectivo y período.
+const TIPOS_UNICOS_POR_TRIMESTRE = [
+  "Evaluación Trimestral",
+  "Proyecto Trimestral",
+];
 const ESTRATEGIAS_NOTA = [
   { value: "promediar", label: "Promediar (Original + Refuerzo) / 2" },
   { value: "reemplazar", label: "Reemplazar (Refuerzo reemplaza Original)" },
@@ -424,6 +429,10 @@ function ContenidoCalificaciones() {
   const [showActividadesModal, setShowActividadesModal] = useState(false);
   const [editingActividadId, setEditingActividadId] = useState<string | null>(
     null,
+  );
+  // Tipos únicos por trimestre que ya existen para el grado/año/período actual
+  const [tiposUnicosExistentes, setTiposUnicosExistentes] = useState<string[]>(
+    [],
   );
   const [actividadForm, setActividadForm] = useState({
     tipo: "Tarea",
@@ -1309,6 +1318,48 @@ function ContenidoCalificaciones() {
     }
   };
 
+  // Consulta en Firestore qué tipos únicos por trimestre ya existen
+  // para el grado, año lectivo y período actuales.
+  const consultarTiposUnicosExistentes = async (
+    tipos: string[] = TIPOS_UNICOS_POR_TRIMESTRE,
+  ): Promise<Set<string>> => {
+    const snap = await getDocs(
+      query(
+        collection(db, "actividades"),
+        where("gradoId", "==", gradoEfectivoId),
+        where("anioLectivoId", "==", anioActivo?.id || ""),
+        where("periodoId", "==", periodoActual?.id || ""),
+        where("tipo", "in", tipos),
+      ),
+    );
+    return new Set(snap.docs.map((d) => d.data().tipo as string));
+  };
+
+  // Al abrir el modal de creación, detecta qué tipos únicos ya están registrados
+  // para mostrar el aviso y deshabilitar esas opciones.
+  useEffect(() => {
+    if (!showActividadModal || editingActividadId || !gradoEfectivoId) return;
+    let activo = true;
+    consultarTiposUnicosExistentes()
+      .then((existentes) => {
+        if (activo) setTiposUnicosExistentes(Array.from(existentes));
+      })
+      .catch((e) => console.error(e));
+    return () => {
+      activo = false;
+      // Limpieza en el cleanup (no en el cuerpo del efecto): al cerrar el modal
+      // o cambiar de contexto se descartan los resultados anteriores.
+      setTiposUnicosExistentes([]);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    showActividadModal,
+    editingActividadId,
+    gradoEfectivoId,
+    anioActivoId,
+    periodoActualId,
+  ]);
+
   const guardarActividad = async () => {
     if (!actividadForm.detalle.trim()) {
       mostrarToast(
@@ -1322,6 +1373,25 @@ function ContenidoCalificaciones() {
     try {
       const validarOperacion = capturarOperacion();
       validarNomina();
+      // Validación: Evaluación/Proyecto Trimestral son únicos por trimestre.
+      // Solo aplica al crear (no al editar una actividad existente).
+      if (
+        !editingActividadId &&
+        TIPOS_UNICOS_POR_TRIMESTRE.includes(actividadForm.tipo)
+      ) {
+        const existentes = await consultarTiposUnicosExistentes([
+          actividadForm.tipo,
+        ]);
+        validarOperacion();
+        if (existentes.has(actividadForm.tipo)) {
+          mostrarToast(
+            "warning",
+            "Actividad duplicada",
+            `Ya existe una ${actividadForm.tipo} registrada para este trimestre. No puedes crear otra.`,
+          );
+          return;
+        }
+      }
       const datos = {
         tipo: actividadForm.tipo,
         detalle: actividadForm.detalle.trim(),
@@ -5152,6 +5222,21 @@ function ContenidoCalificaciones() {
                 <FaTimes className="text-sm" />
               </button>
             </div>
+
+            {/* ✅ NUEVO: Aviso informativo debajo del título (solo al crear) */}
+            {!editingActividadId && (
+              <div className="flex items-start gap-2 border-b border-[#C8D6E5] bg-[#EAF0F6] px-4 py-2.5 text-[11px] leading-relaxed text-[#244563]">
+                <FaInfoCircle className="mt-0.5 shrink-0 text-[11px]" />
+                <p>
+                  <strong>Información importante:</strong> Recuerda que en cada
+                  trimestre solo se permite{" "}
+                  <strong>1 Evaluación Trimestral</strong> y{" "}
+                  <strong>1 Proyecto Trimestral</strong>. Si ya los has creado,
+                  estas opciones aparecerán deshabilitadas.
+                </p>
+              </div>
+            )}
+
             <div className="flex-1 overflow-y-auto px-4 py-3">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
@@ -5169,8 +5254,15 @@ function ContenidoCalificaciones() {
                     className="h-8 w-full rounded-md border border-[#BFC9D4] bg-[#FFFFFF] px-2 text-xs text-[#374151] focus:border-[#244563] focus:outline-none focus:ring-2 focus:ring-[#244563]/20"
                   >
                     {TIPOS_ACTIVIDAD.map((t) => (
-                      <option key={t} value={t}>
+                      <option
+                        key={t}
+                        value={t}
+                        disabled={tiposUnicosExistentes.includes(t)}
+                      >
                         {t}
+                        {tiposUnicosExistentes.includes(t)
+                          ? " (ya registrada)"
+                          : ""}
                       </option>
                     ))}
                   </select>

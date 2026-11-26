@@ -37,7 +37,7 @@ const TABLAS = [
 ];
 
 // Plan Spark: 20.000 escrituras/día. Dejamos margen para el uso normal del sistema.
-const PRESUPUESTO_ESCRITURAS = 15000;
+const PRESUPUESTO_ESCRITURAS = 10000;
 const TAMANO_LOTE = 400;
 
 type Conteo = Record<string, number>;
