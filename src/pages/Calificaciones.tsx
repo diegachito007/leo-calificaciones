@@ -1319,7 +1319,7 @@ function ContenidoCalificaciones() {
   };
 
   // Consulta en Firestore qué tipos únicos por trimestre ya existen
-  // para el grado, año lectivo y período actuales.
+  // para el grado, materia, año lectivo y período actuales.
   const consultarTiposUnicosExistentes = async (
     tipos: string[] = TIPOS_UNICOS_POR_TRIMESTRE,
   ): Promise<Set<string>> => {
@@ -1327,6 +1327,7 @@ function ContenidoCalificaciones() {
       query(
         collection(db, "actividades"),
         where("gradoId", "==", gradoEfectivoId),
+        where("destrezaId", "==", destrezaEfectivaId),
         where("anioLectivoId", "==", anioActivo?.id || ""),
         where("periodoId", "==", periodoActual?.id || ""),
         where("tipo", "in", tipos),
@@ -1356,6 +1357,7 @@ function ContenidoCalificaciones() {
     showActividadModal,
     editingActividadId,
     gradoEfectivoId,
+    destrezaEfectivaId,
     anioActivoId,
     periodoActualId,
   ]);
